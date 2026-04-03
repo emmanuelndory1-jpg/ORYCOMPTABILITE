@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User account information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user", "accountant"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "CompanySettings": {
+      "title": "Company Settings",
+      "description": "Information about the company",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "legalForm": { "type": "string" },
+        "activity": { "type": "string" },
+        "fiscalId": { "type": "string" },
+        "taxRegime": { "type": "string" },
+        "vatRegime": { "type": "string" },
+        "vatRate": { "type": "number" },
+        "currency": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "country": { "type": "string" },
+        "capital": { "type": "number" },
+        "managerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "invoiceReminderEnabled": { "type": "boolean" },
+        "invoiceReminderDays": { "type": "integer" },
+        "invoiceReminderEmail": { "type": "string", "format": "email" },
+        "invoiceReminderSubject": { "type": "string" },
+        "invoiceReminderTemplate": { "type": "string" }
+      }
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "A message in a chat conversation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "model"] },
+        "content": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "role", "content", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile documents"
+    },
+    "/companies/{companyId}/settings": {
+      "schema": "CompanySettings",
+      "description": "Company-specific settings"
+    },
+    "/users/{userId}/chat_history": {
+      "schema": "ChatMessage",
+      "description": "User's chat history with Gemini"
+    }
+  }
+}

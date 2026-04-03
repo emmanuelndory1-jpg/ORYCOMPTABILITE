@@ -1,0 +1,126 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required) - Firebase Auth UID
+    //   - email: string (required, email format) - User's email
+    //   - name: string (optional) - User's display name
+    //   - role: string (required, enum: admin, user, accountant) - User's role
+    //   - createdAt: string (required, date-time format) - Creation timestamp
+    //
+    // Collection: companies/{companyId}/settings
+    // Document ID: settings
+    // Fields:
+    //   - name: string (optional)
+    //   - legalForm: string (optional)
+    //   - activity: string (optional)
+    //   - fiscalId: string (optional)
+    //   - taxRegime: string (optional)
+    //   - vatRegime: string (optional)
+    //   - vatRate: number (optional)
+    //   - currency: string (optional)
+    //   - address: string (optional)
+    //   - city: string (optional)
+    //   - country: string (optional)
+    //   - capital: number (optional)
+    //   - managerName: string (optional)
+    //   - phone: string (optional)
+    //   - email: string (optional, email format)
+    //   - invoiceReminderEnabled: boolean (optional)
+    //   - invoiceReminderDays: integer (optional)
+    //   - invoiceReminderEmail: string (optional, email format)
+    //   - invoiceReminderSubject: string (optional)
+    //   - invoiceReminderTemplate: string (optional)
+    //
+    // Collection: users/{userId}/chat_history
+    // Document ID: {messageId}
+    // Fields:
+    //   - userId: string (required) - UID of the user
+    //   - role: string (required, enum: user, model) - Role of the message sender
+    //   - content: string (required, max size 5000) - Message content
+    //   - timestamp: string (required, date-time format) - Message timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "emmanuelndory1@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'name', 'role', 'createdAt']) &&
+        data.uid is string && data.uid == request.auth.uid &&
+        isValidEmail(data.email) &&
+        (data.name == null || (data.name is string && data.name.size() < 100)) &&
+        data.role in ['admin', 'user', 'accountant'] &&
+        isValidDateString(data.createdAt);
+    }
+
+    function isValidChatMessage(data) {
+      return hasOnlyAllowedFields(['userId', 'role', 'content', 'timestamp']) &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.role in ['user', 'model'] &&
+        data.content is string && data.content.size() < 5000 &&
+        isValidDateString(data.timestamp);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'user' || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+      
+      match /chat_history/{messageId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidChatMessage(request.resource.data);
+      }
+    }
+
+    match /companies/{companyId}/settings {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "ORYCOMPTABILITE",
+  "description": "Solution comptable intelligente pour l'espace OHADA. Conforme SYSCOHADA révisé, IA intégrée, et mobile-first.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
