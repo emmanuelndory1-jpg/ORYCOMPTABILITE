@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import db from "./server/db";
+import db from "./server/db.ts";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cors from "cors";
@@ -10,6 +10,10 @@ import bcrypt from "bcryptjs";
 import cookieParser from "cookie-parser";
 import crypto from 'crypto';
 import path from 'path';
+import multer from 'multer';
+import fs from 'fs';
+import { z } from 'zod';
+import * as schemas from './server/validation.ts';
 
 declare global {
   namespace Express {
@@ -36,18 +40,82 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' }));
-app.use(cookieParser());
+app.use(cookieParser('very-secret-cookie-secret'));
+
+// --- CSRF Protection (Custom Implementation for Iframe/SPA) ---
+// This is a simple double-submit cookie implementation
+const CSRF_COOKIE_NAME = 'XSRF-TOKEN';
+const CSRF_HEADER_NAME = 'x-xsrf-token';
+
+const csrfProtection = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Only protect state-changing operations
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return next();
+  }
+
+  // Skip CSRF for auth routes and webhooks
+  if (req.path.startsWith('/api/auth/') || req.path === '/api/payment/webhook') return next();
+
+  const tokenInCookie = req.cookies[CSRF_COOKIE_NAME];
+  const tokenInHeader = req.headers[CSRF_HEADER_NAME];
+
+  if (!tokenInCookie || tokenInCookie !== tokenInHeader) {
+    return res.status(403).json({ error: "CSRF Invalid or Missing" });
+  }
+  next();
+};
+
+// Route to get CSRF token
+app.get('/api/csrf-token', (req, res) => {
+  let token = req.cookies[CSRF_COOKIE_NAME];
+  if (!token) {
+    token = crypto.randomBytes(32).toString('hex');
+    res.cookie(CSRF_COOKIE_NAME, token, {
+      httpOnly: false, // Must be accessible by client to read and put in header
+      secure: true,
+      sameSite: 'none'
+    });
+  }
+  res.json({ token });
+});
+
+app.use('/api', csrfProtection);
+
+// Validation Middleware
+const validate = (schema: z.ZodSchema) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  try {
+    schema.parse(req.body);
+    next();
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const errorMessage = err.issues.map(i => i.message).join(', ');
+      return res.status(400).json({ error: errorMessage || "Validation failed", details: err.issues });
+    }
+    next(err);
+  }
+};
 
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5000, // Increased significantly for dev/dashboard usage
+  max: 5000, 
   message: { error: "Trop de requêtes, veuillez réessayer plus tard." },
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { trustProxy: false } // Trust proxy is handled at app level
+  validate: { trustProxy: false } 
 });
 app.use('/api/', limiter);
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // Strict limit for login/register
+  message: { error: "Trop de tentatives de connexion, veuillez réessayer plus tard." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/google', authLimiter);
 
 // Helper to log activities
 const logAction = (user: string, action: string, entity: string, entityId: string | number | null = null, details: any = null) => {
@@ -98,6 +166,110 @@ function generateDocumentNumber(type: 'invoice' | 'quote') {
   return `${prefix}-${year}-${nextNum.toString().padStart(4, '0')}`;
 }
 
+function calculateDepreciationSchedule(asset: any, scheduleType: 'annual' | 'monthly') {
+  const schedule = [];
+  const purchasePrice = asset.purchase_price;
+  const duration = asset.depreciation_duration;
+  const acquisitionDate = new Date(asset.acquisition_date);
+  const method = asset.depreciation_method || 'linear';
+  
+  // Default coefficients based on duration (Standard OHADA/French tax rules)
+  const defaultCoefficient = duration >= 7 ? 2.25 : duration >= 5 ? 1.75 : 1.25;
+  const coefficient = asset.declining_coefficient || defaultCoefficient;
+  
+  let remainingValue = purchasePrice;
+  let accumulatedDepreciation = 0;
+  
+  const linearRate = 1 / duration;
+  const decliningRate = linearRate * coefficient;
+
+  if (scheduleType === 'annual') {
+    for (let year = 1; year <= duration; year++) {
+      let currentDepreciation = 0;
+      
+      if (method === 'linear') {
+        currentDepreciation = purchasePrice / duration;
+      } else {
+        // Declining Balance method
+        const remainingYears = duration - year + 1;
+        const currentLinearRate = 1 / remainingYears;
+        
+        // Use the declining rate until it falls below the equivalent linear rate for remaining years
+        if (decliningRate > currentLinearRate) {
+          currentDepreciation = remainingValue * decliningRate;
+        } else {
+          currentDepreciation = remainingValue / remainingYears;
+        }
+      }
+
+      // Cap at remaining value to prevent rounding errors or sub-zero book value
+      currentDepreciation = Math.min(currentDepreciation, remainingValue);
+      
+      const yearDate = new Date(acquisitionDate);
+      yearDate.setFullYear(acquisitionDate.getFullYear() + year - 1);
+      const yearStr = yearDate.getFullYear().toString();
+
+      accumulatedDepreciation += currentDepreciation;
+      remainingValue -= currentDepreciation;
+
+      schedule.push({
+        year,
+        period: yearStr,
+        baseValue: Math.round(remainingValue + currentDepreciation),
+        depreciation: Math.round(currentDepreciation),
+        accumulatedDepreciation: Math.round(accumulatedDepreciation),
+        remainingValue: Math.max(0, Math.round(remainingValue)),
+        type: 'annual'
+      });
+    }
+  } else {
+    // Monthly calculation
+    // Standard approach: calculate annual then split into 12 parts
+    let currentRemainingValue = purchasePrice;
+    let currentAccumulated = 0;
+
+    for (let year = 1; year <= duration; year++) {
+      let annualDep = 0;
+       if (method === 'linear') {
+        annualDep = purchasePrice / duration;
+      } else {
+        const remainingYears = duration - year + 1;
+        const currentLinearRate = 1 / remainingYears;
+        if (decliningRate > currentLinearRate) {
+          annualDep = currentRemainingValue * decliningRate;
+        } else {
+          annualDep = currentRemainingValue / remainingYears;
+        }
+      }
+      annualDep = Math.min(annualDep, currentRemainingValue);
+      const monthlyDep = annualDep / 12;
+
+      for (let m = 0; m < 12; m++) {
+        const monthDate = new Date(acquisitionDate);
+        monthDate.setMonth(acquisitionDate.getMonth() + (year - 1) * 12 + m);
+        
+        const yearStr = monthDate.getFullYear();
+        const monthStr = (monthDate.getMonth() + 1).toString().padStart(2, '0');
+        const periodStr = `${yearStr}-${monthStr}`;
+
+        currentAccumulated += monthlyDep;
+        currentRemainingValue -= monthlyDep;
+
+        schedule.push({
+          year: yearStr,
+          period: periodStr,
+          baseValue: Math.round(currentRemainingValue + monthlyDep),
+          depreciation: Math.round(monthlyDep),
+          accumulatedDepreciation: Math.round(currentAccumulated),
+          remainingValue: Math.max(0, Math.round(currentRemainingValue)),
+          type: 'monthly'
+        });
+      }
+    }
+  }
+  return schedule;
+}
+
 // Authentication Middleware
 const authenticateToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   // Skip auth for public routes
@@ -105,6 +277,7 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
     '/auth/login', 
     '/auth/register', 
     '/auth/google',
+    '/csrf-token',
     '/payment/webhook',
     '/health'
   ];
@@ -137,17 +310,56 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
 // Note: We apply it globally to /api but exclude public routes inside the middleware
 app.use('/api', authenticateToken);
 
+// --- Multer Configuration ---
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(process.cwd(), 'uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Format de fichier non supporté. Uniquement JPEG, PNG et PDF.'));
+    }
+  }
+});
+
 // Google Auth Route
 import { OAuth2Client } from 'google-auth-library';
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+let _googleClient: OAuth2Client | null = null;
+function getGoogleClient() {
+  if (!_googleClient) {
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      throw new Error("GOOGLE_CLIENT_ID environment variable is required for Google Auth");
+    }
+    _googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+  }
+  return _googleClient;
+}
 
 app.post('/api/auth/google', async (req, res) => {
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ error: "ID Token missing" });
 
   try {
+    const client = getGoogleClient();
     // In a real app, we would verify the token with google-auth-library
-    // const ticket = await googleClient.verifyIdToken({
+    // const ticket = await client.verifyIdToken({
     //   idToken,
     //   audience: process.env.GOOGLE_CLIENT_ID,
     // });
@@ -159,7 +371,7 @@ app.post('/api/auth/google', async (req, res) => {
     const { email, name, uid } = req.body; // Firebase user info
     console.log('Google Sign-In for:', email);
 
-    let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
+    let user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email) as any;
     
     if (!user) {
       // Create user if doesn't exist
@@ -249,15 +461,11 @@ app.get('/api/audit-logs', (req, res) => {
 });
 
 // --- Auth Routes ---
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', validate(schemas.registerSchema), async (req, res) => {
   const { email, password, name } = req.body;
   
-  if (!email || !password || !name) {
-    return res.status(400).json({ error: "Tous les champs sont requis" });
-  }
-
   try {
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
     if (existingUser) {
       return res.status(400).json({ error: "Cet email est déjà utilisé" });
     }
@@ -298,12 +506,12 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', validate(schemas.loginSchema), async (req, res) => {
   const { email, password } = req.body;
   console.log('Login attempt for:', email);
   
   try {
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
+    const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email) as any;
     if (!user) {
       console.log('User not found');
       return res.status(401).json({ error: "Identifiants incorrects" });
@@ -515,6 +723,30 @@ app.get("/api/employees/:id/advances/pending", (req, res) => {
 
 // --- Assets API ---
 
+// Get asset stats for dashboard
+app.get("/api/assets/stats", (req, res) => {
+  try {
+    const assets = db.prepare("SELECT * FROM assets WHERE status = 'active'").all() as any[];
+    let totalValue = 0;
+    let totalAccumulatedDep = 0;
+
+    for (const asset of assets) {
+      totalValue += asset.purchase_price;
+      const depreciations = db.prepare("SELECT SUM(amount) as total FROM depreciations WHERE asset_id = ?").get(asset.id) as any;
+      totalAccumulatedDep += (depreciations?.total || 0);
+    }
+
+    res.json({
+      totalValue,
+      totalAccumulatedDep,
+      netBookValue: totalValue - totalAccumulatedDep,
+      count: assets.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all assets
 app.get("/api/assets", (req, res) => {
   try {
@@ -530,15 +762,16 @@ app.get("/api/assets", (req, res) => {
 app.post("/api/assets", (req, res) => {
   const { 
     name, type, purchase_price, vat_amount, total_price, 
-    acquisition_date, depreciation_duration, payment_mode 
+    acquisition_date, depreciation_duration, payment_mode,
+    depreciation_method, declining_coefficient
   } = req.body;
 
   // Account Mapping
   const accountMap: Record<string, string> = {
     'building': '231',
     'vehicle': '245',
-    'it': '244', // Simplified, could be 2441
-    'furniture': '244', // Simplified, could be 2442
+    'it': '244', 
+    'furniture': '244', 
     'industrial': '241',
     'software': '205',
     'land': '211'
@@ -549,49 +782,66 @@ app.post("/api/assets", (req, res) => {
   
   const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
 
-  let creditAccount = '481'; // Fournisseurs d'investissements
+  let creditAccount = '481'; 
   if (payment_mode === 'banque') creditAccount = companySettings?.payment_bank_account || '521';
   if (payment_mode === 'caisse') creditAccount = companySettings?.payment_cash_account || '571';
 
   const transaction = db.transaction(() => {
     // 1. Create Transaction
     const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, 'validated')");
-    const txInfo = txStmt.run(acquisition_date, `Acquisition Immobilisation: ${name}`, `ASSET-${Date.now()}`);
-    const txId = txInfo.lastInsertRowid;
+    const txId = txStmt.run(acquisition_date, `Acquisition Immobilisation: ${name}`, `ASSET-${Date.now()}`);
+    const txIdRes = txId.lastInsertRowid;
 
     // 2. Create Journal Entries
-    const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
+    const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)");
     
     // Debit Asset
-    entryStmt.run(txId, assetAccount, purchase_price, 0);
+    entryStmt.run(txIdRes, assetAccount, purchase_price, 0, `Acquisition ${name}`);
     
     // Debit VAT (if any)
     if (vat_amount > 0) {
-      entryStmt.run(txId, vatAccount, vat_amount, 0);
+      entryStmt.run(txIdRes, vatAccount, vat_amount, 0, `TVA sur acquisition ${name}`);
     }
 
     // Credit Payment/Supplier
-    entryStmt.run(txId, creditAccount, 0, total_price);
+    entryStmt.run(txIdRes, creditAccount, 0, total_price, `Règlement ${name}`);
 
     // 3. Create Asset Record
     const assetStmt = db.prepare(`
       INSERT INTO assets (
         name, type, purchase_price, vat_amount, total_price, 
-        acquisition_date, depreciation_duration, account_code, transaction_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        acquisition_date, depreciation_duration, depreciation_method, declining_coefficient, account_code, transaction_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     assetStmt.run(
       name, type, purchase_price, vat_amount, total_price, 
-      acquisition_date, depreciation_duration, assetAccount, txId
+      acquisition_date, depreciation_duration, depreciation_method || 'linear', declining_coefficient || null, assetAccount, txIdRes
     );
 
-    return txId;
+    return txIdRes;
   });
 
   try {
     const txId = transaction();
     createNotification('success', 'Nouvelle immobilisation', `L'actif ${name} (${type}) a été enregistré avec succès.`, '/assets');
     res.json({ success: true, transactionId: txId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single asset details
+app.get("/api/assets/:id", (req, res) => {
+  const { id } = req.params;
+  try {
+    const asset = db.prepare("SELECT * FROM assets WHERE id = ?").get(id) as any;
+    if (!asset) return res.status(404).json({ error: "Actif non trouvé" });
+
+    const depreciations = db.prepare("SELECT SUM(amount) as total FROM depreciations WHERE asset_id = ?").get(id) as any;
+    asset.accumulated_depreciation = depreciations?.total || 0;
+    asset.net_book_value = asset.purchase_price - asset.accumulated_depreciation;
+
+    res.json(asset);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -609,71 +859,101 @@ app.get("/api/assets/:id/depreciation-schedule", (req, res) => {
       return res.json({ schedule: [] });
     }
 
-    const schedule = [];
-    const purchasePrice = asset.purchase_price;
-    const duration = asset.depreciation_duration;
-    const annualDepreciation = purchasePrice / duration;
-    const monthlyDepreciation = annualDepreciation / 12;
-    const acquisitionDate = new Date(asset.acquisition_date);
+    const calculatedSchedule = calculateDepreciationSchedule(asset, type as 'annual' | 'monthly');
     
-    let remainingValue = purchasePrice;
-    let accumulatedDepreciation = 0;
-
-    // Get already recorded depreciations
+    // Get already recorded depreciations to mark them in the schedule
     const recordedDepreciations = db.prepare("SELECT * FROM depreciations WHERE asset_id = ? AND type = ?").all(id, type) as any[];
 
-    if (type === 'annual') {
-      for (let year = 1; year <= duration; year++) {
-        const yearDate = new Date(acquisitionDate);
-        yearDate.setFullYear(acquisitionDate.getFullYear() + year - 1);
-        const yearStr = yearDate.getFullYear().toString();
+    const scheduleWithStatus = calculatedSchedule.map(item => ({
+      ...item,
+      isRecorded: recordedDepreciations.some(d => d.period_start.startsWith(item.period))
+    }));
 
-        const isYearRecorded = recordedDepreciations.some(d => d.period_start.startsWith(yearStr));
+    res.json({ schedule: scheduleWithStatus });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-        accumulatedDepreciation += annualDepreciation;
-        remainingValue -= annualDepreciation;
+// Count pending monthly depreciations
+app.get("/api/assets/pending-depreciations-count", (req, res) => {
+  try {
+    const today = new Date();
+    const currentMonth = today.toISOString().slice(0, 7); // YYYY-MM
+    
+    const assets = db.prepare("SELECT * FROM assets WHERE status = 'active' AND depreciation_duration > 0").all() as any[];
+    let count = 0;
 
-        schedule.push({
-          year,
-          period: yearStr,
-          baseValue: purchasePrice,
-          depreciation: annualDepreciation,
-          accumulatedDepreciation,
-          remainingValue: Math.max(0, remainingValue),
-          isRecorded: isYearRecorded,
-          type: 'annual'
-        });
-      }
-    } else {
-      // Monthly
-      const totalMonths = duration * 12;
-      for (let m = 0; m < totalMonths; m++) {
-        const monthDate = new Date(acquisitionDate);
-        monthDate.setMonth(acquisitionDate.getMonth() + m);
-        
-        const yearStr = monthDate.getFullYear();
-        const monthStr = (monthDate.getMonth() + 1).toString().padStart(2, '0');
-        const periodStr = `${yearStr}-${monthStr}`;
-
-        const isMonthRecorded = recordedDepreciations.some(d => d.period_start.startsWith(periodStr));
-
-        accumulatedDepreciation += monthlyDepreciation;
-        remainingValue -= monthlyDepreciation;
-
-        schedule.push({
-          year: yearStr,
-          period: periodStr,
-          baseValue: purchasePrice,
-          depreciation: monthlyDepreciation,
-          accumulatedDepreciation,
-          remainingValue: Math.max(0, remainingValue),
-          isRecorded: isMonthRecorded,
-          type: 'monthly'
-        });
-      }
+    for (const asset of assets) {
+      const existing = db.prepare("SELECT id FROM depreciations WHERE asset_id = ? AND type = 'monthly' AND period_start LIKE ?")
+        .get(asset.id, `${currentMonth}%`);
+      
+      if (!existing) count++;
     }
 
-    res.json({ schedule });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate monthly depreciations for all active assets
+app.post("/api/assets/generate-monthly-depreciations", (req, res) => {
+  try {
+    const today = new Date();
+    const currentMonth = today.toISOString().slice(0, 7); // YYYY-MM
+    
+    const assets = db.prepare("SELECT * FROM assets WHERE status = 'active' AND depreciation_duration > 0").all() as any[];
+    const results = [];
+
+    const transaction = db.transaction(() => {
+      for (const asset of assets) {
+        // Check if already recorded for this month
+        const existing = db.prepare("SELECT id FROM depreciations WHERE asset_id = ? AND type = 'monthly' AND period_start LIKE ?")
+          .get(asset.id, `${currentMonth}%`);
+        
+        if (existing) continue;
+
+        // Calculate monthly depreciation using the helper for consistency
+        const schedule = calculateDepreciationSchedule(asset, 'monthly');
+        const currentDepItem = schedule.find(item => item.period === currentMonth);
+        
+        if (!currentDepItem) continue;
+
+        const monthlyDepreciation = currentDepItem.depreciation;
+        
+        // Determine credit account
+        let creditAccount = '284';
+        if (asset.account_code.startsWith('23')) creditAccount = '283';
+        if (asset.account_code.startsWith('20')) creditAccount = '281';
+        if (asset.account_code.startsWith('21')) creditAccount = '282';
+
+        const todayStr = today.toISOString().split('T')[0];
+        const reference = `DEP-AUTO-${Date.now()}-${asset.id}`;
+        
+        // 1. Create Transaction
+        const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, 'validated')");
+        const txInfo = txStmt.run(todayStr, `Dotation mensuelle automatique: ${asset.name}`, reference);
+        const txId = txInfo.lastInsertRowid;
+
+        // 2. Create Journal Entries
+        const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
+        entryStmt.run(txId, '681', monthlyDepreciation, 0);
+        entryStmt.run(txId, creditAccount, 0, monthlyDepreciation);
+
+        // 3. Record Depreciation
+        const depStmt = db.prepare(`
+          INSERT INTO depreciations (asset_id, transaction_id, period_start, period_end, amount, type)
+          VALUES (?, ?, ?, ?, ?, 'monthly')
+        `);
+        depStmt.run(asset.id, txId, `${currentMonth}-01`, `${currentMonth}-28`, monthlyDepreciation);
+
+        results.push({ assetId: asset.id, name: asset.name, amount: monthlyDepreciation });
+      }
+    });
+
+    transaction();
+    res.json({ success: true, count: results.length, details: results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -748,6 +1028,126 @@ app.post("/api/assets/:id/record-depreciation", (req, res) => {
   }
 });
 
+// Sell an asset
+app.post("/api/assets/:id/sell", (req, res) => {
+  const { id } = req.params;
+  const { sale_date, selling_price, payment_mode } = req.body;
+
+  try {
+    const asset = db.prepare("SELECT * FROM assets WHERE id = ?").get(id) as any;
+    if (!asset) return res.status(404).json({ error: "Actif non trouvé" });
+    if (asset.status !== 'active') return res.status(400).json({ error: "L'actif n'est plus actif" });
+
+    // 1. Calculate accumulated depreciation recorded so far
+    const accDepRec = db.prepare("SELECT SUM(amount) as total FROM depreciations WHERE asset_id = ?").get(id) as any;
+    let recordedAccumulatedDepreciation = accDepRec.total || 0;
+
+    // 2. Calculate "should-be" depreciation up to sale date for better accuracy
+    // If sale date is after acquisition and total recorded is less than expected prorata
+    const acquisitionDate = new Date(asset.acquisition_date);
+    const saleDateObj = new Date(sale_date);
+    
+    // Simple prorata calculation (monthly base)
+    const monthsOwned = (saleDateObj.getFullYear() - acquisitionDate.getFullYear()) * 12 + (saleDateObj.getMonth() - acquisitionDate.getMonth());
+    const totalMonths = asset.depreciation_duration * 12;
+    let expectedAccumulated = 0;
+    
+    if (totalMonths > 0) {
+      if (asset.depreciation_method === 'linear') {
+        expectedAccumulated = (asset.purchase_price / totalMonths) * Math.min(monthsOwned, totalMonths);
+      } else {
+        // For declining, we'd need a more complex loop, but let's at least ensure we take the recorded or expected linear
+        expectedAccumulated = recordedAccumulatedDepreciation;
+      }
+    }
+    
+    // Dotation complémentaire (if expected > recorded)
+    const dotationComplementaire = Math.max(0, expectedAccumulated - recordedAccumulatedDepreciation);
+    const finalAccumulatedDepreciation = recordedAccumulatedDepreciation + dotationComplementaire;
+    const nbv = Math.max(0, asset.purchase_price - finalAccumulatedDepreciation);
+
+    const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+
+    const transaction = db.transaction(() => {
+      // Step 0: Record Dotation Complémentaire if any
+      let compDepTxId = null;
+      let depAccount = '284'; // Default
+      if (asset.account_code.startsWith('23')) depAccount = '283'; // Bâtiments
+      if (asset.account_code.startsWith('22')) depAccount = '282'; // Terrains (rare)
+      if (asset.account_code.startsWith('21')) depAccount = '281'; // Incorporelles
+      if (asset.account_code.startsWith('20')) depAccount = '280'; // Charges
+
+      const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)");
+      const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, 'validated')");
+
+      if (dotationComplementaire > 1) { // Only if significant
+        const compDepRef = `DEP-SALE-${Date.now()}`;
+        const compDepTx = txStmt.run(sale_date, `Dotation complémentaire avant cession: ${asset.name}`, compDepRef);
+        compDepTxId = compDepTx.lastInsertRowid;
+        
+        entryStmt.run(compDepTxId, '681', dotationComplementaire, 0, `Dotation complémentaire ${asset.name}`);
+        entryStmt.run(compDepTxId, depAccount, 0, dotationComplementaire, `Amortissement complémentaire ${asset.name}`);
+        
+        // Record in depreciations table too
+        db.prepare(`
+          INSERT INTO depreciations (asset_id, transaction_id, period_start, period_end, amount, type)
+          VALUES (?, ?, ?, ?, ?, 'monthly')
+        `).run(id, compDepTxId, sale_date, sale_date, dotationComplementaire);
+      }
+
+      // Step 1: Record the Sale (Disposal Proceeds)
+      // Debit Treasury/Account Receivable (521/485)
+      // Credit Produits de cession (821)
+      let treasuryAccount = companySettings?.payment_bank_account || '521';
+      if (payment_mode === 'caisse') treasuryAccount = companySettings?.payment_cash_account || '571';
+      if (payment_mode === 'credit') treasuryAccount = '485'; // Créances sur cessions d'immobilisations (OHADA)
+
+      const saleRef = `SALE-ASSET-${Date.now()}`;
+      const saleTx = txStmt.run(sale_date, `Cession Immobilisation: ${asset.name}`, saleRef);
+      const saleTxId = saleTx.lastInsertRowid;
+
+      entryStmt.run(saleTxId, treasuryAccount, selling_price, 0, `Prix de cession ${asset.name}`);
+      entryStmt.run(saleTxId, '821', 0, selling_price, `Produit de cession ${asset.name}`);
+
+      // Step 2: Remove Asset from Balance Sheet
+      // Debit 28x (Amortissements) - finalAccumulatedDepreciation
+      // Debit 811 (VNC) - nbv
+      // Credit 2x (Asset Cost) - purchase_price
+      
+      const removalRef = `OUT-ASSET-${Date.now()}`;
+      const removalTx = txStmt.run(sale_date, `Sortie Actif (VNC): ${asset.name}`, removalRef);
+      const removalTxId = removalTx.lastInsertRowid;
+
+      // Ensure accounts exist
+      db.prepare("INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES ('821', 'Produits des cessions d''immobilisations', 8, 'produit')").run();
+      db.prepare("INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES ('811', 'Valeurs comptables des cessions d''immobilisations', 8, 'charge')").run();
+      db.prepare("INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES ('485', 'Créances sur cessions d''immobilisations', 4, 'actif')").run();
+
+      if (finalAccumulatedDepreciation > 0) {
+        entryStmt.run(removalTxId, depAccount, finalAccumulatedDepreciation, 0, `Annulation amortissements cumulés ${asset.name}`);
+      }
+      
+      if (nbv > 0) {
+        entryStmt.run(removalTxId, '811', nbv, 0, `VNC de l'actif cédé ${asset.name}`);
+      }
+      
+      entryStmt.run(removalTxId, asset.account_code, 0, asset.purchase_price, `Sortie de l'actif ${asset.name}`);
+
+      // Step 3: Update Asset Status
+      db.prepare("UPDATE assets SET status = 'sold' WHERE id = ?").run(id);
+
+      return { saleTxId, removalTxId, compDepTxId };
+    });
+
+    const result = transaction();
+    logAction('User', 'SELL_ASSET', 'Asset', id, { sale_date, selling_price, payment_mode, ...result });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error("Sale error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Helper for recurring transactions
 function processRecurringTransaction(id: string, force: boolean = false) {
   const today = new Date().toISOString().split('T')[0];
@@ -795,19 +1195,19 @@ function processRecurringTransaction(id: string, force: boolean = false) {
       .replace(/{next_month}/g, nextMonth);
 
     const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, recurring_transaction_id) VALUES (?, ?, ?, 'validated', ?)");
-    const txInfo = txStmt.run(today, processedDescription, reference, id);
+    const txInfo = txStmt.run(rt.next_date, processedDescription, reference, id);
     const txId = txInfo.lastInsertRowid;
 
-    const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
+    const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)");
     
     if (lines.length > 0) {
       for (const line of lines) {
-        entryStmt.run(txId, line.account_code, line.debit, line.credit);
+        entryStmt.run(txId, line.account_code, line.debit, line.credit, line.description || null);
       }
     } else {
       // Fallback to legacy fields
-      entryStmt.run(txId, rt.debit_account, rt.amount, 0);
-      entryStmt.run(txId, rt.credit_account, 0, rt.amount);
+      entryStmt.run(txId, rt.debit_account, rt.amount, 0, processedDescription);
+      entryStmt.run(txId, rt.credit_account, 0, rt.amount, processedDescription);
     }
 
     // Update next date
@@ -829,12 +1229,52 @@ function processRecurringTransaction(id: string, force: boolean = false) {
       SET next_date = ?, last_processed = ?, current_occurrences = ?, active = ?
       WHERE id = ?
     `).run(nextDateStr, today, newOccurrences, isActive, id);
+
+    logAction('System', 'PROCESS_RECURRING', 'Transaction', txId, {
+      description: processedDescription,
+      recurring_id: id
+    });
   })();
 
   return true;
 }
 
 // --- Recurring Transactions API ---
+
+function autoProcessRecurringTransactions() {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const due = db.prepare("SELECT id FROM recurring_transactions WHERE active = 1 AND auto_process = 1 AND next_date <= ?").all(today) as any[];
+    
+    let total = 0;
+    for (const item of due) {
+      // Catch up if multiple occurrences are due
+      let processed = 0;
+      // Safety limit to avoid infinite loops if frequency logic fails
+      while (processed < 50) { 
+        const currentItem = db.prepare("SELECT next_date, active FROM recurring_transactions WHERE id = ?").get(item.id) as any;
+        if (!currentItem || !currentItem.active || currentItem.next_date > today) break;
+        
+        if (processRecurringTransaction(item.id)) {
+          total++;
+          processed++;
+        } else {
+          break;
+        }
+      }
+    }
+    if (total > 0) {
+      console.log(`[Recurring] Automatically processed ${total} transactions.`);
+    }
+  } catch (error) {
+    console.error('[Recurring] Error during auto-processing:', error);
+  }
+}
+
+// Run auto-process on startup and every hour
+setTimeout(autoProcessRecurringTransactions, 5000); // 5s after start
+setInterval(autoProcessRecurringTransactions, 3600000); // every hour
+
 app.get("/api/recurring-transactions", (req, res) => {
   try {
     const transactions = db.prepare("SELECT * FROM recurring_transactions ORDER BY next_date ASC").all() as any[];
@@ -868,6 +1308,11 @@ app.post("/api/recurring-transactions", (req, res) => {
         }
       }
     })();
+
+    if (auto_process === true) {
+      setTimeout(autoProcessRecurringTransactions, 100);
+    }
+
     res.json({ id, success: true });
   } catch (error) {
     console.error(error);
@@ -902,6 +1347,40 @@ app.post("/api/recurring-transactions/process-all", (req, res) => {
     res.json({ success: true, processedCount });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch("/api/recurring-transactions/:id", (req, res) => {
+  const { id } = req.params;
+  const { auto_process, active } = req.body;
+  
+  try {
+    const fields = [];
+    const params = [];
+    
+    if (auto_process !== undefined) {
+      fields.push("auto_process = ?");
+      params.push(auto_process ? 1 : 0);
+    }
+    
+    if (active !== undefined) {
+      fields.push("active = ?");
+      params.push(active ? 1 : 0);
+    }
+    
+    if (fields.length === 0) return res.status(400).json({ error: "Aucun champ à mettre à jour" });
+    
+    params.push(id);
+    db.prepare(`UPDATE recurring_transactions SET ${fields.join(", ")} WHERE id = ?`).run(...params);
+    
+    // If auto_process was turned on, trigger processing immediately
+    if (auto_process === true) {
+      setTimeout(autoProcessRecurringTransactions, 100);
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Erreur lors de la mise à jour" });
   }
 });
 
@@ -1036,15 +1515,16 @@ const createNotification = (type: string, title: string, message: string, link?:
 };
 
 // Notifications API
-app.get("/api/notifications", (req, res) => {
+app.get("/api/notifications", authenticateToken, (req, res) => {
   try {
     const notifications = db.prepare(`
       SELECT * FROM notifications 
       ORDER BY created_at DESC 
       LIMIT 50
     `).all();
-    res.json(notifications);
+    res.json(notifications || []);
   } catch (error) {
+    console.error('Error fetching notifications:', error);
     res.status(500).json({ error: "Failed to fetch notifications" });
   }
 });
@@ -1089,6 +1569,8 @@ app.get("/api/company/status", (req, res) => {
 app.post("/api/company/create", (req, res) => {
   const { 
     name, legalForm, rccm, taxId, address, city, country, email, phone, managerName,
+    bankName, bankAccountNumber, bankIban, bankSwift,
+    paymentBankEnabled, paymentBankAccount, paymentCashEnabled, paymentCashAccount, paymentMobileEnabled, paymentMobileAccount,
     syscohadaSystem, currency, fiscalYearStart, fiscalYearDuration,
     taxRegime, vatSubject, vatRate,
     capitalAmount, partners, constitutionCosts,
@@ -1102,12 +1584,16 @@ app.post("/api/company/create", (req, res) => {
     const settingsStmt = db.prepare(`
       INSERT INTO company_settings (
         name, legal_form, rccm, fiscal_id, address, city, country, email, phone, manager_name,
+        bank_name, bank_account_number, bank_iban, bank_swift,
+        payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
         syscohada_system, currency, fiscal_year_start, fiscal_year_duration,
         tax_regime, vat_regime, vat_rate, capital, creation_date
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const settingsInfo = settingsStmt.run(
       name, legalForm, rccm, taxId, address, city, country, email, phone, managerName,
+      bankName, bankAccountNumber, bankIban, bankSwift,
+      paymentBankEnabled ? 1 : 0, paymentBankAccount, paymentCashEnabled ? 1 : 0, paymentCashAccount, paymentMobileEnabled ? 1 : 0, paymentMobileAccount,
       syscohadaSystem, currency, fiscalYearStart, fiscalYearDuration,
       taxRegime, vatSubject ? 'assujetti' : 'exonéré', vatRate, capitalAmount, today
     );
@@ -1197,7 +1683,7 @@ app.post("/api/company/create", (req, res) => {
 
       // If bank, also create bank_account record for reconciliation
       if (t.type === 'bank') {
-        bankAccountStmt.run(t.name, 'A DEFINIR', t.name, t.initialBalance, currency, nextCode);
+        bankAccountStmt.run(t.name, t.accountNumber || 'A DEFINIR', t.name, t.initialBalance, currency, nextCode);
       }
 
       if (t.initialBalance > 0) {
@@ -1236,6 +1722,89 @@ app.post("/api/company/create", (req, res) => {
     res.json({ success: true, companyId });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Module Management API ---
+const SUPPORTED_MODULES = [
+  'accounting',
+  'invoicing',
+  'third_parties',
+  'treasury',
+  'assets',
+  'budget',
+  'payroll',
+  'vat',
+  'bankRec',
+  'analytics',
+  'audit'
+];
+
+app.get("/api/company/modules", (req, res) => {
+  try {
+    const existingModules = db.prepare("SELECT * FROM company_modules").all() as any[];
+    const existingKeys = existingModules.map(m => m.module_key);
+    
+    // Ensure all supported modules are in the response
+    const allModules = SUPPORTED_MODULES.map(key => {
+      const existing = existingModules.find(m => m.module_key === key);
+      return existing || { module_key: key, is_active: 1 }; // Default to active for now if missing
+    });
+
+    res.json(allModules);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/company/modules/:key", (req, res) => {
+  const { key } = req.params;
+  const { is_active } = req.body;
+  try {
+    // Get company_id (assuming first company for now as per app structure)
+    const company = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+    const companyId = company?.id || 1;
+
+    db.prepare(`
+      INSERT INTO company_modules (company_id, module_key, is_active)
+      VALUES (?, ?, ?)
+      ON CONFLICT(module_key) DO UPDATE SET is_active = excluded.is_active
+    `).run(companyId, key, is_active ? 1 : 0);
+    
+    res.json({ success: true });
+  } catch (err) {
+    // If ON CONFLICT doesn't work (older sqlite), try manual check
+    try {
+      const company = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+      const companyId = company?.id || 1;
+      const exists = db.prepare("SELECT id FROM company_modules WHERE module_key = ?").get(key);
+      if (exists) {
+        db.prepare("UPDATE company_modules SET is_active = ? WHERE module_key = ?").run(is_active ? 1 : 0, key);
+      } else {
+        db.prepare("INSERT INTO company_modules (company_id, module_key, is_active) VALUES (?, ?, ?)").run(companyId, key, is_active ? 1 : 0);
+      }
+      res.json({ success: true });
+    } catch (innerErr) {
+      res.status(500).json({ error: innerErr.message });
+    }
+  }
+});
+
+// --- Audit Logs API ---
+app.get("/api/audit-logs", (req, res) => {
+  const { limit = 100, offset = 0 } = req.query;
+  try {
+    const logs = db.prepare(`
+      SELECT * FROM audit_logs 
+      ORDER BY date DESC 
+      LIMIT ? OFFSET ?
+    `).all(Number(limit), Number(offset));
+    
+    const total = db.prepare("SELECT COUNT(*) as count FROM audit_logs").get() as any;
+    
+    res.json({ logs, total: total.count });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -1911,12 +2480,14 @@ app.get("/api/company/settings", (req, res) => {
 });
 
 // Update Company Settings
-app.put("/api/company/settings", (req, res) => {
+app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial()), (req, res) => {
   const { 
     name, legalForm, activity, fiscalId, taxRegime, vatRegime, currency, address, city, country, capital, managerName,
+    phone, email,
     invoiceReminderEnabled, invoiceReminderDays, invoiceReminderEmail, invoiceReminderSubject, invoiceReminderTemplate,
     bank_name, bank_account_number, bank_iban, bank_swift,
-    payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account
+    payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
+    cnps_employer_number, tax_office
   } = req.body;
   
   try {
@@ -1926,13 +2497,16 @@ app.put("/api/company/settings", (req, res) => {
       const stmt = db.prepare(`
         UPDATE company_settings 
         SET name = ?, legal_form = ?, activity = ?, fiscal_id = ?, tax_regime = ?, vat_regime = ?, currency = ?, address = ?, city = ?, country = ?, capital = ?, manager_name = ?,
+            phone = ?, email = ?,
             invoice_reminder_enabled = ?, invoice_reminder_days = ?, invoice_reminder_email = ?, invoice_reminder_subject = ?, invoice_reminder_template = ?,
             bank_name = ?, bank_account_number = ?, bank_iban = ?, bank_swift = ?,
-            payment_bank_enabled = ?, payment_bank_account = ?, payment_cash_enabled = ?, payment_cash_account = ?, payment_mobile_enabled = ?, payment_mobile_account = ?
+            payment_bank_enabled = ?, payment_bank_account = ?, payment_cash_enabled = ?, payment_cash_account = ?, payment_mobile_enabled = ?, payment_mobile_account = ?,
+            cnps_employer_number = ?, tax_office = ?
         WHERE id = ?
       `);
       stmt.run(
         name, legalForm, activity, fiscalId, taxRegime, vatRegime, currency, address, city, country, capital, managerName,
+        phone, email,
         invoiceReminderEnabled ? 1 : 0, invoiceReminderDays, invoiceReminderEmail, invoiceReminderSubject, invoiceReminderTemplate,
         bank_name, bank_account_number, bank_iban, bank_swift,
         payment_bank_enabled === undefined ? existing.payment_bank_enabled : (payment_bank_enabled ? 1 : 0),
@@ -1941,6 +2515,8 @@ app.put("/api/company/settings", (req, res) => {
         payment_cash_account || existing.payment_cash_account,
         payment_mobile_enabled === undefined ? existing.payment_mobile_enabled : (payment_mobile_enabled ? 1 : 0),
         payment_mobile_account || existing.payment_mobile_account,
+        cnps_employer_number || null,
+        tax_office || null,
         existing.id
       );
       logAction('Admin', 'UPDATE', 'CompanySettings', existing.id, { name, currency });
@@ -1948,14 +2524,17 @@ app.put("/api/company/settings", (req, res) => {
       const insert = db.prepare(`
         INSERT INTO company_settings (
           name, legal_form, activity, fiscal_id, tax_regime, vat_regime, currency, address, city, country, capital, manager_name,
+          phone, email,
           invoice_reminder_enabled, invoice_reminder_days, invoice_reminder_email, invoice_reminder_subject, invoice_reminder_template,
           bank_name, bank_account_number, bank_iban, bank_swift,
-          payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account
+          payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
+          cnps_employer_number, tax_office
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const info = insert.run(
         name, legalForm, activity, fiscalId, taxRegime, vatRegime, currency, address, city, country, capital, managerName,
+        phone, email,
         invoiceReminderEnabled ? 1 : 0, invoiceReminderDays, invoiceReminderEmail, invoiceReminderSubject, invoiceReminderTemplate,
         bank_name, bank_account_number, bank_iban, bank_swift,
         payment_bank_enabled === undefined ? 1 : (payment_bank_enabled ? 1 : 0),
@@ -1963,7 +2542,9 @@ app.put("/api/company/settings", (req, res) => {
         payment_cash_enabled === undefined ? 1 : (payment_cash_enabled ? 1 : 0),
         payment_cash_account || '571',
         payment_mobile_enabled === undefined ? 1 : (payment_mobile_enabled ? 1 : 0),
-        payment_mobile_account || '585'
+        payment_mobile_account || '585',
+        cnps_employer_number || null,
+        tax_office || null
       );
       logAction('Admin', 'CREATE', 'CompanySettings', info.lastInsertRowid, { name, currency });
     }
@@ -2248,72 +2829,6 @@ app.delete("/api/recurring-invoices/:id", (req, res) => {
   const { id } = req.params;
   try {
     db.prepare("DELETE FROM recurring_invoices WHERE id = ?").run(id);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- Fiscal Years API ---
-
-// Get all fiscal years
-app.get("/api/fiscal-years", (req, res) => {
-  try {
-    const stmt = db.prepare("SELECT * FROM fiscal_years ORDER BY start_date DESC");
-    const years = stmt.all();
-    res.json(years);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get active fiscal year
-app.get("/api/fiscal-years/active", (req, res) => {
-  try {
-    const stmt = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1");
-    const year = stmt.get();
-    if (!year) {
-      // Fallback if no active year (shouldn't happen due to seeding)
-      return res.status(404).json({ error: "No active fiscal year found" });
-    }
-    res.json(year);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Create new fiscal year
-app.post("/api/fiscal-years", (req, res) => {
-  const { name, start_date, end_date } = req.body;
-  try {
-    const stmt = db.prepare("INSERT INTO fiscal_years (name, start_date, end_date, status, is_active) VALUES (?, ?, ?, 'open', 0)");
-    const info = stmt.run(name, start_date, end_date);
-    res.json({ id: info.lastInsertRowid });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Set active fiscal year
-app.put("/api/fiscal-years/:id/activate", (req, res) => {
-  const { id } = req.params;
-  try {
-    const transaction = db.transaction(() => {
-      db.prepare("UPDATE fiscal_years SET is_active = 0").run();
-      db.prepare("UPDATE fiscal_years SET is_active = 1 WHERE id = ?").run(id);
-    });
-    transaction();
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Close fiscal year
-app.put("/api/fiscal-years/:id/close", (req, res) => {
-  const { id } = req.params;
-  try {
-    db.prepare("UPDATE fiscal_years SET status = 'closed' WHERE id = ?").run(id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2651,11 +3166,12 @@ app.get("/api/accounts", (req, res) => {
 });
 
 // Create account
-app.post("/api/accounts", (req, res) => {
+app.post("/api/accounts", validate(schemas.accountSchema), (req, res) => {
   const { code, name, class_code, type } = req.body;
   try {
     const stmt = db.prepare('INSERT INTO accounts (code, name, class_code, type) VALUES (?, ?, ?, ?)');
     stmt.run(code, name, class_code, type);
+    logAction(req.user?.email || 'Admin', 'CREATE', 'Account', code, { name, type });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2663,12 +3179,13 @@ app.post("/api/accounts", (req, res) => {
 });
 
 // Update account
-app.put("/api/accounts/:code", (req, res) => {
+app.put("/api/accounts/:code", validate(schemas.accountSchema.partial()), (req, res) => {
   const { code } = req.params;
   const { name, type } = req.body;
   try {
     const stmt = db.prepare('UPDATE accounts SET name = ?, type = ? WHERE code = ?');
     stmt.run(name, type, code);
+    logAction(req.user?.email || 'Admin', 'UPDATE', 'Account', code, { name, type });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2686,6 +3203,7 @@ app.delete("/api/accounts/:code", (req, res) => {
     }
     const stmt = db.prepare('DELETE FROM accounts WHERE code = ?');
     stmt.run(code);
+    logAction(req.user?.email || 'Admin', 'DELETE', 'Account', code);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2694,27 +3212,66 @@ app.delete("/api/accounts/:code", (req, res) => {
 
 // Get transactions (with optional filters)
 // --- Journal Suggestions API ---
-app.get("/api/journal/suggestions", (req, res) => {
+app.get("/api/journal/suggestions", authenticateToken, (req, res) => {
   const { thirdPartyId, operationType } = req.query;
   try {
-    // If we have a third party, find the most frequent accounts used with them
-    if (thirdPartyId) {
-      const suggestions = db.prepare(`
+    let suggestions = [];
+    
+    // Common accounts to exclude from suggestions (they are already handled by the guided mode logic)
+    const excludedAccounts = [
+      '401%', '411%', // Third parties
+      '521%', '571%', '585%', // Treasury
+      '445%', '443%', // VAT
+      '404%', '414%'  // Other third parties
+    ];
+    const excludeClause = excludedAccounts.map(code => `je.account_code NOT LIKE '${code}'`).join(' AND ');
+
+    if (thirdPartyId && operationType) {
+      // Try specific combination first
+      suggestions = db.prepare(`
+        SELECT je.account_code, a.name as account_name, COUNT(*) as count
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id
+        JOIN accounts a ON je.account_code = a.code
+        WHERE t.third_party_id = ? AND t.operation_type = ?
+        AND (${excludeClause})
+        GROUP BY je.account_code
+        ORDER BY count DESC
+        LIMIT 5
+      `).all(thirdPartyId, operationType);
+    }
+
+    if (suggestions.length === 0 && thirdPartyId) {
+      // Fallback to just third party
+      suggestions = db.prepare(`
         SELECT je.account_code, a.name as account_name, COUNT(*) as count
         FROM journal_entries je
         JOIN transactions t ON je.transaction_id = t.id
         JOIN accounts a ON je.account_code = a.code
         WHERE t.third_party_id = ?
+        AND (${excludeClause})
         GROUP BY je.account_code
         ORDER BY count DESC
         LIMIT 5
       `).all(thirdPartyId);
-      return res.json(suggestions);
     }
 
-    // If no third party but operation type, we could have a static mapping
-    // but for now let's just return empty if no third party
-    res.json([]);
+    if (suggestions.length === 0 && operationType) {
+      // Fallback to just operation type history across all third parties
+      suggestions = db.prepare(`
+        SELECT je.account_code, a.name as account_name, COUNT(*) as count
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id
+        JOIN accounts a ON je.account_code = a.code
+        WHERE t.operation_type = ?
+        AND (${excludeClause})
+        GROUP BY je.account_code
+        ORDER BY count DESC
+        LIMIT 5
+      `).all(operationType);
+    }
+
+    res.json(suggestions);
   } catch (err) {
     console.error("Error fetching journal suggestions:", err);
     res.status(500).json({ error: err.message });
@@ -2802,10 +3359,12 @@ app.get("/api/journal/export", (req, res) => {
   const { startDate, endDate, status } = req.query;
   
   let query = `
-    SELECT t.id, t.date, t.description, t.reference, t.status, t.occasional_name,
+    SELECT t.id, t.date, t.description, t.reference, t.status, t.occasional_name, t.third_party_id,
+           tp.name as third_party_name,
            je.account_code, je.debit, je.credit
     FROM transactions t
     JOIN journal_entries je ON t.id = je.transaction_id
+    LEFT JOIN third_parties tp ON t.third_party_id = tp.id
     WHERE 1=1
   `;
   
@@ -2845,6 +3404,8 @@ app.get("/api/journal/export", (req, res) => {
           reference: row.reference,
           status: row.status,
           occasional_name: row.occasional_name,
+          third_party_id: row.third_party_id,
+          third_party_name: row.third_party_name,
           entries: []
         };
         transactions.push(currentTx);
@@ -2863,18 +3424,33 @@ app.get("/api/journal/export", (req, res) => {
 });
 
 // Create a transaction
-app.post("/api/transactions", (req, res) => {
-  const { date, description, reference, entries, currency, exchange_rate, third_party_id, occasional_name, notes, document_url } = req.body;
+app.post("/api/transactions", validate(schemas.transactionSchema), (req, res) => {
+  const { 
+    date, description, reference, entries, currency, exchange_rate, 
+    third_party_id, occasional_name, notes, document_url,
+    operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
+  } = req.body;
   
   const finalRef = reference || generateTransactionReference();
   
-  const insertTx = db.prepare("INSERT INTO transactions (date, description, reference, status, currency, exchange_rate, third_party_id, occasional_name, notes, document_url) VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?)");
-  const insertEntry = db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)');
+  const insertTx = db.prepare(`
+    INSERT INTO transactions (
+      date, description, reference, status, currency, exchange_rate, 
+      third_party_id, occasional_name, notes, document_url,
+      operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
+    ) VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertEntry = db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)');
   const checkAccount = db.prepare('SELECT 1 FROM accounts WHERE code = ?');
   const insertAccount = db.prepare('INSERT INTO accounts (code, name, class_code, type) VALUES (?, ?, ?, ?)');
 
   const createTransaction = db.transaction(() => {
-    const info = insertTx.run(date, description, finalRef, currency || 'FCFA', exchange_rate || 1, third_party_id || null, occasional_name || null, notes || null, document_url || null);
+    const info = insertTx.run(
+      date, description, finalRef, currency || 'FCFA', exchange_rate || 1, 
+      third_party_id || null, occasional_name || null, notes || null, document_url || null,
+      operation_type || null, amount_ht || null, vat_rate || null, payment_mode || null, 
+      treasury_account || null, creation_mode || 'expert'
+    );
     const txId = info.lastInsertRowid;
     
     for (const entry of entries) {
@@ -2901,7 +3477,7 @@ app.post("/api/transactions", (req, res) => {
         insertAccount.run(entry.account_code, `Compte ${entry.account_code}`, classCode, type);
       }
 
-      insertEntry.run(txId, entry.account_code, entry.debit, entry.credit);
+      insertEntry.run(txId, entry.account_code, entry.debit, entry.credit, entry.description || null);
     }
     return txId;
   });
@@ -2937,7 +3513,8 @@ app.get("/api/transactions/:id", (req, res) => {
     if (!transaction) return res.status(404).json({ error: "Transaction not found" });
     
     const entries = entriesStmt.all(id);
-    res.json({ ...transaction, entries });
+    const attachments = db.prepare("SELECT * FROM transaction_attachments WHERE transaction_id = ?").all(id);
+    res.json({ ...transaction, entries, attachments });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2946,16 +3523,22 @@ app.get("/api/transactions/:id", (req, res) => {
 // Update a transaction
 app.put("/api/transactions/:id", (req, res) => {
   const { id } = req.params;
-  const { date, description, reference, entries, notes, document_url, third_party_id, occasional_name, currency, exchange_rate } = req.body;
+  const { 
+    date, description, reference, entries, notes, document_url, 
+    third_party_id, occasional_name, currency, exchange_rate,
+    operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
+  } = req.body;
 
   const updateTx = db.prepare(`
     UPDATE transactions 
     SET date = ?, description = ?, reference = ?, notes = ?, document_url = ?, 
-        third_party_id = ?, occasional_name = ?, currency = ?, exchange_rate = ? 
+        third_party_id = ?, occasional_name = ?, currency = ?, exchange_rate = ?,
+        operation_type = ?, amount_ht = ?, vat_rate = ?, payment_mode = ?, 
+        treasury_account = ?, creation_mode = ?
     WHERE id = ?
   `);
   const deleteEntries = db.prepare("DELETE FROM journal_entries WHERE transaction_id = ?");
-  const insertEntry = db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)');
+  const insertEntry = db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)');
   const checkAccount = db.prepare('SELECT 1 FROM accounts WHERE code = ?');
   const insertAccount = db.prepare('INSERT INTO accounts (code, name, class_code, type) VALUES (?, ?, ?, ?)');
 
@@ -2963,6 +3546,8 @@ app.put("/api/transactions/:id", (req, res) => {
     updateTx.run(
       date, description, reference || null, notes || null, document_url || null, 
       third_party_id || null, occasional_name || null, currency || 'FCFA', exchange_rate || 1, 
+      operation_type || null, amount_ht || null, vat_rate || null, payment_mode || null, 
+      treasury_account || null, creation_mode || 'expert',
       id
     );
     deleteEntries.run(id);
@@ -2989,7 +3574,7 @@ app.put("/api/transactions/:id", (req, res) => {
         
         insertAccount.run(entry.account_code, `Compte ${entry.account_code}`, classCode, type);
       }
-      insertEntry.run(id, entry.account_code, entry.debit, entry.credit);
+      insertEntry.run(id, entry.account_code, entry.debit, entry.credit, entry.description || null);
     }
   });
 
@@ -3051,6 +3636,100 @@ app.delete("/api/transactions/:id", (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate invoice from transaction
+app.post("/api/transactions/:id/generate-invoice", (req, res) => {
+  const { id } = req.params;
+  try {
+    const transaction = db.prepare(`
+      SELECT t.*, tp.payment_terms, tp.name as tp_name
+      FROM transactions t
+      LEFT JOIN third_parties tp ON t.third_party_id = tp.id
+      WHERE t.id = ?
+    `).get(id) as any;
+
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction non trouvée' });
+    }
+
+    if (transaction.status !== 'validated') {
+      return res.status(400).json({ error: 'Seules les transactions validées peuvent être converties en facture' });
+    }
+
+    // Check if an invoice already exists for this transaction
+    const existingInvoice = db.prepare("SELECT id FROM invoices WHERE transaction_id = ?").get(id);
+    if (existingInvoice) {
+      return res.status(400).json({ error: 'Une facture existe déjà pour cette transaction' });
+    }
+
+    const entries = db.prepare("SELECT * FROM journal_entries WHERE transaction_id = ?").all(id) as any[];
+    
+    // A sales transaction usually has:
+    // - Credit to a revenue account (Class 7)
+    // - Debit to a client account (Class 411) or treasury (Class 5)
+    
+    const revenueEntries = entries.filter(e => e.account_code.startsWith('7'));
+    if (revenueEntries.length === 0) {
+      return res.status(400).json({ error: 'Aucune ligne de revenu (Classe 7) trouvée dans cette transaction' });
+    }
+
+    const nextNumber = generateDocumentNumber('invoice');
+    const company = db.prepare("SELECT vat_rate FROM company_settings LIMIT 1").get() as any;
+    const defaultVatRate = company?.vat_rate || 18;
+
+    const generate = db.transaction(() => {
+      let subtotal = 0;
+      for (const entry of revenueEntries) {
+        subtotal += entry.credit;
+      }
+
+      const vatAmount = subtotal * (defaultVatRate / 100);
+      const totalAmount = subtotal + vatAmount;
+
+      const result = db.prepare(`
+        INSERT INTO invoices (type, number, date, due_date, third_party_id, occasional_name, status, subtotal, vat_amount, total_amount, transaction_id)
+        VALUES ('invoice', ?, DATE('now'), DATE('now', '+' || ? || ' days'), ?, ?, 'draft', ?, ?, ?, ?)
+      `).run(
+        nextNumber,
+        transaction.payment_terms || 30,
+        transaction.third_party_id,
+        transaction.occasional_name,
+        subtotal,
+        vatAmount,
+        totalAmount,
+        id
+      );
+
+      const newInvoiceId = result.lastInsertRowid;
+
+      const insertItem = db.prepare(`
+        INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, vat_rate, total, account_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const entry of revenueEntries) {
+        insertItem.run(
+          newInvoiceId,
+          transaction.description + (entry.account_code ? ` (${entry.account_code})` : ''),
+          1,
+          entry.credit,
+          defaultVatRate,
+          entry.credit * (1 + defaultVatRate / 100),
+          entry.account_code
+        );
+      }
+
+      return newInvoiceId;
+    });
+
+    const newId = generate();
+    logAction(req.user?.name || 'Admin', 'GENERATE', 'Invoice from Transaction', id, { newInvoiceId: newId });
+    res.json({ success: true, id: newId, number: nextNumber });
+  } catch (error) {
+    console.error('Error generating invoice:', error);
+    res.status(500).json({ error: 'Erreur lors de la génération de la facture' });
   }
 });
 
@@ -3125,6 +3804,7 @@ app.post("/api/custom-operations", (req, res) => {
   try {
     const stmt = db.prepare("INSERT INTO custom_operations (label, icon, vat_account_debit, vat_account_credit, entries_template) VALUES (?, ?, ?, ?, ?)");
     const info = stmt.run(label, icon, vat_account_debit, vat_account_credit, JSON.stringify(entries_template));
+    logAction(req.user?.email || 'Admin', 'CREATE', 'CustomOperation', info.lastInsertRowid, { label });
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3273,6 +3953,61 @@ app.get("/api/compliance/audit", (req, res) => {
       }
     }
 
+    // 6. Check for Transactions with only one entry or unbalanced entries
+    const singleEntryStmt = db.prepare(`
+      SELECT t.id, t.description, COUNT(je.id) as entry_count
+      FROM transactions t
+      LEFT JOIN journal_entries je ON t.id = je.transaction_id
+      GROUP BY t.id
+      HAVING entry_count < 2
+    `);
+    const singleEntry = singleEntryStmt.all();
+    for (const tx of singleEntry) {
+      issues.push({
+        id: `single_${tx.id}`,
+        severity: 'high',
+        type: 'balance',
+        message: 'Écriture incomplète',
+        transactionId: tx.id,
+        details: `La transaction "${tx.description}" doit avoir au moins deux lignes (Débit et Crédit).`
+      });
+    }
+
+    // 7. Check for Transactions with only debits or only credits
+    const onlyOneSideStmt = db.prepare(`
+      SELECT t.id, t.description, SUM(CASE WHEN je.debit > 0 THEN 1 ELSE 0 END) as debit_count,
+             SUM(CASE WHEN je.credit > 0 THEN 1 ELSE 0 END) as credit_count
+      FROM transactions t
+      JOIN journal_entries je ON t.id = je.transaction_id
+      GROUP BY t.id
+      HAVING debit_count = 0 OR credit_count = 0
+    `);
+    const onlyOneSide = onlyOneSideStmt.all();
+    for (const tx of onlyOneSide) {
+      issues.push({
+        id: `side_${tx.id}`,
+        severity: 'high',
+        type: 'balance',
+        message: 'Écriture à sens unique',
+        transactionId: tx.id,
+        details: `La transaction "${tx.description}" ne contient que des ${tx.debit_count === 0 ? 'crédits' : 'débits'}. Une écriture doit avoir les deux.`
+      });
+    }
+
+    // 8. Check for Invalid Dates (Future dates)
+    const futureDateStmt = db.prepare("SELECT id, description, date FROM transactions WHERE date > ?");
+    const futureDate = futureDateStmt.all(new Date().toISOString().split('T')[0]);
+    for (const tx of futureDate) {
+      issues.push({
+        id: `date_${tx.id}`,
+        severity: 'medium',
+        type: 'format',
+        message: 'Date dans le futur',
+        transactionId: tx.id,
+        details: `La transaction "${tx.description}" a une date postérieure à aujourd'hui (${tx.date}).`
+      });
+    }
+
     // Calculate Score
     const totalTransactionsStmt = db.prepare("SELECT COUNT(*) as count FROM transactions");
     const totalTransactions = totalTransactionsStmt.get().count;
@@ -3350,13 +4085,24 @@ app.get("/api/dashboard/stats", (req, res) => {
     `);
     const payables = payablesStmt.get().balance || 0;
 
+    // 6. Payroll Stats
+    const activeEmployees = db.prepare("SELECT COUNT(*) as count FROM employees WHERE status = 'active'").get().count || 0;
+    const lastPeriod = db.prepare("SELECT * FROM payroll_periods ORDER BY year DESC, month DESC LIMIT 1").get();
+    const payrollTotal = lastPeriod ? lastPeriod.total_net : 0;
+    const payrollStatus = lastPeriod ? lastPeriod.status : null;
+
     res.json({
       turnover: ca,
       expenses: charges,
       net_result: ca - charges,
       cash: cash,
       receivables: receivables,
-      payables: payables
+      payables: payables,
+      payroll: {
+        total: payrollTotal,
+        employees: activeEmployees,
+        lastPeriod: payrollStatus
+      }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3471,9 +4217,16 @@ app.get("/api/dashboard/ratios", (req, res) => {
     const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
 
     // Balance Sheet items (Cumulative)
+    // Assets: Classes 2, 3, 4, 5 (Debit balance)
     const assets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '2%' OR account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
-    const liabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '16%' OR account_code LIKE '4%'").get().total || 0;
+    
+    // Liabilities (External Debt): Class 1 (starting with 16, 17 - Long term debt) + Class 4 (Short term debt)
+    const liabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '16%' OR account_code LIKE '17%' OR account_code LIKE '4%'").get().total || 0;
+    
+    // Current Assets: Classes 3, 4, 5
     const currentAssets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
+    
+    // Current Liabilities: Class 4
     const currentLiabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '4%'").get().total || 0;
 
     // Income Statement items (Fiscal Year specific)
@@ -4101,6 +4854,161 @@ app.get("/api/reports/trial-balance", (req, res) => {
   }
 });
 
+// --- Transaction Attachments API ---
+app.post("/api/transactions/:id/attachments", upload.array('files'), (req, res) => {
+  const { id } = req.params;
+  const files = req.files as Express.Multer.File[];
+
+  if (!files || files.length === 0) {
+    return res.status(400).json({ error: "Aucun fichier fourni" });
+  }
+
+  try {
+    const insertStmt = db.prepare(`
+      INSERT INTO transaction_attachments (transaction_id, file_name, file_path, file_type, file_size)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    const transaction = db.transaction(() => {
+      for (const file of files) {
+        insertStmt.run(id, file.originalname, file.filename, file.mimetype, file.size);
+      }
+    });
+
+    transaction();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/transactions/:id/attachments", (req, res) => {
+  const { id } = req.params;
+  try {
+    const attachments = db.prepare("SELECT * FROM transaction_attachments WHERE transaction_id = ?").all(id);
+    res.json(attachments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/attachments/:id", (req, res) => {
+  const { id } = req.params;
+  try {
+    const attachment = db.prepare("SELECT * FROM transaction_attachments WHERE id = ?").get(id) as any;
+    if (!attachment) return res.status(404).json({ error: "Pièce jointe non trouvée" });
+
+    const filePath = path.join(process.cwd(), 'uploads', attachment.file_path);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Fichier physique non trouvé" });
+    }
+
+    res.sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/attachments/:id", (req, res) => {
+  const { id } = req.params;
+  try {
+    const attachment = db.prepare("SELECT * FROM transaction_attachments WHERE id = ?").get(id) as any;
+    if (!attachment) return res.status(404).json({ error: "Pièce jointe non trouvée" });
+
+    const filePath = path.join(process.cwd(), 'uploads', attachment.file_path);
+    
+    db.prepare("DELETE FROM transaction_attachments WHERE id = ?").run(id);
+    
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Custom Reports API ---
+
+app.get("/api/reports/custom", (req, res) => {
+  const { type, startDate, endDate, accountCodes, detailed } = req.query;
+  
+  try {
+    const start = (startDate as string) || '1970-01-01';
+    const end = (endDate as string) || '9999-12-31';
+    const isDetailed = detailed === 'true';
+    const accountsFilter = accountCodes ? (accountCodes as string).split(',') : [];
+
+    let query = "";
+    let params: any[] = [];
+
+    if (isDetailed) {
+      query = `
+        SELECT 
+          je.account_code,
+          a.name as account_name,
+          t.date,
+          t.description,
+          t.reference,
+          je.debit,
+          je.credit
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id
+        JOIN accounts a ON je.account_code = a.code
+        WHERE t.status = 'validated' AND t.date >= ? AND t.date <= ?
+      `;
+      params = [start, end];
+
+      if (accountsFilter.length > 0) {
+        query += ` AND je.account_code IN (${accountsFilter.map(() => '?').join(',')})`;
+        params.push(...accountsFilter);
+      }
+
+      if (type === 'balance-sheet') {
+        query += " AND (je.account_code LIKE '1%' OR je.account_code LIKE '2%' OR je.account_code LIKE '3%' OR je.account_code LIKE '4%' OR je.account_code LIKE '5%')";
+      } else if (type === 'income-statement') {
+        query += " AND (je.account_code LIKE '6%' OR je.account_code LIKE '7%')";
+      }
+
+      query += " ORDER BY t.date ASC, je.account_code ASC";
+    } else {
+      query = `
+        SELECT 
+          je.account_code,
+          a.name as account_name,
+          SUM(je.debit) as total_debit,
+          SUM(je.credit) as total_credit
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id
+        JOIN accounts a ON je.account_code = a.code
+        WHERE t.status = 'validated' AND t.date >= ? AND t.date <= ?
+      `;
+      params = [start, end];
+
+      if (accountsFilter.length > 0) {
+        query += ` AND je.account_code IN (${accountsFilter.map(() => '?').join(',')})`;
+        params.push(...accountsFilter);
+      }
+
+      if (type === 'balance-sheet') {
+        query += " AND (je.account_code LIKE '1%' OR je.account_code LIKE '2%' OR je.account_code LIKE '3%' OR je.account_code LIKE '4%' OR je.account_code LIKE '5%')";
+      } else if (type === 'income-statement') {
+        query += " AND (je.account_code LIKE '6%' OR je.account_code LIKE '7%')";
+      }
+
+      query += " GROUP BY je.account_code ORDER BY je.account_code ASC";
+    }
+
+    const stmt = db.prepare(query);
+    const rows = stmt.all(...params);
+
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- VAT Declaration API ---
 
 app.get("/api/vat/declaration", (req, res) => {
@@ -4397,6 +5305,102 @@ app.put("/api/tax-rules/:code", (req, res) => {
     }
 
     logAction('Admin', 'UPDATE', 'TaxRule', code, { rate, ceiling, fixed_amount, is_active });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Payroll Settings API ---
+
+// Brackets
+app.get("/api/payroll/brackets", (req, res) => {
+  try {
+    const brackets = db.prepare("SELECT * FROM payroll_tax_brackets ORDER BY tax_code, min_value").all();
+    res.json(brackets);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/payroll/brackets/:id", (req, res) => {
+  const { id } = req.params;
+  const { rate, min_value, max_value, deduction } = req.body;
+  try {
+    db.prepare(`
+      UPDATE payroll_tax_brackets 
+      SET rate = ?, min_value = ?, max_value = ?, deduction = ?
+      WHERE id = ?
+    `).run(rate, min_value, max_value, deduction, id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reductions
+app.get("/api/payroll/reductions", (req, res) => {
+  try {
+    const reductions = db.prepare("SELECT * FROM payroll_tax_reductions ORDER BY marital_status, children_count").all();
+    res.json(reductions);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/payroll/reductions/:id", (req, res) => {
+  const { id } = req.params;
+  const { parts } = req.body;
+  try {
+    db.prepare("UPDATE payroll_tax_reductions SET parts = ? WHERE id = ?").run(parts, id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Rules (Bonuses/Deductions)
+app.get("/api/payroll/rules", (req, res) => {
+  try {
+    const rules = db.prepare("SELECT * FROM payroll_rules ORDER BY type, name").all();
+    res.json(rules);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/payroll/rules", (req, res) => {
+  const { code, name, type, formula, is_taxable, is_social_taxable } = req.body;
+  try {
+    db.prepare(`
+      INSERT INTO payroll_rules (code, name, type, formula, is_taxable, is_social_taxable)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(code, name, type, formula, is_taxable ? 1 : 0, is_social_taxable ? 1 : 0);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/payroll/rules/:id", (req, res) => {
+  const { id } = req.params;
+  const { name, formula, is_taxable, is_social_taxable, is_active } = req.body;
+  try {
+    db.prepare(`
+      UPDATE payroll_rules 
+      SET name = ?, formula = ?, is_taxable = ?, is_social_taxable = ?, is_active = ?
+      WHERE id = ?
+    `).run(name, formula, is_taxable ? 1 : 0, is_social_taxable ? 1 : 0, is_active ? 1 : 0, id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/payroll/rules/:id", (req, res) => {
+  const { id } = req.params;
+  try {
+    db.prepare("DELETE FROM payroll_rules WHERE id = ?").run(id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4807,7 +5811,7 @@ app.post("/api/payroll/periods/:id/validate", (req, res) => {
       totalNet += p.net_salary;
       totalCnpsEmployee += details.cnpsEmployee;
       totalTaxes += details.taxes.total;
-      totalExtraDeductions += (p.deductions || 0);
+      totalExtraDeductions += (details.extraDeductions || 0);
       
       // Sum employer charges
       if (details.employerDetails) {
@@ -5342,7 +6346,11 @@ app.post("/api/invoices/:id/convert", (req, res) => {
   }
 });
 
-app.post("/api/invoices", (req, res) => {
+app.post("/api/invoices", validate(z.object({
+  type: z.enum(['invoice', 'quote']),
+  date: z.string(),
+  items: z.array(z.any()).min(1),
+}).passthrough()), (req, res) => {
   const { type, date, due_date, third_party_id, occasional_name, notes, terms, items, currency, exchange_rate, transaction_id } = req.body;
   
   const createInvoice = db.transaction(() => {
@@ -5454,8 +6462,8 @@ app.post("/api/invoices/:id/validate", (req, res) => {
     
     // 1. Create Transaction
     const txRef = generateTransactionReference('FAC');
-    const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, third_party_id, due_date) VALUES (?, ?, ?, 'validated', ?, ?)");
-    const txInfo = txStmt.run(invoice.date, `Facture ${invoice.number}`, txRef, invoice.third_party_id, invoice.due_date);
+    const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, third_party_id, due_date, occasional_name) VALUES (?, ?, ?, 'validated', ?, ?, ?)");
+    const txInfo = txStmt.run(invoice.date, `Facture ${invoice.number}`, txRef, invoice.third_party_id, invoice.due_date, invoice.occasional_name || null);
     const txId = txInfo.lastInsertRowid;
     
     // 2. Create Journal Entries
@@ -5510,8 +6518,8 @@ app.post("/api/invoices/:id/pay", (req, res) => {
     
     // 1. Create Transaction
     const txRef = generateTransactionReference('PAY');
-    const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, third_party_id) VALUES (?, ?, ?, 'validated', ?)");
-    const txInfo = txStmt.run(paymentDate, `Paiement Facture ${invoice.number}`, txRef, invoice.third_party_id);
+    const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, third_party_id, occasional_name) VALUES (?, ?, ?, 'validated', ?, ?)");
+    const txInfo = txStmt.run(paymentDate, `Paiement Facture ${invoice.number}`, txRef, invoice.third_party_id, invoice.occasional_name || null);
     const txId = txInfo.lastInsertRowid;
     
     // 2. Create Journal Entries
@@ -5621,6 +6629,22 @@ async function startServer() {
   }
 
   // --- Background Tasks ---
+  // Migration: Ensure third_parties module is active
+  try {
+    const company = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+    if (company) {
+      const hasModule = db.prepare("SELECT id FROM company_modules WHERE module_key = ?").get('third_parties');
+      if (!hasModule) {
+        db.prepare("INSERT INTO company_modules (company_id, module_key, is_active) VALUES (?, ?, 1)").run(company.id, 'third_parties');
+      } else {
+        // Force activation if it exists but is inactive
+        db.prepare("UPDATE company_modules SET is_active = 1 WHERE module_key = ?").run('third_parties');
+      }
+    }
+  } catch (error) {
+    console.error("Migration error:", error);
+  }
+
 // Process auto-recurring transactions every hour
 setInterval(() => {
   try {

@@ -16,6 +16,8 @@ interface CompanySettings {
   country: string;
   capital: number;
   manager_name: string;
+  phone?: string;
+  email?: string;
   bank_name?: string;
   bank_account_number?: string;
   bank_iban?: string;
@@ -26,9 +28,14 @@ interface CompanySettings {
   payment_cash_account?: string;
   payment_mobile_enabled?: boolean;
   payment_mobile_account?: string;
+  cnps_employer_number?: string;
+  tax_office?: string;
 }
 
+import { useModules } from '@/context/ModuleContext';
+
 export function CompanySettingsManager() {
+  const { isActive } = useModules();
   const [settings, setSettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -79,6 +86,8 @@ export function CompanySettingsManager() {
           country: settings.country,
           capital: settings.capital,
           managerName: settings.manager_name,
+          phone: settings.phone,
+          email: settings.email,
           bank_name: settings.bank_name,
           bank_account_number: settings.bank_account_number,
           bank_iban: settings.bank_iban,
@@ -213,6 +222,69 @@ export function CompanySettingsManager() {
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Régime TVA</label>
+            <select 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.vat_regime ?? 'Assujetti'}
+              onChange={e => setSettings({...settings, vat_regime: e.target.value})}
+            >
+              <option value="Assujetti">Assujetti</option>
+              <option value="Non Assujetti">Non Assujetti</option>
+              <option value="Exonéré">Exonéré</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nom du Gérant</label>
+            <input 
+              type="text" 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.manager_name ?? ''}
+              onChange={e => setSettings({...settings, manager_name: e.target.value})}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Capital Social</label>
+            <input 
+              type="number" 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.capital ?? 0}
+              onChange={e => setSettings({...settings, capital: Number(e.target.value)})}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Téléphone</label>
+            <input 
+              type="tel" 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.phone ?? ''}
+              onChange={e => setSettings({...settings, phone: e.target.value})}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email de l'entreprise</label>
+            <input 
+              type="email" 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.email ?? ''}
+              onChange={e => setSettings({...settings, email: e.target.value})}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Pays</label>
+            <input 
+              type="text" 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.country ?? 'Côte d\'Ivoire'}
+              onChange={e => setSettings({...settings, country: e.target.value})}
+            />
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Adresse</label>
             <input 
               type="text" 
@@ -278,6 +350,35 @@ export function CompanySettingsManager() {
             </div>
           </div>
         </div>
+
+        {/* Informations Sociales (Module Paie) */}
+        {isActive('payroll') && (
+          <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">Informations Sociales & Paie</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">N° Employeur CNPS</label>
+                <input 
+                  type="text" 
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+                  value={settings.cnps_employer_number ?? ''}
+                  onChange={e => setSettings({...settings, cnps_employer_number: e.target.value})}
+                  placeholder="Ex: 012345678"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Centre des Impôts (Rattachement)</label>
+                <input 
+                  type="text" 
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+                  value={settings.tax_office ?? ''}
+                  onChange={e => setSettings({...settings, tax_office: e.target.value})}
+                  placeholder="Ex: CDI Cocody"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
           <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">Modes de Paiement (Factures)</h3>

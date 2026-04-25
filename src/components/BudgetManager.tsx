@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Target, Save, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { useCurrency } from '@/hooks/useCurrency';
 import { cn } from '@/lib/utils';
 
@@ -17,14 +18,21 @@ interface Budget {
 
 export function BudgetManager() {
   const { formatCurrency, currency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [accounts, setAccounts] = useState<ExpenseAccount[]>([]);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   
-  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  const [currentYear, setCurrentYear] = useState(activeYear ? parseInt(activeYear.start_date.split('-')[0]) : new Date().getFullYear());
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth() + 1);
+
+  useEffect(() => {
+    if (activeYear) {
+      setCurrentYear(parseInt(activeYear.start_date.split('-')[0]));
+    }
+  }, [activeYear?.id]);
 
   const months = [
     "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",

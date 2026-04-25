@@ -23,6 +23,16 @@
   --radius-4xl: 2.5rem;
 }
 
+:root {
+  --tooltip-bg: #ffffff;
+  --tooltip-text: #0f172a;
+}
+
+.dark {
+  --tooltip-bg: #0f172a;
+  --tooltip-text: #f1f5f9;
+}
+
 body {
   font-family: var(--font-sans);
   background-color: #f8fafc; /* Slate 50 */

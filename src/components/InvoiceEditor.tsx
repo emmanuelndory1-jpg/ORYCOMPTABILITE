@@ -510,6 +510,11 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
                         onClick={() => {
                           setSelectedThirdParty(tp);
                           setShowTPDropdown(false);
+                          if (tp.is_occasional) {
+                            setOccasionalName(tp.name);
+                          } else {
+                            setOccasionalName('');
+                          }
                         }}
                         className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                       >
@@ -538,7 +543,7 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
 
             {selectedThirdParty?.is_occasional && (
               <div className="mt-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Nom du client occasionnel (sur la facture)</label>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Nom</label>
                 <input 
                   type="text"
                   placeholder="Ex: M. Jean Dupont..."

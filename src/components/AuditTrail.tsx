@@ -27,7 +27,7 @@ export function AuditTrail() {
     try {
       const res = await fetch('/api/audit-logs');
       const data = await res.json();
-      setLogs(data);
+      setLogs(Array.isArray(data) ? data : (data.logs || []));
     } catch (err) {
       console.error(err);
     } finally {

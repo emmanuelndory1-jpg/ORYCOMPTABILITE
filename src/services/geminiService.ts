@@ -12,6 +12,7 @@ export interface AISuggestion {
     account_code: string;
     debit: number;
     credit: number;
+    description?: string;
   }[];
   explanation: string;
   confidence: number;
@@ -26,10 +27,13 @@ export interface InvoiceAnalysis {
   amount_ttc: number;
   vat_rate: number;
   operation_type: string;
+  invoice_number?: string;
+  currency?: string;
   entries: {
     account_code: string;
     debit: number;
     credit: number;
+    description?: string;
   }[];
 }
 
@@ -59,12 +63,15 @@ export const analyzeInvoice = async (
       - amount_tva (Montant de la TVA)
       - amount_ttc (Montant Total Toutes Taxes Comprises)
       - vat_rate (Taux de TVA en pourcentage, ex: 18)
+      - invoice_number (Numéro de facture si présent)
+      - currency (Devise, ex: XOF, EUR, USD)
       - operation_type (Choisis STRICTEMENT parmi : 'achat_marchandises', 'achat_services', 'vente_marchandises', 'vente_services', 'frais_generaux')
       - entries: Un tableau d'écritures comptables (SYSCOHADA révisé) représentant cette facture.
         Chaque écriture doit avoir :
         - account_code (ex: "6011", "4452", "4011")
         - debit (montant au débit, 0 si crédit)
         - credit (montant au crédit, 0 si débit)
+        - description (Libellé spécifique court pour cette ligne, ex: "Achat Marchandises", "TVA Déductible", "Net à payer")
         Prends en compte les différentes lignes de la facture et les différentes taxes (TVA, etc.) si présentes.
         Assure-toi que le total des débits est égal au total des crédits.
       ${vatContext}
@@ -77,7 +84,7 @@ export const analyzeInvoice = async (
       contents: {
         parts: [
           { text: prompt },
-          { inlineData: { data: imageBase64, mimeType: "image/jpeg" } }
+          { inlineData: { data: imageBase64.split(',')[1] || imageBase64, mimeType: "image/jpeg" } }
         ]
       },
       config: {
@@ -93,6 +100,8 @@ export const analyzeInvoice = async (
             amount_tva: { type: Type.NUMBER },
             amount_ttc: { type: Type.NUMBER },
             vat_rate: { type: Type.NUMBER },
+            invoice_number: { type: Type.STRING },
+            currency: { type: Type.STRING },
             operation_type: { type: Type.STRING },
             entries: {
               type: Type.ARRAY,
@@ -101,9 +110,10 @@ export const analyzeInvoice = async (
                 properties: {
                   account_code: { type: Type.STRING },
                   debit: { type: Type.NUMBER },
-                  credit: { type: Type.NUMBER }
+                  credit: { type: Type.NUMBER },
+                  description: { type: Type.STRING }
                 },
-                required: ["account_code", "debit", "credit"]
+                required: ["account_code", "debit", "credit", "description"]
               }
             }
           },
@@ -171,9 +181,10 @@ export const suggestJournalEntry = async (
                 properties: {
                   account_code: { type: Type.STRING },
                   debit: { type: Type.NUMBER },
-                  credit: { type: Type.NUMBER }
+                  credit: { type: Type.NUMBER },
+                  description: { type: Type.STRING }
                 },
-                required: ["account_code", "debit", "credit"]
+                required: ["account_code", "debit", "credit", "description"]
               }
             },
             explanation: { type: Type.STRING },
@@ -241,9 +252,10 @@ export const suggestCorrection = async (
                 properties: {
                   account_code: { type: Type.STRING },
                   debit: { type: Type.NUMBER },
-                  credit: { type: Type.NUMBER }
+                  credit: { type: Type.NUMBER },
+                  description: { type: Type.STRING }
                 },
-                required: ["account_code", "debit", "credit"]
+                required: ["account_code", "debit", "credit", "description"]
               }
             },
             explanation: { type: Type.STRING },
@@ -368,6 +380,212 @@ export const generateAudit = async (auditData: any) => {
   }
 };
 
+export interface AccountSuggestion {
+  account_code: string;
+  account_name: string;
+  confidence: number;
+  explanation: string;
+}
+
+export const suggestAccountCode = async (
+  description: string,
+  history: any[] = [],
+  accounts: any[] = []
+): Promise<AccountSuggestion[] | null> => {
+  try {
+    const historyContext = history.length > 0 
+      ? `Historique récent / Habitudes (Comptes fréquemment utilisés ou opérations passées) :\n${history.slice(0, 15).map(h => {
+          if (h.description) return `- Opération "${h.description}" -> ${h.entries?.[0]?.account_code || h.account_code || 'Inconnu'}`;
+          if (h.account_name) return `- Compte souvent utilisé : ${h.account_code} (${h.account_name})`;
+          return JSON.stringify(h);
+      }).join('\n')}`
+      : "Aucun historique d'opérations similaires disponible.";
+
+    const accountsContext = accounts.length > 0
+      ? `Liste partielle des comptes du plan comptable (suggérez les codes qui s'y trouvent si pertinents) :\n${accounts.slice(0, 200).map(a => `${a.code}: ${a.name}`).join('\n')}`
+      : "Utilise les comptes standards du référentiel SYSCOHADA révisé.";
+
+    const prompt = `
+      Ta mission est de suggérer de 1 à 3 COMPTES COMPTABLES les plus appropriés pour l'opération suivante.
+      Référentiel : SYSCOHADA révisé.
+      
+      LIBELLÉ DE L'OPÉRATION : "${description}"
+      
+      ${historyContext}
+      
+      ${accountsContext}
+      
+      CONSIGNES :
+      1. Analyse le libellé pour déterminer la nature de l'opération (achat, vente, prestation, frais, etc.).
+      2. Vérifie dans l'historique pour comprendre les habitudes comptables si applicables.
+      3. Propose les meilleurs comptes d'imputation (classe 6, 7 ou autre selon l'opération). 
+      4. Renvoie un tableau de MIEUX AU MOINS BIEN adapté.
+      
+      RENVOIE UNIQUEMENT UN JSON contenant un tableau 'suggestions' :
+    `;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        systemInstruction: "Tu es un expert-comptable senior spécialisé en SYSCOHADA. Ton rôle est d'aider à la classification précise des opérations comptables. Retourne toujours un objet contenant un tableau de suggestions.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            suggestions: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  account_code: { type: Type.STRING },
+                  account_name: { type: Type.STRING },
+                  confidence: { type: Type.NUMBER },
+                  explanation: { type: Type.STRING }
+                },
+                required: ["account_code", "account_name", "confidence", "explanation"]
+              }
+            }
+          },
+          required: ["suggestions"]
+        }
+      }
+    });
+
+    if (response.text) {
+      const data = JSON.parse(response.text);
+      return data.suggestions || null;
+    }
+    return null;
+  } catch (error) {
+    console.error("Error suggesting account code:", error);
+    return null;
+  }
+};
+
+export interface TaxDocumentAnalysis {
+  document_type: string;
+  date: string;
+  vendor_name: string;
+  invoice_number: string;
+  amount_ht: number;
+  amount_tva: number;
+  amount_ttc: number;
+  vat_rate: number;
+  currency: string;
+  accounting_suggestions: {
+    account_code: string;
+    account_name: string;
+    debit: number;
+    credit: number;
+    reason: string;
+  }[];
+  compliance_check: {
+    status: 'compliant' | 'warning' | 'non-compliant';
+    issues: string[];
+    advice: string;
+  };
+}
+
+export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocumentAnalysis | null> => {
+  try {
+    const prompt = `
+      Analyse ce document fiscal (facture, reçu, avis d'imposition, etc.) pour une entreprise opérant dans la zone OHADA.
+      
+      TACHES :
+      1. OCR : Extrais toutes les données clés (Date, Numéro, Fournisseur, Montants).
+      2. COMPTABILITÉ : Suggère l'écriture comptable complète selon le référentiel SYSCOHADA révisé.
+      3. CONFORMITÉ : Vérifie si le document respecte les mentions obligatoires (NIF, RCCM, TVA apparente, etc.) selon le Code Général des Impôts (UEMOA/CEMAC).
+      
+      RÈGLES DE COMPTABILISATION :
+      - Achats : Débit 6x (Charge), Débit 445 (TVA déductible), Crédit 401 (Fournisseur).
+      - Ventes : Crédit 7x (Produit), Crédit 443 (TVA collectée), Débit 411 (Client).
+      - Frais Généraux : Utilise les comptes 62/63 appropriés.
+      
+      Réponds UNIQUEMENT au format JSON avec la structure suivante :
+      {
+        "document_type": "Facture d'achat / Facture de vente / Reçu / etc.",
+        "date": "YYYY-MM-DD",
+        "vendor_name": "Nom de l'entreprise émettrice",
+        "invoice_number": "Numéro du document",
+        "amount_ht": 0,
+        "amount_tva": 0,
+        "amount_ttc": 0,
+        "vat_rate": 0,
+        "currency": "XOF/EUR/USD/etc.",
+        "accounting_suggestions": [
+          { "account_code": "Code", "account_name": "Libellé", "debit": 0, "credit": 0, "reason": "Pourquoi ce compte ?" }
+        ],
+        "compliance_check": {
+          "status": "compliant | warning | non-compliant",
+          "issues": ["Problème 1", "Problème 2"],
+          "advice": "Conseil pour régulariser ou optimiser"
+        }
+      }
+    `;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: {
+        parts: [
+          { text: prompt },
+          { inlineData: { data: imageBase64, mimeType: "image/jpeg" } }
+        ]
+      },
+      config: {
+        systemInstruction: "Tu es un expert en audit fiscal et comptable spécialisé dans le système SYSCOHADA et les réglementations fiscales de l'Afrique de l'Ouest (UEMOA) et Centrale (CEMAC). Ton analyse doit être rigoureuse et basée sur les textes de loi réels.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            document_type: { type: Type.STRING },
+            date: { type: Type.STRING },
+            vendor_name: { type: Type.STRING },
+            invoice_number: { type: Type.STRING },
+            amount_ht: { type: Type.NUMBER },
+            amount_tva: { type: Type.NUMBER },
+            amount_ttc: { type: Type.NUMBER },
+            vat_rate: { type: Type.NUMBER },
+            currency: { type: Type.STRING },
+            accounting_suggestions: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  account_code: { type: Type.STRING },
+                  account_name: { type: Type.STRING },
+                  debit: { type: Type.NUMBER },
+                  credit: { type: Type.NUMBER },
+                  reason: { type: Type.STRING }
+                },
+                required: ["account_code", "account_name", "debit", "credit", "reason"]
+              }
+            },
+            compliance_check: {
+              type: Type.OBJECT,
+              properties: {
+                status: { type: Type.STRING, enum: ["compliant", "warning", "non-compliant"] },
+                issues: { type: Type.ARRAY, items: { type: Type.STRING } },
+                advice: { type: Type.STRING }
+              },
+              required: ["status", "issues", "advice"]
+            }
+          },
+          required: ["document_type", "date", "vendor_name", "invoice_number", "amount_ht", "amount_tva", "amount_ttc", "vat_rate", "currency", "accounting_suggestions", "compliance_check"]
+        }
+      }
+    });
+
+    if (response.text) {
+      return JSON.parse(response.text);
+    }
+    return null;
+  } catch (error) {
+    console.error("Error in analyzeTaxDocument:", error);
+    return null;
+  }
+};
+
 export const getTaxCompliance = async (message: string, imageBase64?: string | null) => {
   try {
     const parts: any[] = [{ text: message }];
@@ -471,6 +689,66 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
   } catch (error) {
     console.error("Error reconciling bank:", error);
     return null;
+  }
+};
+
+export const askAssistant = async (
+  message: string, 
+  history: { role: 'user' | 'assistant', content: string, image?: string }[] = [],
+  context?: any
+) => {
+  try {
+    const chatHistory = history.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' as const : 'user' as const,
+      parts: [
+        { text: msg.content },
+        ...(msg.image ? [{ inlineData: { data: msg.image.split(',')[1] || msg.image, mimeType: "image/jpeg" } }] : [])
+      ]
+    }));
+
+    const systemInstruction = `Tu es l'assistant intelligent d'ORYCOMPTA, une plateforme de gestion comptable et financière pour l'espace OHADA.
+    Ton rôle est d'aider l'utilisateur dans sa gestion quotidienne : comptabilité, fiscalité, paie, trésorerie.
+    
+    CONTEXTE ACTUEL :
+    ${context ? JSON.stringify(context) : 'Aucun contexte spécifique fourni.'}
+    
+    DIRECTIVES :
+    1. Sois professionnel, précis et pédagogique.
+    2. Utilise le format Markdown pour tes réponses.
+    3. Si l'utilisateur pose une question fiscale, utilise tes outils de recherche pour vérifier les dernières lois OHADA/UEMOA.
+    4. Si l'utilisateur demande une analyse de document (image), sois très précis sur les montants et les dates.
+    5. Ne donne jamais de conseils d'investissement, reste sur la gestion comptable et fiscale.`;
+
+    const chat = ai.chats.create({
+      model: "gemini-3.1-pro-preview",
+      history: chatHistory.slice(0, -1), // History excluding the last message
+      config: {
+        systemInstruction,
+        tools: [{ googleSearch: {} }],
+      }
+    });
+
+    const lastMessage = chatHistory[chatHistory.length - 1];
+    const response = await chat.sendMessage({ message: lastMessage.parts[0].text });
+    
+    let text = response.text;
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+
+    if (groundingChunks && groundingChunks.length > 0) {
+      text += "\n\n**Sources vérifiées :**\n";
+      const uniqueLinks = new Set();
+      groundingChunks.forEach((chunk: any) => {
+        if (chunk.web?.uri && !uniqueLinks.has(chunk.web.uri)) {
+          uniqueLinks.add(chunk.web.uri);
+          text += `- [${chunk.web.title || 'Source'}](${chunk.web.uri})\n`;
+        }
+      });
+    }
+
+    return text;
+  } catch (error) {
+    console.error("Error in askAssistant:", error);
+    return "Désolé, je n'ai pas pu traiter votre demande pour le moment.";
   }
 };
 

@@ -3,7 +3,8 @@ import {
   Building, Check, Loader2, FileText, ArrowRight, 
   DollarSign, Briefcase, Calculator, Percent, User, 
   MapPin, Phone, Mail, Globe, Shield, Settings, 
-  Layers, Plus, Trash2, AlertCircle, Info, Lightbulb, Rocket
+  Layers, Plus, Trash2, AlertCircle, Info, Lightbulb, Rocket,
+  Users, CreditCard, Smartphone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { apiFetch as fetch } from '@/lib/api';
@@ -192,6 +193,16 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
       email: '',
       phone: '',
       managerName: '',
+      bankName: '',
+      bankAccountNumber: '',
+      bankIban: '',
+      bankSwift: '',
+      paymentBankEnabled: true,
+      paymentBankAccount: '521',
+      paymentCashEnabled: true,
+      paymentCashAccount: '571',
+      paymentMobileEnabled: true,
+      paymentMobileAccount: '585',
       syscohadaSystem: 'normal',
       currency: defaultCountry.currency,
       fiscalYearStart: `${new Date().getFullYear()}-01-01`,
@@ -210,8 +221,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
       modules: {
         accounting: true,
         invoicing: true,
-        crm: true,
-        vendors: true,
+        third_parties: true,
         payroll: false,
         vat: true,
         assets: true,
@@ -1166,16 +1176,158 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                   </p>
                 </div>
 
-              <div className="space-y-6">
-                <div className="flex justify-between items-center">
-                  <h3 className="font-bold text-slate-900 dark:text-slate-100">Comptes de Trésorerie</h3>
-                  <button 
-                    onClick={addTreasury}
-                    className="text-brand-green hover:text-brand-green-light font-bold text-sm flex items-center gap-1"
-                  >
-                    <Plus size={16} /> Ajouter un compte
-                  </button>
-                </div>
+                <div className="space-y-8">
+                  {/* Coordonnées Bancaires Principales */}
+                  <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="p-2 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg">
+                        <Building size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-900 dark:text-slate-100">Coordonnées Bancaires Principales</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Ces informations figureront sur vos factures</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Nom de la Banque</label>
+                        <input 
+                          type="text" 
+                          className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                          value={formData.bankName}
+                          onChange={e => setFormData({...formData, bankName: e.target.value})}
+                          placeholder="Ex: NSIA Banque"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Numéro de Compte</label>
+                        <input 
+                          type="text" 
+                          className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                          value={formData.bankAccountNumber}
+                          onChange={e => setFormData({...formData, bankAccountNumber: e.target.value})}
+                          placeholder="Ex: 0123456789"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">IBAN / RIB</label>
+                        <input 
+                          type="text" 
+                          className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                          value={formData.bankIban}
+                          onChange={e => setFormData({...formData, bankIban: e.target.value})}
+                          placeholder="Ex: CI01 01234 567890123456 78"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Code SWIFT / BIC</label>
+                        <input 
+                          type="text" 
+                          className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                          value={formData.bankSwift}
+                          onChange={e => setFormData({...formData, bankSwift: e.target.value})}
+                          placeholder="Ex: NSIACIAB"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Modes de Paiement Acceptés */}
+                  <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="p-2 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg">
+                        <CreditCard size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-900 dark:text-slate-100">Modes de Paiement Acceptés</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Configurez comment vos clients peuvent vous payer</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      {/* Virement */}
+                      <div className="flex items-center justify-between p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <div className="flex items-center gap-3">
+                          <input 
+                            type="checkbox" 
+                            id="pay-bank"
+                            checked={formData.paymentBankEnabled}
+                            onChange={e => setFormData({...formData, paymentBankEnabled: e.target.checked})}
+                            className="w-5 h-5 text-brand-green border-slate-300 rounded-lg focus:ring-brand-green"
+                          />
+                          <label htmlFor="pay-bank" className="font-bold text-slate-900 dark:text-slate-100">Virement Bancaire</label>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-bold text-slate-400 uppercase">Compte :</span>
+                          <input 
+                            type="text" 
+                            className="w-24 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                            value={formData.paymentBankAccount}
+                            onChange={e => setFormData({...formData, paymentBankAccount: e.target.value})}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Espèces */}
+                      <div className="flex items-center justify-between p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <div className="flex items-center gap-3">
+                          <input 
+                            type="checkbox" 
+                            id="pay-cash"
+                            checked={formData.paymentCashEnabled}
+                            onChange={e => setFormData({...formData, paymentCashEnabled: e.target.checked})}
+                            className="w-5 h-5 text-brand-green border-slate-300 rounded-lg focus:ring-brand-green"
+                          />
+                          <label htmlFor="pay-cash" className="font-bold text-slate-900 dark:text-slate-100">Espèces</label>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-bold text-slate-400 uppercase">Compte :</span>
+                          <input 
+                            type="text" 
+                            className="w-24 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                            value={formData.paymentCashAccount}
+                            onChange={e => setFormData({...formData, paymentCashAccount: e.target.value})}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Mobile Money */}
+                      <div className="flex items-center justify-between p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <div className="flex items-center gap-3">
+                          <input 
+                            type="checkbox" 
+                            id="pay-mobile"
+                            checked={formData.paymentMobileEnabled}
+                            onChange={e => setFormData({...formData, paymentMobileEnabled: e.target.checked})}
+                            className="w-5 h-5 text-brand-green border-slate-300 rounded-lg focus:ring-brand-green"
+                          />
+                          <label htmlFor="pay-mobile" className="font-bold text-slate-900 dark:text-slate-100">Mobile Money</label>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-bold text-slate-400 uppercase">Compte :</span>
+                          <input 
+                            type="text" 
+                            className="w-24 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                            value={formData.paymentMobileAccount}
+                            onChange={e => setFormData({...formData, paymentMobileAccount: e.target.value})}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div className="flex justify-between items-center">
+                      <h3 className="font-bold text-slate-900 dark:text-slate-100">Comptes de Trésorerie</h3>
+                      <button 
+                        type="button"
+                        onClick={addTreasury}
+                        className="text-brand-green hover:text-brand-green-light font-bold text-sm flex items-center gap-1"
+                      >
+                        <Plus size={16} /> Ajouter un compte
+                      </button>
+                    </div>
 
                 <div className="grid grid-cols-1 gap-4">
                   {formData.treasury.map((t, i) => (
@@ -1190,7 +1342,26 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                           placeholder="Ex: BOA - Compte Courant"
                         />
                       </div>
-                      <div className="md:col-span-3">
+
+                      {(t.type === 'bank' || t.type === 'mobile') && (
+                        <div className="md:col-span-3">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">
+                            {t.type === 'bank' ? 'N° de Compte' : 'N° de Téléphone'}
+                          </label>
+                          <input 
+                            type="text"
+                            value={t.accountNumber || ''}
+                            onChange={(e) => updateTreasury(i, { accountNumber: e.target.value })}
+                            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                            placeholder={t.type === 'bank' ? '0123456789' : '0707070707'}
+                          />
+                        </div>
+                      )}
+
+                      <div className={cn(
+                        "md:col-span-3",
+                        (t.type === 'bank' || t.type === 'mobile') ? "md:col-span-2" : "md:col-span-3"
+                      )}>
                         <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Type</label>
                         <select 
                           value={t.type}
@@ -1220,6 +1391,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                   ))}
                 </div>
               </div>
+            </div>
 
                 <div className="pt-8 flex justify-between">
                   <button onClick={() => setStep(3)} className="text-slate-500 hover:text-slate-700 font-bold px-6 py-4">{t('onboarding.back')}</button>
@@ -1361,8 +1533,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                 {[
                   { key: 'accounting', label: t('onboarding.module_accounting'), icon: <Calculator size={20} />, desc: t('onboarding.module_accounting_desc') },
                   { key: 'invoicing', label: t('onboarding.module_invoicing'), icon: <FileText size={20} />, desc: t('onboarding.module_invoicing_desc') },
-                  { key: 'crm', label: t('onboarding.module_crm'), icon: <User size={20} />, desc: t('onboarding.module_crm_desc') },
-                  { key: 'vendors', label: t('onboarding.module_vendors'), icon: <Briefcase size={20} />, desc: t('onboarding.module_vendors_desc') },
+                  { key: 'third_parties', label: t('onboarding.module_third_parties') || 'Gestion des Tiers', icon: <Users size={20} />, desc: t('onboarding.module_third_parties_desc') || 'Gérez vos clients et fournisseurs dans un répertoire centralisé.' },
                   { key: 'payroll', label: t('onboarding.module_payroll'), icon: <User size={20} />, desc: t('onboarding.module_payroll_desc') },
                   { key: 'vat', label: t('onboarding.module_vat'), icon: <Percent size={20} />, desc: t('onboarding.module_vat_desc') },
                   { key: 'assets', label: t('onboarding.module_assets'), icon: <Building size={20} />, desc: t('onboarding.module_assets_desc') },
@@ -1524,8 +1695,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                           <Check size={14} className="text-brand-green" />
                           {key === 'accounting' ? t('onboarding.module_accounting') : 
                            key === 'invoicing' ? t('onboarding.module_invoicing') : 
-                           key === 'crm' ? t('onboarding.module_crm') : 
-                           key === 'vendors' ? t('onboarding.module_vendors') : 
+                           key === 'third_parties' ? (t('onboarding.module_third_parties') || 'Gestion des Tiers') : 
                            key === 'payroll' ? t('onboarding.module_payroll') : 
                            key === 'vat' ? t('onboarding.module_vat') : 
                            key === 'assets' ? t('onboarding.module_assets') : t('onboarding.module_bankrec')}

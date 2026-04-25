@@ -10,6 +10,11 @@ export interface TreasurySetup {
   type: 'bank' | 'cash' | 'mobile';
   initialBalance: number;
   accountNumber?: string;
+  bankName?: string;
+  iban?: string;
+  swift?: string;
+  mobileProvider?: string;
+  mobileNumber?: string;
 }
 
 export interface UserSetup {
@@ -30,6 +35,20 @@ export interface OnboardingData {
   email: string;
   phone: string;
   managerName: string;
+
+  // Banking (Main)
+  bankName?: string;
+  bankAccountNumber?: string;
+  bankIban?: string;
+  bankSwift?: string;
+
+  // Payment Methods
+  paymentBankEnabled: boolean;
+  paymentBankAccount: string;
+  paymentCashEnabled: boolean;
+  paymentCashAccount: string;
+  paymentMobileEnabled: boolean;
+  paymentMobileAccount: string;
 
   // Accounting
   syscohadaSystem: 'normal' | 'minimalist';
@@ -57,8 +76,7 @@ export interface OnboardingData {
   modules: {
     accounting: boolean;
     invoicing: boolean;
-    crm: boolean;
-    vendors: boolean;
+    third_parties: boolean;
     payroll: boolean;
     vat: boolean;
     assets: boolean;

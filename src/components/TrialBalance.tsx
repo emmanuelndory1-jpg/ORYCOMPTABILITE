@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Filter, Search, FileText, Printer, FileSpreadsheet } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { cn } from '@/lib/utils';
@@ -18,6 +19,7 @@ interface TrialBalanceEntry {
 
 export function TrialBalance() {
   const { formatCurrency, currency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [data, setData] = useState<TrialBalanceEntry[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -25,10 +27,33 @@ export function TrialBalance() {
   const [endDate, setEndDate] = useState('');
   const [filter, setFilter] = useState('');
 
+  const setQuickRange = (range: 'month' | 'quarter' | 'year' | 'all') => {
+    if (range === 'all') {
+      setStartDate('');
+      setEndDate('');
+      return;
+    }
+    const now = new Date();
+    let start = new Date(now.getFullYear(), now.getMonth(), 1);
+    let end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    if (range === 'quarter') {
+      const quarter = Math.floor(now.getMonth() / 3);
+      start = new Date(now.getFullYear(), quarter * 3, 1);
+      end = new Date(now.getFullYear(), (quarter + 1) * 3, 0);
+    } else if (range === 'year') {
+      start = new Date(now.getFullYear(), 0, 1);
+      end = new Date(now.getFullYear(), 11, 31);
+    }
+
+    setStartDate(start.toISOString().split('T')[0]);
+    setEndDate(end.toISOString().split('T')[0]);
+  };
+
   useEffect(() => {
     fetchData();
     fetchCompanySettings();
-  }, [startDate, endDate]);
+  }, [startDate, endDate, activeYear?.id]);
 
   const fetchCompanySettings = async () => {
     try {
@@ -187,8 +212,16 @@ export function TrialBalance() {
 
       {/* Filters */}
       <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-100 dark:border-slate-800 flex flex-col lg:flex-row gap-4 items-stretch lg:items-end">
-        <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm font-medium w-full lg:w-auto">
-          <Filter size={16} /> Filtres
+        <div className="flex flex-col gap-2 w-full lg:w-auto">
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm font-medium">
+            <Filter size={16} className="text-brand-green" /> Période d'analyse
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setQuickRange('month')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Ce Mois</button>
+            <button onClick={() => setQuickRange('quarter')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Ce Trimestre</button>
+            <button onClick={() => setQuickRange('year')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Cette Année</button>
+            <button onClick={() => setQuickRange('all')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Tout</button>
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex gap-4 flex-1">
           <div className="flex-1">

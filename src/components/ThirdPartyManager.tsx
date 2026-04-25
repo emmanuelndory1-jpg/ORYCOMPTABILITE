@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users, UserPlus, Search, FileText, AlertTriangle, CheckCircle, X, Save, Trash2, Download, Briefcase, CreditCard, Calendar, FileSpreadsheet, Mail, Phone, History, ExternalLink } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useDialog } from './DialogProvider';
@@ -25,8 +26,9 @@ interface ThirdParty {
 }
 
 export function ThirdPartyManager() {
-  const { confirm } = useDialog();
+  const { confirm, alert } = useDialog();
   const { formatCurrency, currency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [activeTab, setActiveTab] = useState<'client' | 'supplier'>('client');
   const [parties, setParties] = useState<ThirdParty[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +37,7 @@ export function ThirdPartyManager() {
   const [editingParty, setEditingParty] = useState<ThirdParty | null>(null);
   const [showAgedBalance, setShowAgedBalance] = useState(false);
   const [agedBalanceData, setAgedBalanceData] = useState<any[]>([]);
+  const [isSettingUpOccasional, setIsSettingUpOccasional] = useState(false);
 
   // Payment Modal State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -67,7 +70,7 @@ export function ThirdPartyManager() {
 
   useEffect(() => {
     fetchParties();
-  }, [activeTab]);
+  }, [activeTab, activeYear?.id]);
 
   const fetchParties = async () => {
     setLoading(true);
@@ -90,6 +93,25 @@ export function ThirdPartyManager() {
       setShowAgedBalance(true);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const setupOccasional = async () => {
+    setIsSettingUpOccasional(true);
+    try {
+      const res = await fetch('/api/third-parties/defaults');
+      if (res.ok) {
+        alert('Comptes occasionnels initialisés avec succès !', 'success');
+        fetchParties();
+      } else {
+        const error = await res.json();
+        alert(error.error || 'Erreur lors de l\'initialisation', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erreur de connexion au serveur', 'error');
+    } finally {
+      setIsSettingUpOccasional(false);
     }
   };
 
@@ -129,7 +151,7 @@ export function ThirdPartyManager() {
         fetchParties();
       } else {
         const error = await res.json();
-        alert(error.error);
+        alert(error.error, 'error');
       }
     } catch (err) {
       console.error(err);
@@ -203,16 +225,16 @@ export function ThirdPartyManager() {
       });
 
       if (res.ok) {
-        alert('Paiement enregistré avec succès !');
+        alert('Paiement enregistré avec succès !', 'success');
         setIsPaymentModalOpen(false);
         fetchParties(); // Refresh balances
       } else {
         const error = await res.json();
-        alert(error.error);
+        alert(error.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert('Erreur lors de l\'enregistrement du paiement');
+      alert('Erreur lors de l\'enregistrement du paiement', 'error');
     }
   };
 
@@ -295,6 +317,15 @@ export function ThirdPartyManager() {
         </div>
         
         <div className="flex flex-col sm:flex-row flex-wrap gap-3 w-full md:w-auto">
+          <button 
+            onClick={setupOccasional}
+            disabled={isSettingUpOccasional}
+            className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-amber-600 dark:text-amber-500 px-4 py-3 md:px-6 md:py-4 rounded-2xl font-black text-[10px] sm:text-xs uppercase tracking-widest flex items-center justify-center gap-3 transition-all shadow-sm active:scale-95 disabled:opacity-50"
+            title="Créer automatiquement les comptes Client/Fournisseur occasionnels"
+          >
+            <Users size={18} />
+            <span className="whitespace-nowrap">{isSettingUpOccasional ? 'Initialisation...' : 'Init. Occasionnels'}</span>
+          </button>
           <button 
             onClick={handleExportCSV}
             className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 px-4 py-3 md:px-6 md:py-4 rounded-2xl font-black text-[10px] sm:text-xs uppercase tracking-widest flex items-center justify-center gap-3 transition-all shadow-sm active:scale-95"

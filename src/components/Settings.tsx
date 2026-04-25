@@ -9,11 +9,15 @@ import { PayrollSettingsManager } from './PayrollSettingsManager';
 import { SubscriptionManager } from './SubscriptionManager';
 import { VATSettingsManager } from './VATSettingsManager';
 import { LanguageSettings } from './LanguageSettings';
-import { Settings as SettingsIcon } from 'lucide-react';
+import { ModuleManager } from './ModuleManager';
+import { Settings as SettingsIcon, ChevronRight } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
+import { useModules } from '@/context/ModuleContext';
+import { Link } from 'react-router-dom';
 
 export function Settings() {
   const { t } = useLanguage();
+  const { isActive } = useModules();
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -31,10 +35,11 @@ export function Settings() {
         <div className="space-y-8">
           <LanguageSettings />
           <SubscriptionManager />
+          <ModuleManager />
           <CompanySettingsManager />
           <CurrencyManager />
           <InvoiceReminderSettings />
-          <PayrollSettingsManager />
+          {isActive('payroll') && <PayrollSettingsManager />}
           <VATSettingsManager />
           <FiscalYearManager />
         </div>
@@ -44,9 +49,20 @@ export function Settings() {
       </div>
       
       {/* Audit Trail Section */}
-      <div className="mt-8">
-        <AuditTrail />
-      </div>
+      {isActive('audit') && (
+        <div className="mt-8 pt-8 border-t border-slate-200 dark:border-slate-800">
+          <div className="flex items-center justify-between mb-4 px-2">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Aperçu du Journal d'Audit</h2>
+              <p className="text-sm text-slate-500">Dernières activités enregistrées.</p>
+            </div>
+            <Link to="/audit" className="text-brand-green hover:underline text-sm font-bold flex items-center gap-1">
+              Voir tout le journal <ChevronRight size={16} />
+            </Link>
+          </div>
+          <AuditTrail />
+        </div>
+      )}
     </div>
   );
 }

@@ -19,6 +19,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { TaxSettingsManager } from './TaxSettingsManager';
@@ -59,12 +60,19 @@ interface TaxSummary {
 
 export function TaxManager() {
   const { formatCurrency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<TaxSummary | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [selectedYear, setSelectedYear] = useState(activeYear ? parseInt(activeYear.start_date.split('-')[0]) : new Date().getFullYear());
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+
+  useEffect(() => {
+    if (activeYear) {
+      setSelectedYear(parseInt(activeYear.start_date.split('-')[0]));
+    }
+  }, [activeYear?.id]);
 
   useEffect(() => {
     fetchTaxSummary();

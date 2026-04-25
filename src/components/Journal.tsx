@@ -3,13 +3,15 @@ import { Routes, Route, useLocation, Navigate, Outlet, useNavigate, Link } from 
 import { Plus, Upload, FileText, Check, X, Loader2, Calculator, ArrowRight, Wand2, Pencil, Download, Settings, Filter, Trash2, FileSpreadsheet, Zap, ExternalLink, FileX, FilePlus, Edit, Settings2, Hash, Search } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { sanitizeText, formatCurrencyPDF } from '@/lib/pdfUtils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { useCurrency } from '@/hooks/useCurrency';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { useDialog } from './DialogProvider';
 import { useLanguage } from '@/context/LanguageContext';
+import { SafeImage } from './SafeImage';
 import { exportToCSV, PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings } from '@/lib/exportUtils';
 import { 
   DEFAULT_OPERATION_TYPES, 
@@ -19,7 +21,7 @@ import {
   JournalEntryLine, 
   PaymentMode 
 } from '@/lib/accounting';
-import { suggestJournalEntry, AISuggestion, analyzeInvoice } from '@/services/geminiService';
+import { suggestJournalEntry, AISuggestion, analyzeInvoice, suggestAccountCode } from '@/services/geminiService';
 
 interface Transaction {
   id: number;
@@ -31,15 +33,34 @@ interface Transaction {
   currency?: string;
   exchange_rate?: number;
   occasional_name?: string;
+  third_party_id?: number | null;
+  third_party_name?: string;
   notes?: string;
   document_url?: string;
   invoice_number?: string;
   invoice_id?: number;
   recurring_transaction_id?: string;
+  operation_type?: string;
+  amount_ht?: number;
+  vat_rate?: number;
+  payment_mode?: string;
+  treasury_account?: string;
+  creation_mode?: 'guided' | 'expert';
+}
+
+interface Attachment {
+  id: number;
+  transaction_id: number;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number;
+  created_at: string;
 }
 
 interface DetailedTransaction extends Transaction {
   entries: JournalEntryLine[];
+  attachments?: Attachment[];
 }
 
 type OperationType = string; // Allow dynamic types
@@ -48,7 +69,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const navigate = useNavigate();
   const { confirm, alert: dialogAlert } = useDialog();
   const { t } = useLanguage();
-  const { formatCurrency, currency: baseCurrency, exchangeRates, getExchangeRate } = useCurrency();
+  const { formatCurrency, currency: baseCurrency, exchangeRates, getExchangeRate, getCurrencyIcon } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [thirdPartyFilter, setThirdPartyFilter] = useState('');
@@ -63,10 +85,12 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [transactionCurrency, setTransactionCurrency] = useState('FCFA');
   const [transactionExchangeRate, setTransactionExchangeRate] = useState(1);
+  const [additionalCurrencies, setAdditionalCurrencies] = useState<string[]>(['EUR', 'USD']);
   const [isCustomOpModalOpen, setIsCustomOpModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
+  const [suggestingAccount, setSuggestingAccount] = useState<number | null>(null); // null means not suggesting, -1 means guided mode override
   const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
   const [mode, setMode] = useState<'guided' | 'expert'>('guided');
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -76,6 +100,10 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [quickInvoiceData, setQuickInvoiceData] = useState<any>(null);
   const [notes, setNotes] = useState('');
   const [documentUrls, setDocumentUrls] = useState<string[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [isScanning, setIsScanning] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [existingAttachments, setExistingAttachments] = useState<Attachment[]>([]);
 
   useEffect(() => {
     if (openModal) {
@@ -90,17 +118,6 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     const day = String(now.getDate()).padStart(2, '0');
     const random = Math.random().toString(36).substring(2, 6).toUpperCase();
     return `REF-${year}${month}${day}-${random}`;
-  };
-
-  const handleModalClose = () => {
-    setIsModalOpen(false);
-    setEditingId(null);
-    setReference('');
-    setDescription('');
-    setNotes('');
-    setDocumentUrls([]);
-    setEntries([{ account_code: '', debit: 0, credit: 0 }, { account_code: '', debit: 0, credit: 0 }]);
-    if (onModalClose) onModalClose();
   };
 
   useEffect(() => {
@@ -146,6 +163,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [occasionalName, setOccasionalName] = useState('');
   const [selectedTreasuryAccount, setSelectedTreasuryAccount] = useState<string>('');
   const [suggestedAccounts, setSuggestedAccounts] = useState<{account_code: string, account_name: string, count: number}[]>([]);
+  const [selectedAccountOverride, setSelectedAccountOverride] = useState<string>('');
 
   // Expert Mode Entries
   const [entries, setEntries] = useState<JournalEntryLine[]>([
@@ -153,15 +171,88 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     { account_code: '', debit: 0, credit: 0 }
   ]);
 
+  const handleModalClose = async (force = false) => {
+    const hasChanges = description.trim() !== '' || 
+                       amountHT > 0 || 
+                       notes.trim() !== '' ||
+                       entries.some(e => e.account_code !== '' || e.debit > 0 || e.credit > 0) ||
+                       pendingFiles.length > 0;
+
+    if (!force && hasChanges) {
+      const proceed = await confirm("Voulez-vous abandonner l'écriture en cours ? Toutes les données non enregistrées seront perdues.");
+      if (!proceed) return;
+    }
+    setIsModalOpen(false);
+    setEditingId(null);
+    setReference('');
+    setDescription('');
+    setNotes('');
+    setDocumentUrls([]);
+    setPendingFiles([]);
+    setExistingAttachments([]);
+    setEntries([{ account_code: '', debit: 0, credit: 0 }, { account_code: '', debit: 0, credit: 0 }]);
+    setAmountHT(0);
+    setOperationType('achat_marchandises');
+    setPaymentMode('caisse');
+    setSelectedThirdParty('');
+    setOccasionalName('');
+    setSelectedTreasuryAccount('');
+    setSelectedAccountOverride('');
+    setAiSuggestion(null);
+    if (onModalClose) onModalClose();
+  };
+
+  const clearForm = async () => {
+    const proceed = await confirm("Voulez-vous réinitialiser le formulaire ?");
+    if (!proceed) return;
+    
+    setDescription('');
+    setAmountHT(0);
+    setNotes('');
+    setDocumentUrls([]);
+    setPendingFiles([]);
+    setEntries([{ account_code: '', debit: 0, credit: 0 }, { account_code: '', debit: 0, credit: 0 }]);
+    setOperationType('achat_marchandises');
+    setPaymentMode('caisse');
+    setSelectedThirdParty('');
+    setOccasionalName('');
+    setSelectedTreasuryAccount('');
+    setSelectedAccountOverride('');
+    setAiSuggestion(null);
+  };
+
+  // Keyboard shortcuts
   useEffect(() => {
-    if (selectedThirdParty) {
-      const party = thirdParties.find(p => p.account_code === selectedThirdParty);
-      if (party) {
-        fetch(`/api/journal/suggestions?thirdPartyId=${party.id}&operationType=${operationType}`)
-          .then(res => res.json())
-          .then(data => setSuggestedAccounts(data))
-          .catch(err => console.error(err));
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isModalOpen) return;
+
+      // Ctrl+S or Cmd+S to save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        handleSubmit();
       }
+
+      // Escape to close/abandon
+      if (e.key === 'Escape' && !isCustomOpModalOpen && !isDetailOpen && !isQuickInvoiceOpen) {
+        handleModalClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isModalOpen, description, amountHT, entries, pendingFiles, isCustomOpModalOpen, isDetailOpen, isQuickInvoiceOpen]);
+
+  useEffect(() => {
+    const party = thirdParties.find(p => p.account_code === selectedThirdParty);
+    const params = new URLSearchParams();
+    if (party) params.append('thirdPartyId', party.id.toString());
+    if (operationType) params.append('operationType', operationType);
+
+    if (params.toString()) {
+      fetch(`/api/journal/suggestions?${params.toString()}`)
+        .then(res => res.json())
+        .then(data => setSuggestedAccounts(data))
+        .catch(err => console.error(err));
     } else {
       setSuggestedAccounts([]);
     }
@@ -176,7 +267,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     fetchThirdParties();
     fetchDefaultOccasional();
     fetchCompanySettings();
-  }, [startDate, endDate, statusFilter, searchTerm, thirdPartyFilter, accountFilter, minAmount, maxAmount]);
+  }, [startDate, endDate, statusFilter, searchTerm, thirdPartyFilter, accountFilter, minAmount, maxAmount, activeYear?.id]);
 
   const fetchDefaultOccasional = async () => {
     try {
@@ -205,24 +296,26 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   };
 
   useEffect(() => {
-    if (mode === 'guided') {
+    if (mode === 'guided' && isModalOpen) {
       const calculated = calculateEntries(
         operationType,
-        amountHT,
+        amountHT * transactionExchangeRate,
         vatRate,
         paymentMode,
         customOperations,
         selectedThirdParty,
         companySettings?.vat_settings || [], // vatSettings
         selectedTreasuryAccount,
-        companySettings
+        companySettings,
+        selectedAccountOverride
       );
       setEntries(calculated);
     }
-  }, [mode, operationType, amountHT, vatRate, paymentMode, customOperations, selectedThirdParty, selectedTreasuryAccount]);
+  }, [mode, isModalOpen, operationType, amountHT, vatRate, paymentMode, transactionExchangeRate, customOperations, selectedThirdParty, selectedTreasuryAccount, companySettings, selectedAccountOverride]);
 
   useEffect(() => {
     setSelectedThirdParty('');
+    setSelectedAccountOverride('');
   }, [operationType]);
 
   const fetchAccounts = async () => {
@@ -523,10 +616,18 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         }
       }
       setDocumentUrls(urls);
+      setExistingAttachments(data.attachments || []);
       
       setEntries(data.entries);
       setTransactionCurrency(data.currency || 'FCFA');
       setTransactionExchangeRate(data.exchange_rate || 1);
+      
+      // Restore guided mode parameters if they exist
+      if (data.operation_type) setOperationType(data.operation_type);
+      if (data.amount_ht) setAmountHT(data.amount_ht);
+      if (data.vat_rate !== undefined) setVatRate(data.vat_rate);
+      if (data.payment_mode) setPaymentMode(data.payment_mode);
+      if (data.treasury_account) setSelectedTreasuryAccount(data.treasury_account);
       
       // Try to restore third party
       if (data.third_party_id) {
@@ -542,7 +643,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         setOccasionalName('');
       }
 
-      setMode('expert'); // Default to expert mode for editing as we don't store the guided params
+      setMode(data.creation_mode || 'expert');
       setIsModalOpen(true);
     } catch (err) {
       console.error("Failed to fetch transaction details", err);
@@ -555,84 +656,197 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const handleScanButtonClick = async () => {
     const isSale = await confirm("S'agit-il d'une VENTE ? (Cliquez sur 'Confirmer' pour VENTE, 'Annuler' pour un ACHAT)");
     setScanType(isSale ? 'vente' : 'achat');
+    setIsScanning(true);
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !scanType) return;
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
 
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.type.startsWith('image/')) {
+        const useAI = await confirm("Voulez-vous qu'Ory analyse cette facture pour pré-remplir les champs ?");
+        if (useAI) {
+          await processFileForAI(file);
+        } else {
+          setPendingFiles(prev => [...prev, file]);
+        }
+      } else {
+        setPendingFiles(prev => [...prev, file]);
+      }
+    }
+  };
+
+  const processFileForAI = async (file: File) => {
+    const isSale = await confirm("S'agit-il d'une VENTE ? (Cliquez sur 'Confirmer' pour VENTE, 'Annuler' pour un ACHAT)");
+    const sType = isSale ? 'vente' : 'achat';
+    
     setAnalyzing(true);
     setIsModalOpen(true);
     setMode('guided');
     setEditingId(null);
+    setScanType(sType);
 
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64 = (reader.result as string).split(',')[1];
       const newUrl = `data:${file.type};base64,${base64}`;
       setDocumentUrls(prev => [...prev, newUrl]);
-      
-      try {
-        const data = await analyzeInvoice(base64, scanType, companySettings?.vat_settings || []);
-        
-        if (!data) throw new Error("L'analyse IA a échoué");
-
-        setDate(data.date || new Date().toISOString().split('T')[0]);
-        setDescription(data.description || "Opération importée");
-        
-        const ht = data.amount_ht || (data.amount_ttc ? data.amount_ttc / 1.18 : 0);
-        setAmountHT(Math.round(ht));
-        
-        // VAT Rate detection
-        if (data.vat_rate !== undefined) {
-          setVatRate(data.vat_rate);
-        } else if (data.amount_tva > 0 && ht > 0) {
-          const rawRate = (data.amount_tva / ht) * 100;
-          const commonRates = [0, 2, 5, 10, 18];
-          const closest = commonRates.reduce((prev, curr) => 
-            Math.abs(curr - rawRate) < Math.abs(prev - rawRate) ? curr : prev
-          );
-          setVatRate(closest);
-        }
-
-        // Third Party detection
-        if (data.third_party) {
-          const match = thirdParties.find(tp => 
-            tp.name.toLowerCase().includes(data.third_party.toLowerCase()) || 
-            data.third_party.toLowerCase().includes(tp.name.toLowerCase())
-          );
-          
-          if (match) {
-            setSelectedThirdParty(match.account_code);
-          } else {
-            setOccasionalName(data.third_party);
-            const def = scanType === 'vente' ? defaultOccasional.client : defaultOccasional.supplier;
-            if (def) {
-              setSelectedThirdParty(def.account_code);
-            }
-          }
-        }
-
-        // Operation Type
-        if (data.operation_type && DEFAULT_OPERATION_TYPES.some(t => t.id === data.operation_type)) {
-          setOperationType(data.operation_type);
-        } else {
-          setOperationType(scanType === 'vente' ? 'vente_marchandises' : 'achat_marchandises');
-        }
-
-      } catch (err: any) {
-        console.error("AI Analysis failed", err);
-        dialogAlert(`Erreur lors de l'analyse : ${err.message || 'Veuillez saisir manuellement.'}`, 'error');
-      } finally {
-        setAnalyzing(false);
-        // Reset scan type for next time
-        setScanType(null);
-        // Clear file input
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      }
+      await performAIAnalysis(base64, sType);
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    if (isScanning) {
+      const file = files[0];
+      if (!scanType) return;
+      await processFileForAI(file);
+      setIsScanning(false);
+    } else {
+      // Adding attachments
+      const newFiles = Array.from(files);
+      
+      // If it's an image and we are in the modal, ask to analyze
+      if (isModalOpen && newFiles.length > 0 && newFiles[0].type.startsWith('image/')) {
+        const file = newFiles[0];
+        const useAI = await confirm("Voulez-vous qu'Ory analyse ce document pour pré-remplir les champs de la transaction ?");
+        
+        if (useAI) {
+          await processFileForAI(file);
+        } else {
+          setPendingFiles(prev => [...prev, ...newFiles]);
+        }
+      } else {
+        setPendingFiles(prev => [...prev, ...newFiles]);
+      }
+      
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const performAIAnalysis = async (base64: string, sType: 'vente' | 'achat') => {
+    try {
+      const data = await analyzeInvoice(base64, sType, companySettings?.vat_settings || []);
+      
+      if (!data) throw new Error("L'analyse IA a échoué");
+
+      if (data.date) setDate(data.date);
+      if (data.description) setDescription(data.description);
+      
+      const ht = data.amount_ht || (data.amount_ttc ? data.amount_ttc / 1.18 : 0);
+      if (ht > 0) setAmountHT(Math.round(ht));
+      
+      // VAT Rate detection
+      if (data.vat_rate !== undefined) {
+        setVatRate(data.vat_rate);
+      } else if (data.amount_tva > 0 && ht > 0) {
+        const rawRate = (data.amount_tva / ht) * 100;
+        const commonRates = [0, 2, 5, 10, 18];
+        const closest = commonRates.reduce((prev, curr) => 
+          Math.abs(curr - rawRate) < Math.abs(prev - rawRate) ? curr : prev
+        );
+        setVatRate(closest);
+      }
+
+      // Third Party detection
+      if (data.third_party) {
+        const match = thirdParties.find(tp => 
+          tp.name.toLowerCase().includes(data.third_party.toLowerCase()) || 
+          data.third_party.toLowerCase().includes(tp.name.toLowerCase())
+        );
+        
+        if (match) {
+          setSelectedThirdParty(match.account_code);
+        } else {
+          setOccasionalName(data.third_party);
+          const def = sType === 'vente' ? defaultOccasional.client : defaultOccasional.supplier;
+          if (def) {
+            setSelectedThirdParty(def.account_code);
+          }
+        }
+      }
+
+      // Operation Type
+      if (data.operation_type && DEFAULT_OPERATION_TYPES.some(t => t.id === data.operation_type)) {
+        setOperationType(data.operation_type);
+      } else {
+        setOperationType(sType === 'vente' ? 'vente_marchandises' : 'achat_marchandises');
+      }
+
+      // If expert mode, we can also pre-fill entries
+      if (data.entries && data.entries.length > 0) {
+        setEntries(data.entries.map(e => ({
+          account_code: e.account_code,
+          debit: e.debit,
+          credit: e.credit,
+          description: e.description || ''
+        })));
+      }
+
+      dialogAlert("Analyse terminée ! Les champs ont été pré-remplis.", 'success');
+    } catch (err: any) {
+      console.error("AI Analysis failed", err);
+      dialogAlert(`Erreur lors de l'analyse : ${err.message || 'Veuillez saisir manuellement.'}`, 'error');
+    } finally {
+      setAnalyzing(false);
+      setScanType(null);
+      setIsScanning(false);
+    }
+  };
+
+  const handleDeleteAttachment = async (id: number) => {
+    const confirmed = await confirm("Voulez-vous supprimer cette pièce jointe ?");
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/attachments/${id}`, {
+        method: 'DELETE'
+      });
+      
+      if (res.ok) {
+        if (selectedTransactionDetail) {
+          setSelectedTransactionDetail(prev => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              attachments: prev.attachments?.filter(a => a.id !== id)
+            };
+          });
+        }
+        // If we are editing, we might need to refresh the attachments list
+        if (editingId) {
+          const txRes = await fetch(`/api/transactions/${editingId}`);
+          const txData = await txRes.json();
+          setSelectedTransactionDetail(txData); // This is a bit hacky but works if we use it for edit too
+        }
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || "Erreur lors de la suppression");
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert(err instanceof Error ? err.message : "Erreur lors de la suppression", 'error');
+    }
   };
 
   const handleAISuggestion = async () => {
@@ -668,12 +882,57 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
+  const handleSuggestAccountHead = async (index: number = -1) => {
+    const lineDescription = index !== -1 ? entries[index].description : '';
+    const lookupDescription = lineDescription ? `${description} (${lineDescription})` : description;
+
+    if (!lookupDescription) {
+      dialogAlert("Veuillez saisir un libellé pour que l'IA puisse suggérer un compte.", 'info');
+      return;
+    }
+
+    setSuggestingAccount(index);
+    try {
+      // Use suggestedAccounts (frequent accounts) or recent transactions for history
+      const historyCtx = suggestedAccounts.length > 0 ? suggestedAccounts : transactions.slice(0, 20);
+      const suggestions = await suggestAccountCode(lookupDescription, historyCtx, accounts);
+      
+      if (suggestions && suggestions.length > 0) {
+        if (index === -1) {
+          // In guided mode, update the suggestions list and auto-select the best one
+          setSuggestedAccounts(suggestions.map((s: any) => ({
+            account_code: s.account_code,
+            account_name: s.account_name || s.explanation.substring(0, 50),
+            count: Math.round(s.confidence * 100),
+            explanation: s.explanation
+          })));
+          setSelectedAccountOverride(suggestions[0].account_code);
+          dialogAlert(`L'IA a suggéré ${suggestions.length} compte(s) pour "${description}".`, 'success');
+        } else {
+          // In expert mode, just apply the best suggestion to the line
+          const best = suggestions[0];
+          const newEntries = [...entries];
+          newEntries[index].account_code = best.account_code;
+          setEntries(newEntries);
+          dialogAlert(`Compte suggéré : ${best.account_code}. ${best.explanation}`, 'success');
+        }
+      } else {
+        dialogAlert("L'IA n'a pas pu suggérer de compte pour ce libellé.", 'info');
+      }
+    } catch (err) {
+      console.error("Failed to suggest account", err);
+    } finally {
+      setSuggestingAccount(null);
+    }
+  };
+
   const applyAISuggestion = () => {
     if (!aiSuggestion) return;
     setEntries(aiSuggestion.entries.map(e => ({
       account_code: e.account_code,
       debit: e.debit,
-      credit: e.credit
+      credit: e.credit,
+      description: e.description || ''
     })));
     setMode('expert');
     setAiSuggestion(null);
@@ -780,19 +1039,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       const party = thirdParties.find(p => p.account_code === selectedThirdParty);
       const thirdPartyId = party ? party.id : null;
 
-      const entriesToSave = mode === 'guided' 
-        ? calculateEntries(
-            operationType, 
-            amountHT * transactionExchangeRate, 
-            vatRate, 
-            paymentMode, 
-            customOperations, 
-            selectedThirdParty,
-            companySettings?.vat_settings,
-            selectedTreasuryAccount,
-            companySettings
-          )
-        : entries;
+      const entriesToSave = entries;
 
       const res = await fetch(url, {
         method: method,
@@ -807,13 +1054,39 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           currency: transactionCurrency,
           exchange_rate: transactionExchangeRate,
           notes,
-          document_url: JSON.stringify(documentUrls)
+          document_url: JSON.stringify(documentUrls),
+          operation_type: operationType,
+          amount_ht: amountHT,
+          vat_rate: vatRate,
+          payment_mode: paymentMode,
+          treasury_account: selectedTreasuryAccount,
+          creation_mode: mode
         })
       });
       
       const data = await res.json();
 
       if (res.ok) {
+        const transactionId = editingId || data.id;
+
+        // Upload pending files if any
+        if (pendingFiles.length > 0) {
+          const formData = new FormData();
+          pendingFiles.forEach(file => {
+            formData.append('files', file);
+          });
+
+          const uploadRes = await fetch(`/api/transactions/${transactionId}/attachments`, {
+            method: 'POST',
+            body: formData
+          });
+
+          if (!uploadRes.ok) {
+            console.error("Failed to upload attachments");
+            dialogAlert("La transaction a été enregistrée mais certaines pièces jointes n'ont pas pu être téléchargées.", 'info');
+          }
+        }
+
         handleModalClose();
         fetchTransactions();
         // Reset
@@ -822,6 +1095,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         setEntries([]);
         setEditingId(null);
         setSelectedThirdParty('');
+        setPendingFiles([]);
       } else {
         throw new Error(data.error || "Erreur lors de l'enregistrement");
       }
@@ -1064,6 +1338,28 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
+  const handleGenerateInvoice = async (id: number) => {
+    const confirmed = await confirm("Voulez-vous générer une facture à partir de cette transaction ? Les détails du client et les montants seront pré-remplis.");
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/transactions/${id}/generate-invoice`, {
+        method: 'POST'
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        dialogAlert(`Facture ${data.number} générée avec succès.`, 'success');
+        fetchTransactions();
+      } else {
+        throw new Error(data.error || "Erreur lors de la génération de la facture");
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert(err instanceof Error ? err.message : "Erreur lors de la génération de la facture", 'error');
+    }
+  };
+
   const handleBulkDelete = async () => {
     const confirmed = await confirm(t('common.confirm_delete'));
     if (!confirmed) return;
@@ -1094,7 +1390,32 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const handleSave = handleSubmit;
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+    <div 
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="relative space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700"
+    >
+      <AnimatePresence>
+        {isDragging && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-brand-green/10 backdrop-blur-md flex items-center justify-center p-8 pointer-events-none"
+          >
+            <div className="w-full max-w-2xl aspect-video border-4 border-dashed border-brand-green rounded-[3rem] flex flex-col items-center justify-center gap-6 bg-white/80 dark:bg-slate-900/80 shadow-2xl animate-in zoom-in duration-300">
+              <div className="p-8 bg-brand-green/20 text-brand-green rounded-full animate-bounce">
+                <Upload size={64} />
+              </div>
+              <div className="text-center">
+                <h2 className="text-4xl font-black text-slate-900 dark:text-white tracking-tight mb-2">Déposez votre facture ici</h2>
+                <p className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">Ory va l'analyser instantanément</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
         <div>
           <h1 className="text-4xl font-black text-slate-900 dark:text-white tracking-tight font-display mb-2">Journal Intelligent</h1>
@@ -1134,13 +1455,18 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             accept="image/*"
             onChange={handleFileChange}
           />
-          <button 
-            onClick={handleScanButtonClick}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-sm"
-          >
-            <Wand2 size={20} className="text-brand-gold" />
-            <span>Scanner</span>
-          </button>
+          <div className="group relative">
+            <button 
+              onClick={handleScanButtonClick}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-sm"
+            >
+              <Wand2 size={20} className="text-brand-gold" />
+              <span>Scanner</span>
+            </button>
+            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] font-black px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none uppercase tracking-widest z-10">
+              Ou glissez-déposez ici
+            </div>
+          </div>
           <button 
             onClick={openNewModal}
             className="bg-brand-green text-white px-8 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-brand-green/90 transition-all shadow-lg shadow-brand-green/20"
@@ -1500,9 +1826,9 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       <td className="px-4 sm:px-6 py-5">
                         <div className="flex flex-col">
                           <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 line-clamp-1">{tx.description}</span>
-                          {tx.occasional_name && (
+                          {(tx.occasional_name || tx.third_party_name) && (
                             <span className="text-[9px] sm:text-[10px] font-black text-brand-green uppercase tracking-widest mt-0.5">
-                              Tiers: {tx.occasional_name}
+                              Tiers: {tx.occasional_name || tx.third_party_name}
                             </span>
                           )}
                           <div className="flex flex-wrap gap-2 mt-1">
@@ -1515,6 +1841,12 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                 <FileText size={10} />
                                 {tx.invoice_number}
                               </Link>
+                            )}
+                            {tx.creation_mode === 'guided' && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-black text-brand-green uppercase tracking-widest bg-brand-green/10 px-1.5 py-0.5 rounded">
+                                <Wand2 size={10} />
+                                Guidé
+                              </span>
                             )}
                             <span className="md:hidden text-[9px] font-black text-slate-400 uppercase tracking-widest">
                               {tx.reference}
@@ -1562,6 +1894,15 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                           >
                             <FilePlus size={16} />
                           </button>
+                          {tx.status === 'validated' && !tx.invoice_number && (
+                            <button 
+                              onClick={() => handleGenerateInvoice(tx.id)}
+                              className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-brand-gold dark:hover:text-brand-gold hover:bg-brand-gold/10 dark:hover:bg-brand-gold/20 rounded-lg transition-colors"
+                              title="Générer Facture"
+                            >
+                              <Zap size={14} className="sm:w-4 sm:h-4" />
+                            </button>
+                          )}
                           <button 
                             onClick={() => handleDelete(tx.id)}
                             className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
@@ -1600,26 +1941,34 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                   </div>
                 </div>
                 
-                <div className="flex bg-slate-100 dark:bg-slate-800 p-1.5 rounded-2xl">
+                <div className="flex items-center gap-4">
+                  <div className="flex bg-slate-100 dark:bg-slate-800 p-1.5 rounded-2xl">
+                    <button 
+                      onClick={() => setMode('guided')}
+                      className={cn(
+                        "px-6 py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all", 
+                        mode === 'guided' ? "bg-white dark:bg-slate-700 shadow-lg text-slate-900 dark:text-white" : "text-slate-500 dark:text-slate-400"
+                      )}
+                    >
+                      Guidé
+                    </button>
+                    <button 
+                      onClick={() => setMode('expert')}
+                      className={cn(
+                        "px-6 py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all", 
+                        mode === 'expert' ? "bg-white dark:bg-slate-700 shadow-lg text-slate-900 dark:text-white" : "text-slate-500 dark:text-slate-400"
+                      )}
+                    >
+                      Expert
+                    </button>
+                  </div>
                   <button 
-                    onClick={() => setMode('guided')}
-                    disabled={!!editingId}
-                    className={cn(
-                      "px-6 py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all", 
-                      mode === 'guided' ? "bg-white dark:bg-slate-700 shadow-lg text-slate-900 dark:text-white" : "text-slate-500 dark:text-slate-400", 
-                      editingId && "opacity-50 cursor-not-allowed"
-                    )}
+                    onClick={() => handleModalClose()}
+                    className="flex items-center gap-2 px-4 py-2 bg-rose-50 dark:bg-rose-900/20 text-rose-500 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 transition-all border border-rose-100 dark:border-rose-900/30"
+                    title="Abandonner l'écriture"
                   >
-                    Guidé
-                  </button>
-                  <button 
-                    onClick={() => setMode('expert')}
-                    className={cn(
-                      "px-6 py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all", 
-                      mode === 'expert' ? "bg-white dark:bg-slate-700 shadow-lg text-slate-900 dark:text-white" : "text-slate-500 dark:text-slate-400"
-                    )}
-                  >
-                    Expert
+                    <X size={14} />
+                    <span className="hidden sm:inline">Abandonner</span>
                   </button>
                 </div>
               </div>
@@ -1664,29 +2013,88 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Devise & Change</label>
-                    <div className="flex gap-3">
-                      <select 
-                        value={transactionCurrency}
-                        onChange={(e) => handleCurrencyChange(e.target.value)}
-                        className="flex-1 px-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-black"
-                      >
-                        <option value="FCFA">FCFA</option>
-                        <option value="EUR">EUR (€)</option>
-                        <option value="USD">USD ($)</option>
-                        <option value="GNF">GNF</option>
-                        <option value="CDF">CDF</option>
-                      </select>
+                    <div className="flex justify-between items-center ml-1">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Devise & Change</label>
                       {transactionCurrency !== baseCurrency && (
-                        <input 
-                          type="number"
-                          step="0.000001"
-                          value={transactionExchangeRate}
-                          onChange={(e) => setTransactionExchangeRate(parseFloat(e.target.value) || 1)}
-                          className="w-32 px-4 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-mono font-bold text-center"
-                          title={`1 ${transactionCurrency} = ? ${baseCurrency}`}
-                        />
+                        <button 
+                          type="button"
+                          onClick={() => setTransactionExchangeRate(getExchangeRate(transactionCurrency, baseCurrency))}
+                          className="text-[10px] text-brand-green font-black uppercase tracking-widest flex items-center gap-1 hover:underline"
+                          title="Utiliser le taux actuel du marché"
+                        >
+                          <Zap size={10} /> Taux Marché: {getExchangeRate(transactionCurrency, baseCurrency).toFixed(4)}
+                        </button>
                       )}
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="relative flex-1">
+                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          {getCurrencyIcon(16, transactionCurrency)}
+                        </div>
+                        <select 
+                          value={transactionCurrency}
+                          onChange={(e) => handleCurrencyChange(e.target.value)}
+                          className="w-full pl-12 pr-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-black appearance-none"
+                        >
+                          <option value="FCFA">FCFA (XOF)</option>
+                          <option value="EUR">Euro (€)</option>
+                          <option value="USD">Dollar ($)</option>
+                          <option value="GNF">Franc Guinéen</option>
+                          <option value="CDF">Franc Congolais</option>
+                        </select>
+                      </div>
+                      {transactionCurrency !== baseCurrency && (
+                        <div className="relative w-32">
+                          <input 
+                            type="number"
+                            step="0.000001"
+                            value={transactionExchangeRate}
+                            onChange={(e) => setTransactionExchangeRate(parseFloat(e.target.value) || 1)}
+                            className="w-full px-4 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-mono font-bold text-center"
+                            title={`1 ${transactionCurrency} = ? ${baseCurrency}`}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Multi-Currency Selection & Display */}
+                    <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-800/30 rounded-2xl border border-slate-100 dark:border-slate-800">
+                      <div className="flex justify-between items-center mb-3">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Conversions Multi-Devises</span>
+                        <div className="flex gap-1">
+                          {['EUR', 'USD', 'FCFA', 'GNF', 'CDF'].filter(c => c !== transactionCurrency).map(c => (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => {
+                                if (additionalCurrencies.includes(c)) {
+                                  setAdditionalCurrencies(prev => prev.filter(curr => curr !== c));
+                                } else {
+                                  setAdditionalCurrencies(prev => [...prev, c]);
+                                }
+                              }}
+                              className={cn(
+                                "px-2 py-1 rounded-md text-[8px] font-black transition-all",
+                                additionalCurrencies.includes(c) 
+                                  ? "bg-brand-green text-white" 
+                                  : "bg-slate-200 dark:bg-slate-700 text-slate-500"
+                              )}
+                            >
+                              {c}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {additionalCurrencies.map(curr => (
+                          <div key={curr} className="flex flex-col p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm">
+                            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">{curr}</span>
+                            <span className="text-xs font-black text-slate-900 dark:text-white truncate">
+                              {formatCurrency(amountHT * (transactionExchangeRate / getExchangeRate(curr, baseCurrency)), curr)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1830,7 +2238,16 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                               <div className="flex gap-3">
                                 <select
                                   value={selectedThirdParty}
-                                  onChange={(e) => setSelectedThirdParty(e.target.value)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSelectedThirdParty(val);
+                                    const party = thirdParties.find(p => p.account_code === val);
+                                    if (party && party.is_occasional) {
+                                      setOccasionalName(party.name);
+                                    } else {
+                                      setOccasionalName('');
+                                    }
+                                  }}
                                   className="flex-1 px-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold"
                                 >
                                   <option value="">Sélectionner un {type === 'client' ? 'client' : 'fournisseur'}...</option>
@@ -1895,7 +2312,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                 className="space-y-2"
                               >
                                 <label className="block text-[10px] font-black text-brand-green uppercase tracking-widest ml-1">
-                                  Précision du nom (Occasionnel)
+                                  Nom
                                 </label>
                                 <input
                                   type="text"
@@ -1906,6 +2323,125 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                 />
                               </motion.div>
                             )}
+
+                            {/* AI Suggestions for Accounts */}
+                            <motion.div
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="space-y-3"
+                            >
+                              <div className="flex justify-between items-center ml-1">
+                                <div className="flex items-center gap-2">
+                                  <Wand2 size={12} className="text-brand-green" />
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                    Suggestions d'imputation
+                                  </label>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={handleAISuggestion}
+                                  disabled={suggesting || !description || !amountHT}
+                                  className="text-[10px] text-brand-green dark:text-brand-green-light font-black uppercase tracking-widest hover:underline flex items-center gap-1.5 disabled:opacity-50 disabled:no-underline"
+                                >
+                                  {suggesting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                                  Suggestion IA
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSuggestAccountHead(-1)}
+                                  disabled={suggestingAccount !== null || !description}
+                                  className="text-[10px] text-brand-gold dark:text-brand-gold font-black uppercase tracking-widest hover:underline flex items-center gap-1.5 disabled:opacity-50 disabled:no-underline"
+                                >
+                                  {suggestingAccount === -1 ? <Loader2 size={12} className="animate-spin" /> : <Calculator size={12} />}
+                                  Imputer via IA
+                                </button>
+                              </div>
+                              
+                              <div className="flex flex-wrap gap-2">
+                                {suggestedAccounts.length > 0 ? (
+                                  suggestedAccounts.map((s) => (
+                                    <button
+                                      key={s.account_code}
+                                      type="button"
+                                      onClick={() => setSelectedAccountOverride(s.account_code)}
+                                      className={cn(
+                                        "px-4 py-2 rounded-xl border text-[10px] font-bold transition-all flex items-center gap-2",
+                                        selectedAccountOverride === s.account_code
+                                          ? "border-brand-green bg-brand-green text-white shadow-md"
+                                          : "border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:border-brand-green/30"
+                                      )}
+                                    >
+                                      <span className="opacity-70">{s.account_code}</span>
+                                      <span>{s.account_name}</span>
+                                      {selectedAccountOverride === s.account_code && <Check size={10} />}
+                                    </button>
+                                  ))
+                                ) : (
+                                  <p className="text-[10px] text-slate-400 italic ml-1">Aucun historique pour ce tiers. Utilisez la suggestion IA.</p>
+                                )}
+                                
+                                {selectedAccountOverride && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedAccountOverride('')}
+                                    className="px-4 py-2 rounded-xl border border-rose-100 dark:border-rose-900/30 bg-rose-50 dark:bg-rose-900/10 text-rose-600 dark:text-rose-400 text-[10px] font-bold hover:bg-rose-100 transition-all flex items-center gap-1"
+                                  >
+                                    <X size={10} /> Réinitialiser
+                                  </button>
+                                )}
+                              </div>
+
+                              {aiSuggestion && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  className="p-4 rounded-2xl bg-brand-green/5 border border-brand-green/20 space-y-3"
+                                >
+                                  <div className="flex justify-between items-start">
+                                    <div className="space-y-1">
+                                      <p className="text-xs font-bold text-brand-green flex items-center gap-2">
+                                        <Check size={14} /> Suggestion IA générée
+                                      </p>
+                                      <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                                        {aiSuggestion.explanation}
+                                      </p>
+                                    </div>
+                                    <div className="px-2 py-1 rounded-lg bg-brand-green/10 text-brand-green text-[10px] font-black">
+                                      {Math.round(aiSuggestion.confidence * 100)}%
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        // Find the main account (usually the first one that isn't VAT or Treasury)
+                                        const mainEntry = aiSuggestion.entries.find(e => 
+                                          !e.account_code.startsWith('445') && 
+                                          !e.account_code.startsWith('443') &&
+                                          !['521', '571', '585', '401', '411'].includes(e.account_code)
+                                        );
+                                        if (mainEntry) {
+                                          setSelectedAccountOverride(mainEntry.account_code);
+                                        } else if (aiSuggestion.entries.length > 0) {
+                                          setSelectedAccountOverride(aiSuggestion.entries[0].account_code);
+                                        }
+                                        setAiSuggestion(null);
+                                      }}
+                                      className="px-4 py-2 bg-brand-green text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-sm"
+                                    >
+                                      Appliquer le compte
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setAiSuggestion(null)}
+                                      className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all"
+                                    >
+                                      Ignorer
+                                    </button>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </motion.div>
                           </div>
                         );
                       }
@@ -2029,11 +2565,60 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       <div className="space-y-2">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Pièces Jointes</label>
                         <div className="space-y-3">
-                          {documentUrls.map((url, idx) => (
-                            <div key={idx} className="flex items-center justify-between px-5 py-4 rounded-2xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10">
+                          {/* Existing Attachments from Server */}
+                          {existingAttachments.map((att) => (
+                            <div key={att.id} className="flex items-center justify-between px-5 py-4 rounded-2xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10">
                               <div className="flex items-center gap-3 overflow-hidden">
                                 <FileText className="text-brand-green shrink-0" size={20} />
-                                <span className="text-xs font-bold text-brand-green truncate">Pièce #{idx + 1}</span>
+                                <span className="text-xs font-bold text-brand-green truncate">{att.file_name}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button 
+                                  type="button"
+                                  onClick={() => window.open(`/api/attachments/${att.id}`, '_blank')}
+                                  className="p-2 text-brand-green hover:bg-brand-green/10 rounded-lg transition-colors"
+                                  title="Voir le document"
+                                >
+                                  <ArrowRight size={16} />
+                                </button>
+                                <button 
+                                  type="button"
+                                  onClick={() => handleDeleteAttachment(att.id)}
+                                  className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
+                                  title="Supprimer"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Pending Files to be Uploaded */}
+                          {pendingFiles.map((file, idx) => (
+                            <div key={idx} className="flex items-center justify-between px-5 py-4 rounded-2xl border border-brand-gold/20 bg-brand-gold/5 dark:bg-brand-gold/10">
+                              <div className="flex items-center gap-3 overflow-hidden">
+                                <Upload className="text-brand-gold shrink-0" size={20} />
+                                <span className="text-xs font-bold text-brand-gold truncate">{file.name} (En attente)</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button 
+                                  type="button"
+                                  onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))}
+                                  className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
+                                  title="Retirer"
+                                >
+                                  <X size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Legacy Document URLs (from AI Scan or old data) */}
+                          {documentUrls.filter(url => url.startsWith('data:')).map((url, idx) => (
+                            <div key={idx} className="flex items-center justify-between px-5 py-4 rounded-2xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10">
+                              <div className="flex items-center gap-3 overflow-hidden">
+                                <Wand2 className="text-brand-green shrink-0" size={20} />
+                                <span className="text-xs font-bold text-brand-green truncate">Scan IA #{idx + 1}</span>
                               </div>
                               <div className="flex items-center gap-2">
                                 <button 
@@ -2058,7 +2643,10 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                           
                           <button 
                             type="button"
-                            onClick={() => fileInputRef.current?.click()}
+                            onClick={() => {
+                              setIsScanning(false);
+                              fileInputRef.current?.click();
+                            }}
                             className="w-full flex items-center justify-center gap-3 px-5 py-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 hover:border-brand-green hover:bg-brand-green/5 dark:hover:bg-brand-green/10 transition-all group"
                           >
                             <Upload className="text-slate-400 group-hover:text-brand-green transition-colors" size={20} />
@@ -2092,7 +2680,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                           <Zap size={14} /> Équilibrer
                         </button>
                         <button 
-                          onClick={() => setEntries([...entries, { account_code: '', debit: 0, credit: 0 }])}
+                          onClick={() => setEntries([...entries, { account_code: '', debit: 0, credit: 0, description: '' }])}
                           className="bg-white dark:bg-slate-800 text-brand-green px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-brand-green hover:text-white transition-all flex items-center gap-2 border border-brand-green/20 shadow-sm"
                         >
                           <Plus size={14} /> Ligne
@@ -2110,25 +2698,36 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       {entries.map((entry, idx) => (
                         <div key={idx} className="space-y-1 mb-3">
                           <div className="flex gap-3 items-center group">
-                            <input 
-                              placeholder="Cpt" 
-                              list="expert-account-list"
-                              className={cn(
-                                "w-24 px-3 py-2.5 rounded-xl border text-sm font-mono font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all outline-none focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green",
-                                errors[`account_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
-                              )}
-                              value={entry.account_code}
-                              onChange={(e) => {
-                                const newEntries = [...entries];
-                                newEntries[idx].account_code = e.target.value;
-                                setEntries(newEntries);
-                                if (errors[`account_${idx}`]) setErrors(prev => {
-                                  const next = { ...prev };
-                                  delete next[`account_${idx}`];
-                                  return next;
-                                });
-                              }}
-                            />
+                            <div className="relative group/account">
+                              <input 
+                                placeholder="Cpt" 
+                                list="expert-account-list"
+                                className={cn(
+                                  "w-24 px-3 py-2.5 rounded-xl border text-sm font-mono font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all outline-none focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green",
+                                  errors[`account_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
+                                )}
+                                value={entry.account_code}
+                                onChange={(e) => {
+                                  const newEntries = [...entries];
+                                  newEntries[idx].account_code = e.target.value;
+                                  setEntries(newEntries);
+                                  if (errors[`account_${idx}`]) setErrors(prev => {
+                                    const next = { ...prev };
+                                    delete next[`account_${idx}`];
+                                    return next;
+                                  });
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleSuggestAccountHead(idx)}
+                                disabled={suggestingAccount !== null || (!description && !entry.description)}
+                                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-brand-gold/10 text-brand-gold rounded-lg hover:bg-brand-gold/20 transition-all opacity-0 group-hover/account:opacity-100 disabled:opacity-0"
+                                title="Suggérer un compte via l'IA"
+                              >
+                                {suggestingAccount === idx ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
+                              </button>
+                            </div>
                             <input 
                               placeholder="Débit" 
                               type="number"
@@ -2172,6 +2771,22 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                               <X size={16} />
                             </button>
                           </div>
+                          
+                          {/* Line Description */}
+                          <div className="flex gap-3 px-1">
+                            <div className="w-[10px] h-4 border-l-2 border-b-2 border-slate-100 dark:border-slate-800/50 rounded-bl-lg mt--2" />
+                            <input
+                              placeholder="Libellé spécifique de cette ligne (optionnel)"
+                              className="flex-1 bg-transparent border-none text-[10px] text-slate-500 dark:text-slate-400 focus:ring-0 placeholder:text-slate-300 dark:placeholder:text-slate-600 font-medium py-1"
+                              value={entry.description || ''}
+                              onChange={(e) => {
+                                const newEntries = [...entries];
+                                newEntries[idx].description = e.target.value;
+                                setEntries(newEntries);
+                              }}
+                            />
+                          </div>
+
                           {errors[`account_${idx}`] && <p className="text-[9px] text-rose-500 dark:text-rose-400 font-bold uppercase tracking-tight ml-1">{errors[`account_${idx}`]}</p>}
                           {accounts.find(a => a.code === entry.account_code) && (
                             <p className="text-[9px] text-slate-400 dark:text-slate-500 ml-1 truncate italic font-medium">
@@ -2270,18 +2885,31 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
               <div className="mt-10 space-y-4">
                 <button 
                   onClick={handleSave}
-                  disabled={saving || !isBalanced}
+                  disabled={submitting || !isBalanced}
                   className="w-full bg-brand-green text-white py-5 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-xl shadow-brand-green/20 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3"
                 >
-                  {saving ? <Loader2 className="animate-spin" size={20} /> : <Check size={20} />}
+                  {submitting ? <Loader2 className="animate-spin" size={20} /> : <Check size={20} />}
                   {editingId ? "Enregistrer les modifications" : "Valider l'écriture"}
                 </button>
-                <button 
-                  onClick={() => setIsModalOpen(false)}
-                  className="w-full py-4 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs font-black uppercase tracking-widest transition-colors"
-                >
-                  Annuler
-                </button>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={clearForm}
+                    className="py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Trash2 size={14} /> Effacer
+                  </button>
+                  <button 
+                    onClick={() => handleModalClose()}
+                    className="py-4 bg-rose-50 dark:bg-rose-900/10 text-rose-500 dark:text-rose-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 dark:hover:bg-rose-900/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    <X size={14} /> Abandonner
+                  </button>
+                </div>
+                
+                <p className="text-[9px] text-center text-slate-400 font-bold uppercase tracking-widest">
+                  Raccourcis: <span className="text-slate-500">Ctrl+S</span> pour valider • <span className="text-slate-500">Esc</span> pour quitter
+                </p>
               </div>
             </div>
 
@@ -2498,6 +3126,15 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     {formatCurrency(selectedTransactionDetail.total_amount, selectedTransactionDetail.currency)}
                   </span>
                 </div>
+                {selectedTransactionDetail.creation_mode === 'guided' && (
+                  <div className="p-4 rounded-2xl bg-brand-green/5 border border-brand-green/20">
+                    <span className="text-[10px] font-black text-brand-green uppercase tracking-widest block mb-1">Mode de Saisie</span>
+                    <div className="flex items-center gap-2 text-brand-green">
+                      <Wand2 size={16} />
+                      <span className="text-sm font-bold">Guidé</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Journal Entries */}
@@ -2553,42 +3190,30 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     Pièces Jointes
                   </h3>
                   {(() => {
-                    let urls: string[] = [];
-                    if (selectedTransactionDetail.document_url) {
-                      try {
-                        const parsed = JSON.parse(selectedTransactionDetail.document_url);
-                        if (Array.isArray(parsed)) {
-                          urls = parsed;
-                        } else {
-                          urls = [selectedTransactionDetail.document_url];
-                        }
-                      } catch (e) {
-                        urls = [selectedTransactionDetail.document_url];
-                      }
-                    }
+                    const attachments = selectedTransactionDetail.attachments || [];
                     
-                    if (urls.length > 0) {
+                    if (attachments.length > 0) {
                       return (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          {urls.map((url, idx) => (
-                            <div key={idx} className="relative group">
+                          {attachments.map((att) => (
+                            <div key={att.id} className="relative group">
                               <div className="aspect-video rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800/50 flex items-center justify-center transition-all group-hover:border-brand-green/50">
-                                {url.startsWith('data:image/') ? (
-                                  <img 
-                                    src={url} 
-                                    alt={`Pièce #${idx + 1}`} 
+                                {att.file_type?.startsWith('image/') ? (
+                                  <SafeImage 
+                                    src={`/api/attachments/${att.id}`} 
+                                    alt={att.file_name} 
                                     className="w-full h-full object-cover"
                                     referrerPolicy="no-referrer"
                                   />
                                 ) : (
                                   <div className="flex flex-col items-center gap-2 text-slate-400">
                                     <FileText size={48} />
-                                    <span className="text-xs font-bold uppercase tracking-widest">Document #{idx + 1}</span>
+                                    <span className="text-[10px] font-bold uppercase tracking-widest truncate max-w-[150px]">{att.file_name}</span>
                                   </div>
                                 )}
                                 <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
                                   <a 
-                                    href={url} 
+                                    href={`/api/attachments/${att.id}`} 
                                     target="_blank" 
                                     rel="noopener noreferrer"
                                     className="p-3 bg-white text-slate-900 rounded-xl shadow-xl hover:scale-110 transition-transform"

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Users, FileText, Download, Plus, Calendar, CheckCircle, AlertCircle, ChevronRight, ArrowLeft, Calculator, Loader2, Trash2, Pencil, Printer, Coins, Banknote } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { useDialog } from './DialogProvider';
 import { useLanguage } from '@/context/LanguageContext';
 import { PayrollWizard } from './PayrollWizard';
@@ -65,10 +67,21 @@ interface SalaryAdvance {
 }
 
 export function PayrollManager() {
+  const [searchParams] = useSearchParams();
   const { formatCurrency, currency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const { alert, confirm } = useDialog();
   const { t } = useLanguage();
-  const [activeView, setActiveView] = useState<'dashboard' | 'employees' | 'periods' | 'period_details' | 'declarations' | 'advances' | 'settings'>('dashboard');
+  
+  const initialView = (searchParams.get('view') as any) || 'dashboard';
+  const [activeView, setActiveView] = useState<'dashboard' | 'employees' | 'periods' | 'period_details' | 'declarations' | 'advances' | 'settings'>(initialView);
+
+  useEffect(() => {
+    const view = searchParams.get('view');
+    if (view && ['dashboard', 'employees', 'periods', 'period_details', 'declarations', 'advances', 'settings'].includes(view)) {
+      setActiveView(view as any);
+    }
+  }, [searchParams]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<PayrollPeriod | null>(null);
@@ -200,7 +213,7 @@ export function PayrollManager() {
     fetchPeriods();
     fetchAdvances();
     fetchCompanySettings();
-  }, []);
+  }, [activeYear?.id]);
 
   const fetchCompanySettings = async () => {
     try {

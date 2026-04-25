@@ -24,6 +24,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useDialog } from './DialogProvider';
@@ -32,7 +33,7 @@ import { InvoiceEditor } from './InvoiceEditor';
 import { InvoiceViewer } from './InvoiceViewer';
 import { exportToExcel, generateInvoicePDF } from '@/lib/exportUtils';
 import { CurrencyAnalyzer } from './CurrencyAnalyzer';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { RecurringInvoiceManager } from './RecurringInvoiceManager';
 
 type DocType = 'invoice' | 'quote' | 'recurring';
@@ -45,6 +46,7 @@ interface Invoice {
   due_date: string;
   third_party_id: number;
   third_party_name: string;
+  occasional_name?: string | null;
   status: string;
   subtotal: number;
   vat_amount: number;
@@ -59,6 +61,7 @@ export function InvoicingManager() {
   const { confirm, alert } = useDialog();
   const { t } = useLanguage();
   const { formatCurrency, currency: baseCurrency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [activeTab, setActiveTab] = useState<DocType>('invoice');
   const [documents, setDocuments] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,7 +98,7 @@ export function InvoicingManager() {
     if (activeView === 'reports') {
       fetchReports();
     }
-  }, [activeTab, activeView]);
+  }, [activeTab, activeView, activeYear?.id]);
 
   const fetchReports = async () => {
     try {
@@ -623,7 +626,7 @@ export function InvoicingManager() {
                       </div>
                     </td>
                     <td className="px-8 py-6">
-                      <div className="font-bold text-slate-700 dark:text-slate-300">{doc.third_party_name}</div>
+                      <div className="font-bold text-slate-700 dark:text-slate-300">{doc.occasional_name || doc.third_party_name}</div>
                     </td>
                     <td className="px-8 py-6">
                       <div className={cn(

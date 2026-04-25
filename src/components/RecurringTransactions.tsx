@@ -14,7 +14,8 @@ import {
   MoreVertical,
   ArrowUpRight,
   ArrowDownLeft,
-  X
+  X,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -365,7 +366,14 @@ export function RecurringTransactions() {
                   <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors group">
                     <td className="px-6 py-4">
                       <div className="font-semibold text-slate-900">{tx.description}</div>
-                      <div className="text-xs text-slate-500">{tx.category}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500">{tx.category}</span>
+                        {tx.auto_process === 1 && (
+                          <span className="flex items-center gap-0.5 text-[9px] bg-brand-green/20 text-brand-green px-1.5 py-0.5 rounded font-black uppercase tracking-tighter">
+                            <Sparkles size={8} /> Auto
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <span className={cn(
@@ -412,7 +420,31 @@ export function RecurringTransactions() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-end gap-3">
+                        <div className="flex flex-col items-end gap-1 mr-2">
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              className="sr-only peer"
+                              checked={tx.auto_process === 1}
+                              onChange={async (e) => {
+                                try {
+                                  await fetch(`/api/recurring-transactions/${tx.id}`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ auto_process: e.target.checked })
+                                  });
+                                  fetchTransactions();
+                                } catch (error) {
+                                  console.error('Error toggling auto-process:', error);
+                                }
+                              }}
+                            />
+                            <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-green/20 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-brand-green"></div>
+                            <span className="ml-2 text-[10px] font-black text-slate-400 uppercase tracking-tighter">Auto</span>
+                          </label>
+                        </div>
+
                         <button
                           onClick={() => handleProcess(tx.id)}
                           disabled={isProcessing === tx.id}
@@ -480,6 +512,32 @@ export function RecurringTransactions() {
               </div>
 
               <form onSubmit={handleSubmit} className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
+                {/* Quick Templates */}
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Modèles Rapides</label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: 'Loyer Bureau', desc: 'Loyer bureau {month} {year}', amount: 500000, lines: [{ account_code: '622', debit: 500000, credit: 0 }, { account_code: '521', debit: 0, credit: 500000 }] },
+                      { label: 'Abonnement Internet', desc: 'Abonnement Orange Internet {month} {year}', amount: 45000, lines: [{ account_code: '628', debit: 45000, credit: 0 }, { account_code: '521', debit: 0, credit: 45000 }] },
+                      { label: 'Électricité (CIE)', desc: 'Facture CIE {month} {year}', amount: 0, lines: [{ account_code: '605', debit: 0, credit: 0 }, { account_code: '521', debit: 0, credit: 0 }] }
+                    ].map((tpl) => (
+                      <button
+                        key={tpl.label}
+                        type="button"
+                        onClick={() => setFormData({
+                          ...formData,
+                          description: tpl.desc,
+                          amount: tpl.amount.toString(),
+                          lines: tpl.lines.map(l => ({ ...l, description: tpl.desc }))
+                        })}
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-brand-green/10 hover:text-brand-green text-slate-600 rounded-lg text-xs font-bold transition-all border border-slate-200"
+                      >
+                        {tpl.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="col-span-2 space-y-2">
                     <label className="text-sm font-bold text-slate-700">Description de la récurrence</label>
@@ -487,10 +545,13 @@ export function RecurringTransactions() {
                       required
                       type="text"
                       className="w-full px-4 py-2.5 bg-slate-50 border-slate-200 rounded-xl focus:bg-white focus:border-brand-green focus:ring-4 focus:ring-brand-green/10 transition-all outline-none"
-                      placeholder="Ex: Loyer mensuel bureau"
+                      placeholder="Ex: Loyer mensuel bureau {month} {year}"
                       value={formData.description}
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                     />
+                    <p className="text-[10px] text-slate-400 mt-1 italic">
+                      Astuce : Utilisez <span className="text-brand-green font-mono">{'{month}'}</span>, <span className="text-brand-green font-mono">{'{year}'}</span>, <span className="text-brand-green font-mono">{'{prev_month}'}</span> pour des libellés dynamiques.
+                    </p>
                   </div>
 
                   <div className="space-y-2">

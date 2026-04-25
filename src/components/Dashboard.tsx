@@ -9,11 +9,12 @@ import {
   TrendingUp, TrendingDown, AlertCircle, Loader2, Search,
   ArrowUpRight, ArrowDownRight, Wallet, CreditCard, Users, FileText, Plus, FileSpreadsheet,
   Target, ChevronRight, MessageSquareText, PieChart as PieChartIcon, History as HistoryIcon,
-  Activity, BarChart3, PieChart, Settings as SettingsIcon, Check, Calculator
+  Activity, BarChart3, PieChart, Settings as SettingsIcon, Check, Calculator, Shield, Briefcase, Building2
 } from 'lucide-react';
 import { useCurrency } from '@/hooks/useCurrency';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { apiFetch as fetch } from '@/lib/api';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -23,6 +24,7 @@ import { getQuickInsight } from '../services/geminiService';
 
 export function Dashboard() {
   const { formatCurrency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const navigate = useNavigate();
   const [stats, setStats] = useState({
     turnover: 0,
@@ -30,7 +32,12 @@ export function Dashboard() {
     net_result: 0,
     cash: 0,
     receivables: 0,
-    payables: 0
+    payables: 0,
+    payroll: {
+      total: 0,
+      employees: 0,
+      lastPeriod: null as string | null
+    }
   });
   const [chartData, setChartData] = useState([]);
   const [cashflowData, setCashflowData] = useState([]);
@@ -39,6 +46,7 @@ export function Dashboard() {
   const [budgetVsActual, setBudgetVsActual] = useState([]);
   const [ratios, setRatios] = useState({ currentRatio: 0, netMargin: 0, solvency: 0, roi: 0 });
   const [loading, setLoading] = useState(true);
+  const [assetStats, setAssetStats] = useState({ totalValue: 0, totalAccumulatedDep: 0, netBookValue: 0, count: 0 });
   const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [loadingInsight, setLoadingInsight] = useState(false);
@@ -63,6 +71,9 @@ export function Dashboard() {
       { id: 'expenses', label: 'Répartition des Dépenses', visible: true },
       { id: 'activity', label: 'Activité Récente', visible: true },
       { id: 'analysis', label: 'Analyse Stratégique', visible: true },
+      { id: 'payroll_summary', label: 'Résumé de Paie', visible: true },
+      { id: 'asset_summary', label: 'Immobilisations', visible: true },
+      { id: 'performance_ratios', label: 'Performance & Ratios', visible: true },
     ];
   });
 
@@ -92,17 +103,18 @@ export function Dashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes] = await Promise.all([
+        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes] = await Promise.all([
           fetch('/api/dashboard/stats'),
           fetch('/api/dashboard/charts'),
           fetch('/api/dashboard/cashflow-forecast'),
           fetch('/api/dashboard/breakdown'),
           fetch('/api/dashboard/recent'),
           fetch('/api/dashboard/budget-vs-actual'),
-          fetch('/api/dashboard/ratios')
+          fetch('/api/dashboard/ratios'),
+          fetch('/api/assets/stats')
         ]);
         
-        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes];
+        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes];
         const allOk = responses.every(r => r.ok);
         
         if (!allOk) {
@@ -113,7 +125,7 @@ export function Dashboard() {
           return;
         }
 
-        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData] = await Promise.all(
+        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData] = await Promise.all(
           responses.map(r => r.json())
         );
         
@@ -124,6 +136,7 @@ export function Dashboard() {
         setRecentTransactions(recentData);
         setBudgetVsActual(budgetData);
         setRatios(ratiosData);
+        setAssetStats(assetStatsData);
         setLoading(false);
 
         // Fetch AI insight after stats are loaded
@@ -135,7 +148,7 @@ export function Dashboard() {
     };
     
     fetchData();
-  }, []);
+  }, [activeYear?.id]);
 
   const fetchInsight = async (ca: number, charges: number, cash: number) => {
     setLoadingInsight(true);
@@ -166,43 +179,47 @@ export function Dashboard() {
     });
   };
 
-  const StatCard = ({ title, value, trend, trendValue, icon: Icon, color, delay, path, whiteTrend }: any) => (
+  const StatCard = ({ title, value, trend, trendValue, icon: Icon, color, delay, path, whiteTrend, colSpan = "col-span-1" }: any) => (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay }}
       onClick={() => path && navigate(path)}
       className={cn(
-        "premium-card p-7 group relative overflow-hidden transition-all duration-500 hover:-translate-y-2",
+        "premium-card p-6 group relative overflow-hidden transition-all duration-500 hover:-translate-y-1.5 border border-slate-200/50 dark:border-white/5 flex flex-col justify-between min-h-[180px] sm:min-h-[200px] shadow-sm hover:shadow-xl hover:shadow-emerald-500/5",
+        colSpan,
         path ? "cursor-pointer" : ""
       )}
     >
-      <div className="absolute top-0 right-0 w-40 h-40 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700 -mr-10 -mt-10" />
+      <div className={cn(
+        "absolute -bottom-10 -right-10 w-40 h-40 rounded-full opacity-10 blur-3xl transition-all duration-700 group-hover:scale-150 group-hover:opacity-20",
+        color
+      )} />
       
-      <div className="flex justify-between items-start mb-6 relative z-10">
+      <div className="flex justify-between items-start relative z-10 w-full">
         <div className={cn(
-          "p-4 rounded-2xl transition-all duration-700 group-hover:scale-110 group-hover:rotate-6 shadow-lg",
+          "w-12 h-12 rounded-2xl transition-all duration-700 group-hover:scale-110 group-hover:rotate-6 shadow-lg flex items-center justify-center shrink-0 border border-white/20",
           color,
-          "text-white"
+          "text-white shadow-lg"
         )}>
-          <Icon size={24} />
+          <Icon size={22} className="group-hover:animate-pulse" />
         </div>
         {trend && (
           <div className={cn(
-            "flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] px-3 py-1.5 rounded-xl backdrop-blur-2xl shadow-xl border border-white/10",
-            whiteTrend ? "bg-white/10 text-white" : (trend === 'up' ? 'bg-brand-green/10 text-brand-green' : 'bg-rose-500/10 text-rose-500'),
+            "flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-xl backdrop-blur-md border border-white/10",
+            whiteTrend ? "bg-white/10 text-white" : (trend === 'up' ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-rose-500/10 text-rose-500 border-rose-500/20"),
           )}>
-            {trend === 'up' ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+            {trend === 'up' ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
             {trendValue}
           </div>
         )}
       </div>
       
-      <div className="space-y-3 relative z-10">
-        <h3 className="text-slate-500 dark:text-slate-400 text-[10px] font-black uppercase tracking-[0.4em] mb-1 truncate" title={title}>{title}</h3>
-        <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-slate-100 tracking-tighter leading-none font-display drop-shadow-sm truncate">
+      <div className="space-y-1 relative z-10 mb-2">
+        <h3 className="text-slate-500 dark:text-slate-400 text-[10px] sm:text-[11px] font-black uppercase tracking-[0.2em] truncate opacity-70 group-hover:opacity-100 transition-opacity" title={title}>{title}</h3>
+        <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-slate-100 tracking-tighter leading-none tabular-nums font-mono transition-all duration-300 group-hover:scale-[1.02] origin-left">
           {loading ? (
-            <div className="h-8 w-32 bg-slate-100 dark:bg-slate-800 animate-pulse rounded-xl" />
+            <div className="h-10 w-4/5 bg-slate-100 dark:bg-slate-800 animate-pulse rounded-xl" />
           ) : (
             <motion.span
               initial={{ opacity: 0, x: -10 }}
@@ -215,9 +232,9 @@ export function Dashboard() {
         </div>
       </div>
       
-      <div className="mt-6 flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity duration-500">
-        <span>Détails</span>
-        <ChevronRight size={12} className="group-hover:translate-x-1 transition-transform" />
+      <div className="relative z-10 flex items-center gap-2 pt-4 border-t border-slate-100 dark:border-white/5 opacity-0 group-hover:opacity-100 transition-all duration-500 translate-y-2 group-hover:translate-y-0">
+        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 group-hover:text-brand-green">Accéder à l'analyse</span>
+        <ChevronRight size={14} className="text-brand-green group-hover:translate-x-1 transition-transform" />
       </div>
     </motion.div>
   );
@@ -227,36 +244,43 @@ export function Dashboard() {
       <div className="atmospheric-bg" />
       
       {/* Editorial Header - Recipe 2 & 11 inspired */}
-      <div className="relative pt-8 pb-12 overflow-hidden">
-        <div className="absolute top-0 right-0 w-1/2 h-full bg-gradient-to-l from-brand-green/5 to-transparent pointer-events-none" />
+      <div className="relative pt-12 pb-16 overflow-hidden">
+        <div className="absolute top-0 right-0 w-2/3 h-full bg-[radial-gradient(circle_at_right,_rgba(16,185,129,0.05)_0%,_transparent_70%)] pointer-events-none" />
         
-        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-12 relative z-10">
-          <div className="space-y-6 max-w-3xl">
-            <div className="flex items-center gap-4 animate-in fade-in slide-in-from-left-4 duration-700">
-              <span className="px-4 py-1.5 bg-brand-green/10 text-brand-green text-[10px] font-black uppercase tracking-[0.3em] rounded-full border border-brand-green/20">
-                Live Intelligence
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-12 relative z-10">
+          <div className="space-y-8 max-w-4xl">
+            <div className="flex items-center gap-6 animate-in fade-in slide-in-from-left-4 duration-700">
+              <span className="px-4 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-[10px] font-black uppercase tracking-[0.3em] rounded-full border border-slate-200 dark:border-slate-700">
+                Ory Intelligence v4.0
               </span>
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse" />
-                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-widest">Mise à jour en temps réel</span>
+              <div className="flex items-center gap-2 text-brand-green">
+                <div className="w-2 h-2 rounded-full bg-current animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
+                <span className="text-[10px] font-black uppercase tracking-widest">Système Opérationnel</span>
               </div>
             </div>
             
-            <div className="space-y-2">
-              <h1 className="text-5xl sm:text-7xl md:text-[100px] font-black text-slate-900 dark:text-slate-100 tracking-tighter leading-[0.8] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
-                Ory<span className="text-brand-green">Compta</span>
+            <div className="space-y-4">
+              <h1 className="text-5xl sm:text-8xl md:text-[120px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                Tableau de <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 italic drop-shadow-sm">Bord</span>
               </h1>
-              <div className="flex items-center gap-4 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
-                <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-                <p className="text-sm font-black text-slate-400 uppercase tracking-[0.5em]">Expertise SYSCOHADA</p>
+              <div className="flex items-center gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
+                <div className="h-px w-24 bg-brand-green/30" />
+                <p className="text-[12px] font-black text-slate-400 uppercase tracking-[0.6em] whitespace-nowrap">Gestion Intelligence & Croissance</p>
                 <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
               </div>
             </div>
             
-            <p className="text-2xl text-slate-500 dark:text-slate-400 font-medium leading-tight max-w-2xl animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
-              Pilotez votre performance avec une <span className="text-slate-900 dark:text-slate-100 font-black italic underline decoration-brand-green/30 underline-offset-8">clarté absolue</span>. 
-              Chaque chiffre raconte l'histoire de votre croissance.
-            </p>
+            <div className="text-2xl text-slate-500 dark:text-slate-400 font-medium leading-tight max-w-2xl animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
+              Transformez vos données comptables en <span className="text-slate-900 dark:text-slate-100 font-black relative inline-block">
+                levier stratégique
+                <motion.span 
+                  initial={{ width: 0 }}
+                  animate={{ width: '100%' }}
+                  transition={{ delay: 1, duration: 1.5 }}
+                  className="absolute -bottom-1 left-0 h-1 bg-brand-green/20 rounded-full"
+                />
+              </span>.
+            </div>
           </div>
           
           <div className="flex flex-wrap gap-4 animate-in fade-in slide-in-from-right-4 duration-1000 delay-500">
@@ -286,7 +310,7 @@ export function Dashboard() {
       </div>
 
       {/* Quick Navigation - New Feature */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
         {[
           { label: 'Journal', icon: Calculator, path: '/journal', color: 'text-blue-500', bg: 'bg-blue-500/10' },
           { label: 'Tiers', icon: Users, path: '/third-parties', color: 'text-brand-gold', bg: 'bg-brand-gold/10' },
@@ -301,12 +325,12 @@ export function Dashboard() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 * idx }}
             onClick={() => navigate(item.path)}
-            className="group flex flex-col items-center justify-center p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl hover:border-brand-green/30 hover:shadow-2xl hover:shadow-brand-green/5 transition-all duration-500 active:scale-95"
+            className="group flex flex-col items-center justify-center p-4 sm:p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl sm:rounded-3xl hover:border-brand-green/30 hover:shadow-2xl hover:shadow-brand-green/5 transition-all duration-500 active:scale-95"
           >
-            <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center mb-3 transition-all duration-500 group-hover:scale-110 group-hover:rotate-6", item.bg, item.color)}>
-              <item.icon size={24} />
+            <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center mb-2 sm:mb-3 transition-all duration-500 group-hover:scale-110 group-hover:rotate-6", item.bg, item.color)}>
+              <item.icon size={20} className="sm:w-6 sm:h-6" />
             </div>
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors">{item.label}</span>
+            <span className="text-[8px] sm:text-[10px] font-black uppercase tracking-[0.1em] sm:tracking-[0.2em] text-slate-500 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors text-center">{item.label}</span>
           </motion.button>
         ))}
       </div>
@@ -384,7 +408,7 @@ export function Dashboard() {
       </div>
 
       {/* Bento Grid Layout */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         {/* Main Stats */}
         {isVisible('stats') && (
           <>
@@ -392,12 +416,13 @@ export function Dashboard() {
               title="Trésorerie Disponible" 
               value={stats.cash} 
               trend="up" 
-              trendValue="+12%" 
+              trendValue="+12.4%" 
               icon={Wallet} 
               color="bg-brand-green" 
               delay={0.1}
               path="/treasury"
               whiteTrend={true}
+              colSpan="md:col-span-2 lg:col-span-2"
             />
             <StatCard 
               title="Chiffre d'Affaires" 
@@ -405,10 +430,11 @@ export function Dashboard() {
               trend="up" 
               trendValue="+8.5%" 
               icon={TrendingUp} 
-              color="bg-brand-green-light" 
+              color="bg-emerald-500" 
               delay={0.2}
               path="/journal"
               whiteTrend={true}
+              colSpan="md:col-span-2 lg:col-span-2"
             />
             <StatCard 
               title="Créances Clients" 
@@ -419,6 +445,18 @@ export function Dashboard() {
               color="bg-brand-gold-dark" 
               delay={0.3}
               path="/third-parties"
+              colSpan="col-span-1"
+            />
+            <StatCard 
+              title="Dettes Fournisseurs" 
+              value={stats.payables} 
+              trend="up" 
+              trendValue="+4.2%" 
+              icon={ArrowDownRight} 
+              color="bg-rose-500" 
+              delay={0.35}
+              path="/third-parties"
+              colSpan="col-span-1"
             />
             <StatCard 
               title="Résultat Net" 
@@ -429,6 +467,18 @@ export function Dashboard() {
               color="bg-brand-gold" 
               delay={0.4}
               path="/financials"
+              colSpan="md:col-span-2 lg:col-span-1"
+            />
+            <StatCard 
+              title="Masse Salariale" 
+              value={stats.payroll.total} 
+              trend="up" 
+              trendValue="+1.5%" 
+              icon={Briefcase} 
+              color="bg-indigo-500" 
+              delay={0.45}
+              path="/payroll"
+              colSpan="md:col-span-2 lg:col-span-1"
             />
           </>
         )}
@@ -470,7 +520,7 @@ export function Dashboard() {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.5 }}
-            className="lg:col-span-2 bg-slate-950 rounded-3xl p-8 text-white relative overflow-hidden shadow-2xl group border border-white/5"
+            className="lg:col-span-2 lg:row-span-2 bg-slate-950 rounded-3xl p-8 text-white relative overflow-hidden shadow-2xl group border border-white/5 flex flex-col justify-between min-h-[340px]"
           >
             {/* Background Glow - Improved Symbiosis */}
             <div className="absolute top-0 right-0 w-full h-full bg-[radial-gradient(circle_at_80%_20%,_rgba(16,185,129,0.12)_0%,_transparent_50%)] opacity-30 group-hover:opacity-40 transition-opacity duration-700" />
@@ -735,6 +785,51 @@ export function Dashboard() {
           </motion.div>
         )}
 
+        {isVisible('payroll_summary') && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 1.1 }}
+            className="premium-card p-6 flex flex-col justify-between bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-950"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Gestion de Paie</h3>
+              <div className="p-2 bg-brand-green/10 text-brand-green rounded-xl">
+                <Users size={16} />
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div className="flex justify-between items-end">
+                <div>
+                  <p className="text-2xl font-black text-slate-900 dark:text-slate-100 font-display">{stats.payroll.employees}</p>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Employés Actifs</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-black text-brand-green font-display">{formatCurrency(stats.payroll.total)}</p>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Dernière Paie</p>
+                </div>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Statut Période</span>
+                  <span className={cn(
+                    "px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest",
+                    stats.payroll.lastPeriod === 'validated' ? "bg-brand-green/10 text-brand-green border border-brand-green/20" : "bg-brand-gold/10 text-brand-gold border border-brand-gold/20"
+                  )}>
+                    {stats.payroll.lastPeriod === 'validated' ? 'Validée' : stats.payroll.lastPeriod === 'draft' ? 'Brouillon' : 'Aucune'}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={() => navigate('/payroll')}
+              className="mt-4 text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline text-center"
+            >
+              Gérer la paie
+            </button>
+          </motion.div>
+        )}
+
         {/* Performance Chart - Extra Large Bento Item */}
         {isVisible('performance') && (
           <motion.div 
@@ -948,6 +1043,225 @@ export function Dashboard() {
         )}
 
         {/* Expenses Breakdown - Editorial List */}
+        {isVisible('performance_ratios') && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.7 }}
+            className="col-span-1 lg:col-span-2 bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 shadow-sm relative overflow-hidden group"
+          >
+            <div className="absolute top-0 right-0 w-64 h-64 bg-brand-green/5 rounded-full -translate-y-32 translate-x-32 blur-3xl group-hover:bg-brand-green/10 transition-colors duration-1000" />
+            
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10 relative z-10">
+              <div className="space-y-1">
+                <div className="flex items-center gap-3 text-brand-green mb-2">
+                  <div className="p-2 bg-brand-green/10 rounded-xl">
+                    <Activity size={20} />
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-[0.3em]">Analyse de Performance</span>
+                </div>
+                <h3 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight uppercase">Ratios Financiers & Rentabilité</h3>
+                <p className="text-slate-500 dark:text-slate-400 font-medium">Indicateurs de santé et de performance opérationnelle</p>
+              </div>
+              
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Score Global</p>
+                  <p className={cn(
+                    "text-3xl font-black font-display tracking-tighter",
+                    healthScore > 70 ? "text-brand-green" : healthScore > 40 ? "text-amber-500" : "text-rose-500"
+                  )}>
+                    {healthScore}%
+                  </p>
+                </div>
+                <div className="w-12 h-12 rounded-full border-4 border-slate-100 dark:border-slate-800 flex items-center justify-center relative">
+                  <svg className="w-full h-full -rotate-90">
+                    <circle cx="24" cy="24" r="20" fill="transparent" stroke="currentColor" strokeWidth="4" className="text-slate-100 dark:text-slate-800" />
+                    <circle 
+                      cx="24" cy="24" r="20" fill="transparent" stroke="currentColor" strokeWidth="4" 
+                      strokeDasharray={125.6} strokeDashoffset={125.6 - (125.6 * healthScore) / 100}
+                      strokeLinecap="round"
+                      className={cn(
+                        "transition-all duration-1000",
+                        healthScore > 70 ? "text-brand-green" : healthScore > 40 ? "text-amber-500" : "text-rose-500"
+                      )}
+                    />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 relative z-10">
+              {/* Current Ratio */}
+              <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700/50 space-y-4 hover:shadow-xl hover:shadow-slate-200/50 dark:hover:shadow-none transition-all">
+                <div className="flex justify-between items-start">
+                  <div className="p-3 bg-blue-500/10 text-blue-500 rounded-2xl">
+                    <Wallet size={20} />
+                  </div>
+                  <div className={cn(
+                    "px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest",
+                    ratios.currentRatio > 1.5 ? "bg-emerald-100 text-emerald-600" : ratios.currentRatio > 1 ? "bg-amber-100 text-amber-600" : "bg-rose-100 text-rose-600"
+                  )}>
+                    {ratios.currentRatio > 1.5 ? 'Optimal' : ratios.currentRatio > 1 ? 'Correct' : 'Risqué'}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ratio de Liquidité</p>
+                  <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.currentRatio}</h4>
+                </div>
+                <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, ratios.currentRatio * 33)}%` }}
+                    className="h-full bg-blue-500 rounded-full"
+                  />
+                </div>
+                <p className="text-[9px] text-slate-400 font-medium">Capacité à payer les dettes court terme</p>
+              </div>
+
+              {/* Net Margin */}
+              <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700/50 space-y-4 hover:shadow-xl hover:shadow-slate-200/50 dark:hover:shadow-none transition-all">
+                <div className="flex justify-between items-start">
+                  <div className="p-3 bg-brand-green/10 text-brand-green rounded-2xl">
+                    <TrendingUp size={20} />
+                  </div>
+                  <div className={cn(
+                    "px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest",
+                    ratios.netMargin > 15 ? "bg-emerald-100 text-emerald-600" : ratios.netMargin > 5 ? "bg-blue-100 text-blue-600" : "bg-amber-100 text-amber-600"
+                  )}>
+                    {ratios.netMargin > 15 ? 'Élevée' : ratios.netMargin > 5 ? 'Moyenne' : 'Faible'}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Marge Nette</p>
+                  <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.netMargin}%</h4>
+                </div>
+                <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, Math.max(0, ratios.netMargin * 2))}%` }}
+                    className="h-full bg-brand-green rounded-full"
+                  />
+                </div>
+                <p className="text-[9px] text-slate-400 font-medium">Rentabilité sur le chiffre d'affaires</p>
+              </div>
+
+              {/* Solvency */}
+              <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700/50 space-y-4 hover:shadow-xl hover:shadow-slate-200/50 dark:hover:shadow-none transition-all">
+                <div className="flex justify-between items-start">
+                  <div className="p-3 bg-brand-gold/10 text-brand-gold rounded-2xl">
+                    <Shield size={20} />
+                  </div>
+                  <div className={cn(
+                    "px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest",
+                    ratios.solvency > 1.5 ? "bg-emerald-100 text-emerald-600" : ratios.solvency > 1 ? "bg-blue-100 text-blue-600" : "bg-rose-100 text-rose-600"
+                  )}>
+                    {ratios.solvency > 1.5 ? 'Solide' : ratios.solvency > 1 ? 'Équilibrée' : 'Critique'}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Solvabilité</p>
+                  <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.solvency}</h4>
+                </div>
+                <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, ratios.solvency * 33)}%` }}
+                    className="h-full bg-brand-gold rounded-full"
+                  />
+                </div>
+                <p className="text-[9px] text-slate-400 font-medium">Capacité à couvrir les dettes totales</p>
+              </div>
+
+              {/* ROI */}
+              <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700/50 space-y-4 hover:shadow-xl hover:shadow-slate-200/50 dark:hover:shadow-none transition-all">
+                <div className="flex justify-between items-start">
+                  <div className="p-3 bg-purple-500/10 text-purple-500 rounded-2xl">
+                    <TrendingUp size={20} />
+                  </div>
+                  <div className={cn(
+                    "px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest",
+                    ratios.roi > 20 ? "bg-emerald-100 text-emerald-600" : ratios.roi > 10 ? "bg-blue-100 text-blue-600" : "bg-amber-100 text-amber-600"
+                  )}>
+                    {ratios.roi > 20 ? 'Excellent' : ratios.roi > 10 ? 'Bon' : 'Modéré'}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ROI (Actifs)</p>
+                  <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.roi}%</h4>
+                </div>
+                <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, Math.max(0, ratios.roi * 2))}%` }}
+                    className="h-full bg-purple-500 rounded-full"
+                  />
+                </div>
+                <p className="text-[9px] text-slate-400 font-medium">Rendement des capitaux investis</p>
+              </div>
+            </div>
+
+            <div className="mt-10 grid grid-cols-1 lg:grid-cols-3 gap-8 relative z-10">
+              <div className="lg:col-span-2 h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={[
+                    { name: 'Liquidité', value: ratios.currentRatio, target: 1.5 },
+                    { name: 'Solvabilité', value: ratios.solvency, target: 1.2 },
+                    { name: 'Marge (%)', value: ratios.netMargin / 10, target: 1.5 },
+                    { name: 'ROI (%)', value: ratios.roi / 10, target: 2.0 }
+                  ]}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 900, fill: '#94a3b8' }} />
+                    <YAxis hide />
+                    <Tooltip 
+                      cursor={{ fill: 'transparent' }}
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          return (
+                            <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-2xl border border-slate-800">
+                              <p className="text-[10px] font-black uppercase tracking-widest mb-1">{payload[0].payload.name}</p>
+                              <p className="text-xl font-black">{payload[0].value}</p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Bar dataKey="value" radius={[10, 10, 10, 10]} barSize={40}>
+                      { [0, 1, 2, 3].map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={['#3b82f6', '#c5a059', '#10b981', '#a855f7'][index]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-3xl border border-slate-100 dark:border-slate-700/50">
+                <h4 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-widest mb-4">Insights de Performance</h4>
+                <div className="space-y-4">
+                  <div className="flex gap-3">
+                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0" />
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Votre ratio de liquidité de <span className="font-bold text-slate-900 dark:text-white">{ratios.currentRatio}</span> indique une {ratios.currentRatio > 1 ? 'bonne' : 'faible'} capacité à honorer vos engagements immédiats.
+                    </p>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="w-1.5 h-1.5 rounded-full bg-brand-green mt-1.5 shrink-0" />
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      La marge nette de <span className="font-bold text-slate-900 dark:text-white">{ratios.netMargin}%</span> est {ratios.netMargin > 10 ? 'supérieure' : 'inférieure'} à la moyenne du secteur (10%).
+                    </p>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="w-1.5 h-1.5 rounded-full bg-purple-500 mt-1.5 shrink-0" />
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Un ROI de <span className="font-bold text-slate-900 dark:text-white">{ratios.roi}%</span> démontre une {ratios.roi > 15 ? 'excellente' : 'optimisable'} utilisation de vos actifs.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {isVisible('expenses') && (
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
@@ -1038,6 +1352,71 @@ export function Dashboard() {
                   </div>
                 ))}
               </div>
+            </div>
+          </motion.div>
+        )}
+
+        {isVisible('asset_summary') && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="premium-card p-8 bg-gradient-to-br from-indigo-900 to-slate-900 text-white relative overflow-hidden group shadow-2xl shadow-indigo-500/10"
+          >
+            <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full -translate-y-32 translate-x-32 blur-3xl group-hover:bg-indigo-500/20 transition-colors duration-1000" />
+            
+            <div className="flex items-center justify-between mb-8 relative z-10">
+              <div className="space-y-1">
+                <div className="flex items-center gap-3 text-indigo-400 mb-2">
+                  <div className="p-2 bg-indigo-500/20 rounded-xl border border-indigo-500/20 shadow-inner">
+                    <Building2 size={20} />
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-[0.3em]">Patrimoine Actif</span>
+                </div>
+                <h3 className="text-2xl font-black tracking-tight font-display uppercase">Immobilisations</h3>
+                <p className="text-indigo-300/60 font-medium text-xs">Valeur nette comptable du parc</p>
+              </div>
+              <p className="text-3xl font-black text-white">{assetStats.count}</p>
+            </div>
+
+            <div className="space-y-6 relative z-10">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
+                  <p className="text-[10px] font-black text-indigo-300/60 uppercase tracking-widest mb-1">Brut total</p>
+                  <p className="text-sm font-bold text-white font-mono">{formatCurrency(assetStats.totalValue)}</p>
+                </div>
+                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
+                  <p className="text-[10px] font-black text-indigo-300/60 uppercase tracking-widest mb-1">Amortissements</p>
+                  <p className="text-sm font-bold text-rose-400 font-mono">{formatCurrency(assetStats.totalAccumulatedDep)}</p>
+                </div>
+              </div>
+
+              <div className="p-5 bg-indigo-500/20 rounded-3xl border border-indigo-500/30">
+                <div className="flex justify-between items-end mb-3">
+                  <div>
+                    <p className="text-[10px] font-black text-indigo-300 uppercase tracking-widest mb-1">Valeur Nette (VNC)</p>
+                    <p className="text-2xl font-black text-white font-mono">{formatCurrency(assetStats.netBookValue)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] font-black text-indigo-300 uppercase tracking-widest mb-1">Amorti à</p>
+                    <p className="text-sm font-black text-indigo-400">{assetStats.totalValue > 0 ? Math.round((assetStats.totalAccumulatedDep / assetStats.totalValue) * 100) : 0}%</p>
+                  </div>
+                </div>
+                <div className="h-2 bg-indigo-950 rounded-full overflow-hidden border border-white/5">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${assetStats.totalValue > 0 ? (assetStats.totalAccumulatedDep / assetStats.totalValue) * 100 : 0}%` }}
+                    className="h-full bg-indigo-400 rounded-full shadow-[0_0_10px_rgba(129,140,248,0.5)]"
+                  />
+                </div>
+              </div>
+
+              <button 
+                onClick={() => navigate('/assets')}
+                className="w-full py-4 bg-white/10 hover:bg-white/20 rounded-2xl border border-white/10 text-[10px] font-black uppercase tracking-widest transition-all hover:translate-y-[-2px] flex items-center justify-center gap-2 group"
+              >
+                Gérer les actifs
+                <ChevronRight size={14} className="group-hover:translate-x-1 transition-transform" />
+              </button>
             </div>
           </motion.div>
         )}

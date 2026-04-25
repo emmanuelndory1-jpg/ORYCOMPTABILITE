@@ -1,12 +1,17 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer, FirestoreError } from 'firebase/firestore';
+import { initializeFirestore, doc, setDoc, getDoc, collection, addDoc, query, orderBy, limit, onSnapshot, getDocFromServer, FirestoreError } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Use auto-detect long-polling to avoid gRPC connection issues in some environments (reduces 'unavailable' errors)
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+}, firebaseConfig.firestoreDatabaseId);
+
 export const googleProvider = new GoogleAuthProvider();
 
 // Auth Helpers
@@ -22,9 +27,23 @@ export const signInWithGoogle = async () => {
     
     // Create/Update user profile in Firestore
     const userRef = doc(db, 'users', user.uid);
-    const userSnap = await getDoc(userRef);
+    let userSnap;
     
-    if (!userSnap.exists()) {
+    // Add retries for potentially flaky Firestore connection
+    const maxRetries = 2; // Reduced from 3
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        // Shorter internal timeout for the getDoc
+        userSnap = await getDoc(userRef);
+        break;
+      } catch (e) {
+        if (i === maxRetries - 1) throw e;
+        console.warn(`Firestore getDoc retry ${i + 1}/${maxRetries}...`);
+        await new Promise(r => setTimeout(r, 1000)); // Reduced from 2s
+      }
+    }
+    
+    if (userSnap && !userSnap.exists()) {
       await setDoc(userRef, {
         uid: user.uid,
         email: user.email,

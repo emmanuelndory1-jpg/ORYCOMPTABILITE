@@ -9,9 +9,11 @@ import { ExpertAdvisor as Assistant } from './components/ExpertAdvisor';
 import { Journal } from './components/Journal';
 import { Treasury } from './components/Treasury';
 import { FinancialStatements } from './components/FinancialStatements';
+import { CustomReports } from './components/CustomReports';
 import { ComplianceAudit } from './components/ComplianceAudit';
 import { AssetsManager } from './components/AssetsManager';
 import { RecurringTransactions } from './components/RecurringTransactions';
+import { AuditLogViewer } from './components/AuditLogViewer';
 import { CompanyCreation } from './components/CompanyCreation';
 import { Settings } from './components/Settings';
 import { Breadcrumbs } from './components/Breadcrumbs';
@@ -34,10 +36,12 @@ import { TeamManager } from './components/TeamManager';
 import { FinancialAuditor } from './components/FinancialAuditor';
 import { Header } from './components/Header';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { LanguageProvider } from './context/LanguageContext';
 import { FiscalYearProvider } from './context/FiscalYearContext';
+import { ModuleProvider } from './context/ModuleContext';
 import { DialogProvider } from './components/DialogProvider';
+import { apiFetch } from './lib/api';
 import { Loader2, Menu, Moon, Sun } from 'lucide-react';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
@@ -88,26 +92,44 @@ function DashboardLayout() {
   const location = useLocation();
 
   const fetchCompanyStatus = async () => {
+    // Safety check to prevent infinite loading if the network is totally blocked
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Fetch timeout')), 15000));
+    
     try {
-      const res = await fetch('/api/company/status');
+      const resPromise = apiFetch('/api/company/status');
+      const res = await Promise.race([resPromise, timeoutPromise]) as Response;
+      
+      if (!res.ok) throw new Error('Failed to fetch status');
       const data = await res.json();
       setIsCompanyCreated(data.created);
+      
       if (data.created) {
-        const dossierRes = await fetch('/api/company/dossier');
-        const dossier = await dossierRes.json();
-        if (dossier.settings) {
-          setCompanySettings(dossier.settings);
+        try {
+          const dossierRes = await apiFetch('/api/company/dossier');
+          if (dossierRes.ok) {
+            const dossier = await dossierRes.json();
+            if (dossier.settings) {
+              setCompanySettings(dossier.settings);
+            }
+          }
+        } catch (e) {
+          console.warn("Secondary fetch failed, but status is OK");
         }
       }
     } catch (err) {
       console.error("Failed to fetch company status:", err);
+      // If primary check fails, we assume uncreated to unblock the UI
       setIsCompanyCreated(false);
     }
   };
 
   useEffect(() => {
-    fetchCompanyStatus();
-  }, []);
+    if (user) {
+      fetchCompanyStatus();
+    } else {
+      setIsCompanyCreated(false);
+    }
+  }, [user]);
 
   const handleQuickAction = (action: string) => {
     if (action === 'new' || action === 'scan') {
@@ -135,7 +157,7 @@ function DashboardLayout() {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 transition-colors duration-300">
+    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 transition-colors duration-300">
       <Sidebar 
         isMobileOpen={isMobileOpen}
         setIsMobileOpen={setIsMobileOpen}
@@ -144,97 +166,132 @@ function DashboardLayout() {
       />
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden pb-20 md:pb-0 relative">
-        <Header />
+        <div className="hidden md:block">
+          <Header />
+        </div>
         
         {/* Mobile Header */}
-        <div className="md:hidden bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-40 transition-colors duration-300">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shadow-lg shadow-emerald-500/20">
-              <Logo className="w-5 h-5 text-emerald-600" showText={false} />
+        <div className="md:hidden bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-slate-200 dark:border-white/5 px-4 h-16 flex items-center justify-between sticky top-0 z-40 transition-colors duration-300 shadow-sm">
+          <Link to="/" className="flex items-center gap-2 group">
+            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 flex items-center justify-center shadow-lg shadow-brand-green/20 border border-slate-100 dark:border-white/5 transition-transform active:scale-95">
+              <Logo className="w-5 h-5 text-brand-green" showText={false} />
             </div>
-            <span className="font-black text-sm tracking-tight text-slate-900 dark:text-slate-100">ORYCOMPTA</span>
+            <div className="flex flex-col">
+              <span className="font-black text-xs tracking-tight text-slate-900 dark:text-white uppercase">ORYCOMPTA</span>
+              <span className="text-[7px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Expert OHADA</span>
+            </div>
           </Link>
-          <button onClick={() => setIsMobileOpen(true)} className="p-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors">
-            <Menu size={20} />
-          </button>
+          
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={() => setIsMobileOpen(true)} 
+              className="p-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/5 rounded-2xl transition-all active:scale-90"
+              aria-label="Open menu"
+            >
+              <Menu size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Main Content Area */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto scroll-smooth">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 py-6 md:py-8">
-            <div className="mb-6">
-              <Breadcrumbs />
-            </div>
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <Outlet context={{ openJournalModal, setOpenJournalModal, companySettings }} />
             </div>
           </div>
         </div>
 
-        <QuickActionFAB onAction={handleQuickAction} />
         <FloatingAssistant />
-        <MobileNav 
-          onMenuClick={() => setIsMobileOpen(true)} 
-        />
+        <QuickActionFAB onAction={handleQuickAction} />
+        <MobileNav onMenuClick={() => setIsMobileOpen(true)} />
       </main>
     </div>
   );
 }
 
 export default function App() {
+  useEffect(() => {
+    // Initialize CSRF token with retry for cold starts
+    const initCsrf = async (retries = 3) => {
+      for (let i = 0; i < retries; i++) {
+        try {
+    const res = await apiFetch('/api/csrf-token');
+    if (res.ok) {
+      const { token } = await res.json();
+      if (token) {
+        localStorage.setItem('XSRF-TOKEN', token);
+        console.log('CSRF initialized');
+      }
+      return;
+    }
+        } catch (e) {
+          if (i === retries - 1) console.error("Final CSRF init failure:", e);
+          else console.warn(`CSRF init retry ${i + 1}/${retries}...`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    };
+    initCsrf();
+  }, []);
+
   return (
     <ThemeProvider>
       <LanguageProvider>
         <DialogProvider>
           <AuthProvider>
-            <FiscalYearProvider>
-              <Routes>
-              <Route path="/login" element={
-                <PublicRoute>
-                  <LoginPage />
-                </PublicRoute>
-              } />
-              <Route path="/register" element={
-                <PublicRoute>
-                  <RegisterPage />
-                </PublicRoute>
-              } />
-              <Route path="/pricing" element={<PricingPage />} />
-              <Route path="/mock-payment" element={<MockPaymentPage />} />
-              <Route 
-                path="/" 
-                element={
-                  <ProtectedRoute>
-                    <DashboardLayout />
-                  </ProtectedRoute>
-                } 
-              >
-                <Route index element={<Dashboard />} />
-                <Route path="accounts" element={<Accounts />} />
-                <Route path="journal" element={<JournalWrapper />} />
-                <Route path="ledger" element={<GeneralLedger />} />
-                <Route path="trial-balance" element={<TrialBalance />} />
-                <Route path="financials" element={<FinancialStatements />} />
-                <Route path="compliance" element={<ComplianceAudit />} />
-                <Route path="recurring" element={<RecurringTransactions />} />
-                <Route path="assets" element={<AssetsManager />} />
-                <Route path="company" element={<CompanyCreation />} />
-                <Route path="treasury" element={<Treasury />} />
-                <Route path="reconciliation" element={<BankReconciliation />} />
-                <Route path="vat" element={<TaxManager />} />
-                <Route path="payroll" element={<PayrollManager />} />
-                <Route path="third-parties" element={<ThirdPartyManager />} />
-                <Route path="budgets" element={<BudgetManager />} />
-                <Route path="invoicing" element={<InvoicingManager />} />
-                <Route path="assistant" element={<Assistant />} />
-                <Route path="tax-assistant" element={<TaxAssistant />} />
-                <Route path="financial-auditor" element={<FinancialAuditor />} />
-                <Route path="team" element={<TeamManager />} />
-                <Route path="settings" element={<Settings />} />
-                <Route path="*" element={<div className="p-8 text-center text-slate-500 dark:text-slate-400">Module en cours de développement...</div>} />
-              </Route>
-            </Routes>
-          </FiscalYearProvider>
+            <ModuleProvider>
+              <FiscalYearProvider>
+                <Routes>
+                <Route path="/login" element={
+                  <PublicRoute>
+                    <LoginPage />
+                  </PublicRoute>
+                } />
+                <Route path="/register" element={
+                  <PublicRoute>
+                    <RegisterPage />
+                  </PublicRoute>
+                } />
+                <Route path="/pricing" element={<PricingPage />} />
+                <Route path="/mock-payment" element={<MockPaymentPage />} />
+                <Route 
+                  path="/" 
+                  element={
+                    <ProtectedRoute>
+                      <DashboardLayout />
+                    </ProtectedRoute>
+                  } 
+                >
+                  <Route index element={<Dashboard />} />
+                  <Route path="accounts" element={<Accounts />} />
+                  <Route path="journal" element={<JournalWrapper />} />
+                  <Route path="ledger" element={<GeneralLedger />} />
+                  <Route path="trial-balance" element={<TrialBalance />} />
+                  <Route path="financials" element={<FinancialStatements />} />
+                  <Route path="custom-reports" element={<CustomReports />} />
+                  <Route path="compliance" element={<ComplianceAudit />} />
+                  <Route path="recurring" element={<RecurringTransactions />} />
+                  <Route path="assets" element={<AssetsManager />} />
+                  <Route path="company" element={<CompanyCreation />} />
+                  <Route path="treasury" element={<Treasury />} />
+                  <Route path="reconciliation" element={<BankReconciliation />} />
+                  <Route path="vat" element={<TaxManager />} />
+                  <Route path="payroll" element={<PayrollManager />} />
+                  <Route path="third-parties" element={<ThirdPartyManager />} />
+                  <Route path="budgets" element={<BudgetManager />} />
+                  <Route path="invoicing" element={<InvoicingManager />} />
+                  <Route path="audit" element={<AuditLogViewer />} />
+                  <Route path="assistant" element={<Assistant />} />
+                  <Route path="tax-assistant" element={<TaxAssistant />} />
+                  <Route path="financial-auditor" element={<FinancialAuditor />} />
+                  <Route path="team" element={<TeamManager />} />
+                  <Route path="settings" element={<Settings />} />
+                  <Route path="*" element={<div className="p-8 text-center text-slate-500 dark:text-slate-400">Module en cours de développement...</div>} />
+                </Route>
+              </Routes>
+            </FiscalYearProvider>
+          </ModuleProvider>
           </AuthProvider>
         </DialogProvider>
       </LanguageProvider>

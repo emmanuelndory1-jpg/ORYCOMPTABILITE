@@ -4,6 +4,7 @@ export interface JournalEntryLine {
   account_name?: string;
   debit: number;
   credit: number;
+  description?: string;
 }
 
 export interface CustomOperationTemplate {
@@ -51,7 +52,8 @@ export const calculateEntries = (
   thirdPartyAccount?: string,
   vatSettings: { rate: number, account_collected: string, account_deductible: string }[] = [],
   treasuryAccount?: string,
-  companySettings?: any
+  companySettings?: any,
+  accountOverride?: string
 ): JournalEntryLine[] => {
   const ht = Number(amountHT) || 0;
   const tva = Math.round(ht * (vatRate / 100));
@@ -119,7 +121,7 @@ export const calculateEntries = (
     case 'vente_marchandises':
       newEntries = [
         { account_code: getClientAccount(), debit: ttc, credit: 0 },
-        { account_code: '701', debit: 0, credit: ht },
+        { account_code: accountOverride || '701', debit: 0, credit: ht },
         { account_code: vatAccountCollected, debit: 0, credit: tva }
       ];
       break;
@@ -127,14 +129,14 @@ export const calculateEntries = (
     case 'vente_services':
       newEntries = [
         { account_code: getClientAccount(), debit: ttc, credit: 0 },
-        { account_code: '706', debit: 0, credit: ht },
+        { account_code: accountOverride || '706', debit: 0, credit: ht },
         { account_code: vatAccountCollected, debit: 0, credit: tva }
       ];
       break;
 
     case 'achat_marchandises':
       newEntries = [
-        { account_code: '601', debit: ht, credit: 0 },
+        { account_code: accountOverride || '601', debit: ht, credit: 0 },
         { account_code: vatAccountDeductible, debit: tva, credit: 0 },
         { account_code: getSupplierAccount(), debit: 0, credit: ttc }
       ];
@@ -143,7 +145,7 @@ export const calculateEntries = (
     case 'achat_services':
     case 'frais_generaux':
       newEntries = [
-        { account_code: '605', debit: ht, credit: 0 }, // Simplified to 605 for MVP
+        { account_code: accountOverride || '605', debit: ht, credit: 0 },
         { account_code: vatAccountDeductible, debit: tva, credit: 0 },
         { account_code: getSupplierAccount(), debit: 0, credit: ttc }
       ];
@@ -152,39 +154,37 @@ export const calculateEntries = (
     case 'amortissement':
       // Dotation aux amortissements
       newEntries = [
-        { account_code: '681', debit: ht, credit: 0 }, // Dotations d'exploitation
-        { account_code: '281', debit: 0, credit: ht }  // Amortissement immobilisations corporelles (simplified)
+        { account_code: accountOverride || '681', debit: ht, credit: 0 },
+        { account_code: '281', debit: 0, credit: ht }
       ];
       break;
 
     case 'charges_a_payer':
       // Charges à payer (Facture non parvenue)
       newEntries = [
-        { account_code: '605', debit: ht, credit: 0 },
-        { account_code: '4458', debit: tva, credit: 0 }, // TVA à régulariser
-        { account_code: '408', debit: 0, credit: ttc }   // Fournisseurs, factures non parvenues
+        { account_code: accountOverride || '605', debit: ht, credit: 0 },
+        { account_code: '4458', debit: tva, credit: 0 },
+        { account_code: '408', debit: 0, credit: ttc }
       ];
       break;
 
     case 'charges_constatees_avance':
-      // Regularization: Debit 476, Credit 6xx
       newEntries = [
         { account_code: '476', debit: ht, credit: 0 },
-        { account_code: '605', debit: 0, credit: ht } // Using 605 as generic expense
+        { account_code: accountOverride || '605', debit: 0, credit: ht }
       ];
       break;
 
     case 'produits_constates_avance':
-      // Regularization: Debit 7xx, Credit 477
       newEntries = [
-        { account_code: '706', debit: ht, credit: 0 }, // Using 706 as generic revenue
+        { account_code: accountOverride || '706', debit: ht, credit: 0 },
         { account_code: '477', debit: 0, credit: ht }
       ];
       break;
 
     case 'paiement_fournisseur':
       newEntries = [
-        { account_code: thirdPartyAccount || '401', debit: ttc, credit: 0 },
+        { account_code: accountOverride || thirdPartyAccount || '401', debit: ttc, credit: 0 },
         { account_code: getPaymentAccount(), debit: 0, credit: ttc }
       ];
       break;
@@ -192,26 +192,25 @@ export const calculateEntries = (
     case 'encaissement_client':
       newEntries = [
         { account_code: getPaymentAccount(), debit: ttc, credit: 0 },
-        { account_code: thirdPartyAccount || '411', debit: 0, credit: ttc }
+        { account_code: accountOverride || thirdPartyAccount || '411', debit: 0, credit: ttc }
       ];
       break;
 
     case 'paiement_salaire':
       newEntries = [
-        { account_code: '661', debit: ttc, credit: 0 }, // Rémunération directe
+        { account_code: accountOverride || '661', debit: ttc, credit: 0 },
         { account_code: getPaymentAccount(), debit: 0, credit: ttc }
       ];
       break;
 
     case 'paiement_impot':
       newEntries = [
-        { account_code: '444', debit: ttc, credit: 0 }, // Etat, Impôts (assumption)
+        { account_code: accountOverride || '444', debit: ttc, credit: 0 },
         { account_code: getPaymentAccount(), debit: 0, credit: ttc }
       ];
       break;
 
     case 'retrait_banque':
-      // Banque -> Caisse
       newEntries = [
         { account_code: companySettings?.payment_cash_account || '571', debit: ttc, credit: 0 },
         { account_code: companySettings?.payment_bank_account || '521', debit: 0, credit: ttc }
@@ -219,7 +218,6 @@ export const calculateEntries = (
       break;
 
     case 'depot_banque':
-      // Caisse -> Banque
       newEntries = [
         { account_code: companySettings?.payment_bank_account || '521', debit: ttc, credit: 0 },
         { account_code: companySettings?.payment_cash_account || '571', debit: 0, credit: ttc }
@@ -227,10 +225,9 @@ export const calculateEntries = (
       break;
 
     case 'pret_bancaire':
-      // Réception emprunt
       newEntries = [
         { account_code: companySettings?.payment_bank_account || '521', debit: ttc, credit: 0 },
-        { account_code: '162', debit: 0, credit: ttc }
+        { account_code: accountOverride || '162', debit: 0, credit: ttc }
       ];
       break;
   }

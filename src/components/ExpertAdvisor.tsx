@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, ShieldCheck, TrendingUp, Scale, Zap, ChevronRight, MessageSquare, Info } from 'lucide-react';
+import { Send, Bot, User, Sparkles, ShieldCheck, TrendingUp, Scale, Zap, ChevronRight, MessageSquare, Info, Trash2 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
-import { askGemini } from '../services/geminiService';
+import { askAssistant } from '../services/geminiService';
+import { useAuth } from '@/context/AuthContext';
+import { useCurrency } from '@/hooks/useCurrency';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 
 interface Message {
   id: string;
@@ -25,6 +28,9 @@ export function ExpertAdvisor() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { user } = useAuth();
+  const { currency } = useCurrency();
+  const { activeYear } = useFiscalYear();
 
   const quickActions = [
     { label: "Audit Flash", icon: ShieldCheck, prompt: "Peux-tu faire un audit rapide de ma situation financière actuelle ?" },
@@ -56,11 +62,19 @@ export function ExpertAdvisor() {
 
     try {
       const history = messages.map(m => ({
-        role: m.role === 'user' ? 'user' as const : 'model' as const,
+        role: m.role === 'user' ? 'user' as const : 'assistant' as const,
         content: m.text
       }));
 
-      const reply = await askGemini(userMsg.text, history);
+      const context = {
+        userName: user?.name,
+        userEmail: user?.email,
+        currency: currency,
+        fiscalYear: activeYear?.name,
+        timestamp: new Date().toISOString()
+      };
+
+      const reply = await askAssistant(messageText, history, context);
       
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -76,6 +90,17 @@ export function ExpertAdvisor() {
     }
   };
 
+  const handleClearChat = () => {
+    setMessages([
+      {
+        id: '1',
+        role: 'assistant',
+        text: "Bonjour ! Je suis Ory, votre assistant intelligent spécialisé dans le système comptable SYSCOHADA. Je peux analyser vos données financières, vous aider avec vos déclarations fiscales ou auditer votre conformité. Que souhaitez-vous faire aujourd'hui ?",
+        timestamp: new Date()
+      }
+    ]);
+  };
+
   return (
     <div className="h-[calc(100vh-2rem)] flex flex-col bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden transition-colors duration-300">
       <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex items-center gap-3">
@@ -86,6 +111,13 @@ export function ExpertAdvisor() {
           <h2 className="font-bold text-slate-900 dark:text-slate-100">Conseiller Expert Ory</h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">Spécialiste SYSCOHADA & Fiscalité</p>
         </div>
+        <button 
+          onClick={handleClearChat}
+          className="ml-auto p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-rose-500"
+          title="Effacer la conversation"
+        >
+          <Trash2 size={18} />
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 dark:bg-slate-900/50" ref={scrollRef}>

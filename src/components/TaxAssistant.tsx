@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import ReactMarkdown from 'react-markdown';
 import { SafeImage } from './SafeImage';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getTaxCompliance } from '../services/geminiService';
+import { getTaxCompliance, analyzeTaxDocument, TaxDocumentAnalysis } from '../services/geminiService';
 
 interface Message {
   id: string;
@@ -12,6 +12,7 @@ interface Message {
   text: string;
   timestamp: Date;
   image?: string;
+  analysis?: TaxDocumentAnalysis;
 }
 
 export function TaxAssistant() {
@@ -75,17 +76,29 @@ export function TaxAssistant() {
     setLoading(true);
 
     try {
-      // Simulate document analysis if an image is provided
-      if (hasImage) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+      // Real document analysis if an image is provided
+      let analysisResult: TaxDocumentAnalysis | null = null;
+      if (hasImage && imageBase64) {
         const analysisMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          text: "🔍 **Analyse du document en cours...**\n\nJ'ai détecté un document fiscal. Je procède à l'extraction des données clés (Montant HT, TVA, Date d'échéance) pour vérifier la conformité avec le Code Général des Impôts.",
+          text: "🔍 **Analyse approfondie du document en cours...**\n\nJe procède à l'extraction OCR, à la détection des codes comptables SYSCOHADA et à la vérification de conformité fiscale.",
           timestamp: new Date()
         };
         setMessages(prev => [...prev, analysisMsg]);
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        analysisResult = await analyzeTaxDocument(imageBase64);
+        
+        if (analysisResult) {
+          const resultMsg: Message = {
+            id: (Date.now() + 1.1).toString(),
+            role: 'assistant',
+            text: `Analyse terminée pour : **${analysisResult.document_type}**`,
+            timestamp: new Date(),
+            analysis: analysisResult
+          };
+          setMessages(prev => [...prev, resultMsg]);
+        }
       }
 
       // Special handling for Audit Fiscal
@@ -207,6 +220,72 @@ export function TaxAssistant() {
                 )}>
                   <ReactMarkdown>{msg.text}</ReactMarkdown>
                 </div>
+
+                {msg.analysis && (
+                  <div className="mt-4 space-y-4 border-t border-slate-100 dark:border-slate-800 pt-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Fournisseur</p>
+                        <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{msg.analysis.vendor_name}</p>
+                      </div>
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Montant TTC</p>
+                        <p className="text-sm font-bold text-brand-green">{msg.analysis.amount_ttc.toLocaleString()} {msg.analysis.currency}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Suggestions Comptables (SYSCOHADA)</p>
+                      <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
+                        <table className="w-full text-[11px]">
+                          <thead className="bg-slate-800 text-slate-400">
+                            <tr>
+                              <th className="px-3 py-2 text-left">Compte</th>
+                              <th className="px-3 py-2 text-right">Débit</th>
+                              <th className="px-3 py-2 text-right">Crédit</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800">
+                            {msg.analysis.accounting_suggestions.map((s, idx) => (
+                              <tr key={idx} className="text-slate-300">
+                                <td className="px-3 py-2">
+                                  <span className="font-bold text-brand-green mr-2">{s.account_code}</span>
+                                  <span className="opacity-60">{s.account_name}</span>
+                                </td>
+                                <td className="px-3 py-2 text-right">{s.debit > 0 ? s.debit.toLocaleString() : '-'}</td>
+                                <td className="px-3 py-2 text-right">{s.credit > 0 ? s.credit.toLocaleString() : '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div className={cn(
+                      "p-4 rounded-2xl border flex gap-3",
+                      msg.analysis.compliance_check.status === 'compliant' 
+                        ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-700 dark:text-emerald-400"
+                        : msg.analysis.compliance_check.status === 'warning'
+                          ? "bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-400"
+                          : "bg-rose-500/5 border-rose-500/20 text-rose-700 dark:text-rose-400"
+                    )}>
+                      <div className="shrink-0">
+                        {msg.analysis.compliance_check.status === 'compliant' ? <ShieldCheck size={20} /> : <HelpCircle size={20} />}
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold uppercase tracking-wider">Vérification de Conformité</p>
+                        <p className="text-sm font-medium">{msg.analysis.compliance_check.advice}</p>
+                        {msg.analysis.compliance_check.issues.length > 0 && (
+                          <ul className="text-[11px] list-disc list-inside opacity-80 mt-2">
+                            {msg.analysis.compliance_check.issues.map((issue, idx) => (
+                              <li key={idx}>{issue}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           ))}
@@ -235,10 +314,11 @@ export function TaxAssistant() {
       <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md">
         {selectedImage && (
           <div className="mb-4 relative inline-block">
-            <img 
+            <SafeImage 
               src={selectedImage} 
               alt="Preview" 
               className="h-24 w-auto rounded-2xl border border-slate-200 dark:border-slate-700 object-cover shadow-lg"
+              referrerPolicy="no-referrer"
             />
             <button
               onClick={() => setSelectedImage(null)}

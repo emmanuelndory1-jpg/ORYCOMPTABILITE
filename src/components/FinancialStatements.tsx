@@ -5,7 +5,9 @@ import { sanitizeText, formatCurrencyPDF } from '@/lib/pdfUtils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { useCurrency } from '@/hooks/useCurrency';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 import { PDF_CONFIG, exportToCSV, addPDFHeader, addPDFFooter, CompanySettings } from '@/lib/exportUtils';
+import { apiFetch as fetch } from '@/lib/api';
 
 interface FinancialData {
   incomeStatement: {
@@ -47,10 +49,36 @@ interface FinancialData {
 
 export function FinancialStatements() {
   const { formatCurrency, currency } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [data, setData] = useState<FinancialData | null>(null);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'income' | 'balance' | 'cash' | 'ratios'>('income');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  const setQuickRange = (range: 'month' | 'quarter' | 'year' | 'all') => {
+    if (range === 'all') {
+      setStartDate('');
+      setEndDate('');
+      return;
+    }
+    const now = new Date();
+    let start = new Date(now.getFullYear(), now.getMonth(), 1);
+    let end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    if (range === 'quarter') {
+      const quarter = Math.floor(now.getMonth() / 3);
+      start = new Date(now.getFullYear(), quarter * 3, 1);
+      end = new Date(now.getFullYear(), (quarter + 1) * 3, 0);
+    } else if (range === 'year') {
+      start = new Date(now.getFullYear(), 0, 1);
+      end = new Date(now.getFullYear(), 11, 31);
+    }
+
+    setStartDate(start.toISOString().split('T')[0]);
+    setEndDate(end.toISOString().split('T')[0]);
+  };
 
   const calculateRatios = () => {
     if (!data) return null;
@@ -73,9 +101,14 @@ export function FinancialStatements() {
 
   useEffect(() => {
     const fetchData = async () => {
+      setLoading(true);
       try {
+        const params = new URLSearchParams();
+        if (startDate) params.append('startDate', startDate);
+        if (endDate) params.append('endDate', endDate);
+
         const [financialRes, settingsRes] = await Promise.all([
-          fetch('/api/financial-statements'),
+          fetch(`/api/financial-statements?${params.toString()}`),
           fetch('/api/company/settings')
         ]);
         const financialData = await financialRes.json();
@@ -89,7 +122,7 @@ export function FinancialStatements() {
       }
     };
     fetchData();
-  }, []);
+  }, [activeYear?.id, startDate, endDate]);
 
   const handleExportCSV = () => {
     if (!data) return;
@@ -203,7 +236,9 @@ export function FinancialStatements() {
       ratios: "RATIOS FINANCIERS"
     };
     const title = titleMap[activeTab];
-    const subtitle = "États Financiers - SYSCOHADA Révisé";
+    const subtitle = (startDate || endDate) 
+      ? `Période : ${startDate || 'Début'} au ${endDate || 'Fin'}`
+      : "États Financiers - SYSCOHADA Révisé";
 
     const nextY = addPDFHeader(doc, settings, title, subtitle);
 
@@ -355,6 +390,41 @@ export function FinancialStatements() {
             <Download size={18} />
             PDF
           </button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
+        <div className="flex flex-col gap-2 w-full sm:w-auto">
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm font-medium">
+            <TrendingUp size={16} className="text-brand-green" /> Période d'analyse
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setQuickRange('month')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Ce Mois</button>
+            <button onClick={() => setQuickRange('quarter')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Ce Trimestre</button>
+            <button onClick={() => setQuickRange('year')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Cette Année</button>
+            <button onClick={() => setQuickRange('all')} className="text-[10px] px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-brand-green/10 hover:text-brand-green transition-colors font-bold uppercase tracking-wider">Tout</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4 flex-1">
+          <div>
+            <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 dark:text-slate-500 mb-1">Date début</label>
+            <input 
+              type="date" 
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 dark:bg-slate-950 dark:text-white text-sm focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 dark:text-slate-500 mb-1">Date fin</label>
+            <input 
+              type="date" 
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 dark:bg-slate-950 dark:text-white text-sm focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
+            />
+          </div>
         </div>
       </div>
 

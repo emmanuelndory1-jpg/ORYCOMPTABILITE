@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Wallet, ArrowUpRight, ArrowDownLeft, CreditCard, Smartphone, Loader2, ArrowRightLeft, X, AlertCircle } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useCurrency } from '@/hooks/useCurrency';
+import { useFiscalYear } from '@/context/FiscalYearContext';
+import { apiFetch as fetch } from '@/lib/api';
 
 interface TreasuryAccount {
   name: string;
@@ -26,6 +28,7 @@ interface ForecastPoint {
 
 export function Treasury() {
   const { formatCurrency, currency, getCurrencyIcon } = useCurrency();
+  const { activeYear } = useFiscalYear();
   const [loading, setLoading] = useState(true);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [transferData, setTransferData] = useState({
@@ -64,7 +67,7 @@ export function Treasury() {
   useEffect(() => {
     fetchTreasuryData();
     fetchForecastData();
-  }, []);
+  }, [activeYear?.id]);
 
   const fetchTreasuryData = async () => {
     try {

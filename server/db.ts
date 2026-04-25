@@ -39,6 +39,14 @@ db.exec(`
     currency TEXT DEFAULT 'FCFA',
     exchange_rate REAL DEFAULT 1,
     recurring_transaction_id TEXT, -- Link to recurring transaction
+    operation_type TEXT,
+    amount_ht REAL,
+    vat_rate REAL,
+    payment_mode TEXT,
+    treasury_account TEXT,
+    creation_mode TEXT DEFAULT 'expert',
+    notes TEXT,
+    document_url TEXT,
     FOREIGN KEY(third_party_id) REFERENCES third_parties(id)
   );
 
@@ -48,6 +56,7 @@ db.exec(`
     account_code TEXT NOT NULL,
     debit REAL DEFAULT 0,
     credit REAL DEFAULT 0,
+    description TEXT,
     FOREIGN KEY(transaction_id) REFERENCES transactions(id),
     FOREIGN KEY(account_code) REFERENCES accounts(code)
   );
@@ -160,6 +169,8 @@ db.exec(`
     total_price REAL NOT NULL,
     acquisition_date TEXT NOT NULL,
     depreciation_duration INTEGER NOT NULL, -- in years
+    depreciation_method TEXT DEFAULT 'linear', -- linear, declining
+    declining_coefficient REAL,
     account_code TEXT NOT NULL,
     transaction_id INTEGER,
     status TEXT DEFAULT 'active', -- active, sold, scrapped
@@ -363,6 +374,17 @@ db.exec(`
     FOREIGN KEY(recurring_invoice_id) REFERENCES recurring_invoices(id)
   );
 
+  CREATE TABLE IF NOT EXISTS transaction_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_type TEXT,
+    file_size INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS exchange_rates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_currency TEXT NOT NULL,
@@ -373,6 +395,20 @@ db.exec(`
     UNIQUE(from_currency, to_currency)
   );
 `);
+
+try {
+  db.prepare("ALTER TABLE assets ADD COLUMN depreciation_method TEXT DEFAULT 'linear'").run();
+  db.prepare("ALTER TABLE assets ADD COLUMN declining_coefficient REAL").run();
+} catch (e) {
+  // Columns likely already exist
+}
+
+// Migration to add description to journal_entries
+try {
+  db.prepare("ALTER TABLE journal_entries ADD COLUMN description TEXT").run();
+} catch (e) {
+  // Column likely already exists
+}
 
 // Migration to add VAT columns if they don't exist
 try {
@@ -436,6 +472,35 @@ db.exec(`
     is_active BOOLEAN DEFAULT 1
   );
 
+  CREATE TABLE IF NOT EXISTS payroll_tax_brackets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tax_code TEXT NOT NULL, -- CN, IGR
+    min_value REAL NOT NULL,
+    max_value REAL,
+    rate REAL NOT NULL,
+    deduction REAL DEFAULT 0,
+    FOREIGN KEY(tax_code) REFERENCES tax_rules(code)
+  );
+
+  CREATE TABLE IF NOT EXISTS payroll_tax_reductions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    marital_status TEXT NOT NULL,
+    children_count INTEGER NOT NULL,
+    parts REAL NOT NULL,
+    UNIQUE(marital_status, children_count)
+  );
+
+  CREATE TABLE IF NOT EXISTS payroll_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'bonus', 'deduction'
+    formula TEXT, -- Formula for calculation
+    is_taxable BOOLEAN DEFAULT 1,
+    is_social_taxable BOOLEAN DEFAULT 1,
+    is_active BOOLEAN DEFAULT 1
+  );
+
   CREATE TABLE IF NOT EXISTS vat_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     rate REAL NOT NULL,
@@ -490,6 +555,73 @@ if (checkRules.get().count === 0) {
     for (const rule of rules) insertRule.run(rule);
   });
   insertManyRules(rules);
+}
+
+// Seed Payroll Tax Brackets (Standard Ivory Coast Brackets)
+const checkBrackets = db.prepare('SELECT COUNT(*) as count FROM payroll_tax_brackets');
+if (checkBrackets.get().count === 0) {
+  const brackets = [
+    // CN (Contribution Nationale)
+    ['CN', 0, 50000, 0, 0],
+    ['CN', 50000, 130000, 0.015, 750],
+    ['CN', 130000, 200000, 0.05, 5300],
+    ['CN', 200000, null, 0.10, 15300],
+    
+    // IGR (Impôt Général sur le Revenu) - Progressive tranches per part
+    ['IGR', 0, 25000, 0, 0],
+    ['IGR', 25000, 45500, 0.10, 2500],
+    ['IGR', 45500, 81500, 0.15, 4775],
+    ['IGR', 81500, 126500, 0.20, 8850],
+    ['IGR', 126500, 220000, 0.25, 15175],
+    ['IGR', 220000, 389000, 0.35, 37175],
+    ['IGR', 389000, 842000, 0.45, 76075],
+    ['IGR', 842000, null, 0.60, 202375]
+  ];
+  
+  const insertBracket = db.prepare('INSERT INTO payroll_tax_brackets (tax_code, min_value, max_value, rate, deduction) VALUES (?, ?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const b of brackets) insertBracket.run(b);
+  })();
+}
+
+// Seed Tax Reductions (Parts computation)
+const checkReductions = db.prepare('SELECT COUNT(*) as count FROM payroll_tax_reductions');
+if (checkReductions.get().count === 0) {
+  const reductions = [
+    ['single', 0, 1],
+    ['single', 1, 2],
+    ['single', 2, 2.5],
+    ['single', 3, 3],
+    ['single', 4, 3.5],
+    ['single', 5, 4],
+    ['married', 0, 2],
+    ['married', 1, 2.5],
+    ['married', 2, 3],
+    ['married', 3, 3.5],
+    ['married', 4, 4],
+    ['married', 5, 4.5]
+  ];
+  
+  const insertReduction = db.prepare('INSERT INTO payroll_tax_reductions (marital_status, children_count, parts) VALUES (?, ?, ?)');
+  db.transaction(() => {
+    for (const r of reductions) insertReduction.run(r);
+  })();
+}
+
+// Seed some sample Payroll rules (Bonuses/Deductions)
+const checkPayrollRules = db.prepare('SELECT COUNT(*) as count FROM payroll_rules');
+if (checkPayrollRules.get().count === 0) {
+  const pRules = [
+    ['PRIME_ANC', 'Prime d\'Ancienneté', 'bonus', 'base_salary * seniority_years * 0.01', 1, 1],
+    ['IND_TRP', 'Indemnité de Transport', 'bonus', 'fixed', 0, 0],
+    ['IND_LOG', 'Indemnité de Logement', 'bonus', 'base_salary * 0.10', 1, 1],
+    ['RETR_MU', 'Retenue Mutuelle', 'deduction', 'base_salary * 0.02', 0, 0]
+  ];
+  
+  const insertPRule = db.prepare('INSERT INTO payroll_rules (code, name, type, formula, is_taxable, is_social_taxable) VALUES (?, ?, ?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const r of pRules) insertPRule.run(r);
+  })();
 }
 
 // Seed initial fiscal year if none exists
@@ -889,6 +1021,17 @@ const paymentModeCols = [
 ];
 
 for (const [col, type] of paymentModeCols) {
+  try {
+    db.prepare(`ALTER TABLE company_settings ADD COLUMN ${col} ${type}`).run();
+  } catch (e) {}
+}
+
+const payrollCompanyCols = [
+  ['cnps_employer_number', 'TEXT'],
+  ['tax_office', 'TEXT']
+];
+
+for (const [col, type] of payrollCompanyCols) {
   try {
     db.prepare(`ALTER TABLE company_settings ADD COLUMN ${col} ${type}`).run();
   } catch (e) {}

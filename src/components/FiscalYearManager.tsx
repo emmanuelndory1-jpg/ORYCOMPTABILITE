@@ -48,7 +48,6 @@ export function FiscalYearManager() {
       if (res.ok) {
         await refreshActiveYear();
         fetchYears();
-        window.location.reload();
       }
     } catch (err) {
       console.error(err);

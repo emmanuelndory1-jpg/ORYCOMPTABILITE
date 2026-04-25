@@ -1,11 +1,14 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { MessageSquareText, X, Send, Loader2, Sparkles, Maximize2, Minimize2, Camera, Image as ImageIcon, Paperclip, Trash2, ChevronRight, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GoogleGenAI } from "@google/genai";
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
 import { useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
+import { SafeImage } from './SafeImage';
+import { askAssistant } from '@/services/geminiService';
+import { useCurrency } from '@/hooks/useCurrency';
+import { useFiscalYear } from '@/context/FiscalYearContext';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -22,10 +25,13 @@ export function FloatingAdvisor() {
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { user } = useAuth();
   const location = useLocation();
+  const { formatCurrency, currency } = useCurrency();
+  const { activeYear } = useFiscalYear();
 
   const suggestions = useMemo(() => {
     const defaultSuggestions = ["Expliquer la TVA OHADA", "Aide saisie facture", "Règles d'amortissement"];
@@ -70,44 +76,59 @@ export function FloatingAdvisor() {
       image: selectedImage || undefined
     };
 
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
     setInput('');
     const currentImage = selectedImage;
     setSelectedImage(null);
-    setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
-      const parts: any[] = [{ text: `Tu es le conseiller intelligent d'ORYCOMPTABILITE, une solution comptable pour l'espace OHADA. L'utilisateur s'appelle ${user?.name || 'Utilisateur'}. Réponds de manière professionnelle, concise et aidante. Si l'utilisateur pose une question sur sa comptabilité, explique-lui les concepts OHADA si nécessaire. Voici sa question : ${messageText}` }];
-      
-      if (currentImage) {
-        const base64Data = currentImage.split(',')[1];
-        const mimeType = currentImage.split(';')[0].split(':')[1];
-        parts.push({
-          inlineData: {
-            data: base64Data,
-            mimeType: mimeType
-          }
-        });
-      }
+      const context = {
+        userName: user?.name,
+        userEmail: user?.email,
+        currentPath: location.pathname,
+        currency: currency,
+        fiscalYear: activeYear?.name,
+        timestamp: new Date().toISOString()
+      };
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [{ role: 'user', parts }],
-        config: {
-          systemInstruction: "Tu es un expert comptable spécialisé dans le système OHADA. Tu aides les entrepreneurs à gérer leur comptabilité sur la plateforme OryCompta. Sois précis, utilise un ton professionnel mais accessible. Utilise le format Markdown pour tes réponses (gras, listes, tableaux si nécessaire)."
-        }
-      });
-
-      const text = response.text || "Désolé, je n'ai pas pu générer de réponse.";
-      setMessages(prev => [...prev, { role: 'assistant', content: text }]);
+      const response = await askAssistant(messageText, newMessages, context);
+      setMessages(prev => [...prev, { role: 'assistant', content: response }]);
     } catch (error) {
       console.error('AI Error:', error);
       setMessages(prev => [...prev, { role: 'assistant', content: "Désolé, j'ai rencontré une erreur technique. Veuillez réessayer plus tard." }]);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleClearChat = () => {
+    setMessages([
+      { role: 'assistant', content: 'Chat réinitialisé. Comment puis-je vous aider ?' }
+    ]);
+  };
+
+  const startVoiceInput = () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      alert("La reconnaissance vocale n'est pas supportée par votre navigateur.");
+      return;
+    }
+
+    // @ts-ignore
+    const recognition = new window.webkitSpeechRecognition();
+    recognition.lang = 'fr-FR';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+    };
+
+    recognition.start();
   };
 
   return (
@@ -139,6 +160,13 @@ export function FloatingAdvisor() {
               </div>
               <div className="flex items-center gap-1">
                 <button 
+                  onClick={handleClearChat}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors text-slate-400 hover:text-white"
+                  title="Effacer la conversation"
+                >
+                  <Trash2 size={18} />
+                </button>
+                <button 
                   onClick={() => setIsExpanded(!isExpanded)}
                   className="p-2 hover:bg-white/10 rounded-lg transition-colors text-slate-400 hover:text-white"
                 >
@@ -168,7 +196,7 @@ export function FloatingAdvisor() {
                   )}
                 >
                   {msg.image && (
-                    <img 
+                    <SafeImage 
                       src={msg.image} 
                       alt="Uploaded" 
                       className="w-full max-h-48 object-cover rounded-xl mb-3 border border-white/20 shadow-sm" 
@@ -214,7 +242,12 @@ export function FloatingAdvisor() {
             <div className="p-4 bg-white border-t border-slate-100">
               {selectedImage && (
                 <div className="mb-3 relative inline-block">
-                  <img src={selectedImage} alt="Preview" className="w-16 h-16 object-cover rounded-lg border-2 border-brand-green" />
+                  <SafeImage 
+                    src={selectedImage} 
+                    alt="Preview" 
+                    className="w-16 h-16 object-cover rounded-lg border-2 border-brand-green" 
+                    referrerPolicy="no-referrer"
+                  />
                   <button 
                     onClick={() => setSelectedImage(null)}
                     className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 shadow-lg"
@@ -237,6 +270,17 @@ export function FloatingAdvisor() {
                   title="Joindre une image"
                 >
                   <ImageIcon size={20} />
+                </button>
+                <button
+                  onClick={startVoiceInput}
+                  className={cn(
+                    "p-2 rounded-xl transition-all",
+                    isListening ? "text-rose-500 bg-rose-50 animate-pulse" : "text-slate-400 hover:text-brand-green hover:bg-slate-100"
+                  )}
+                  title="Entrée vocale"
+                >
+                  <Loader2 size={20} className={cn(!isListening && "hidden", "animate-spin")} />
+                  {!isListening && <MessageSquareText size={20} />}
                 </button>
                 <input
                   type="text"
