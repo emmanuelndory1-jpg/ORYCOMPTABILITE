@@ -1,0 +1,21 @@
+version: "3.8"
+services:
+  compta-app:
+    build: .
+    container_name: compta-app
+    ports:
+      - "3000:3000"
+    volumes:
+      - compta-data:/app/data
+      - compta-uploads:/app/uploads
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_PATH=/app/data/compta.db
+      - UPLOAD_DIR=/app/uploads
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    restart: unless-stopped
+
+volumes:
+  compta-data:
+  compta-uploads:

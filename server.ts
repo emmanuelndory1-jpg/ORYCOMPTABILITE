@@ -23,6 +23,110 @@ declare global {
   }
 }
 
+
+import { Response } from 'express';
+
+export class AppError extends Error {
+  statusCode: number;
+  type: string;
+  constructor(message: string, statusCode: number, type: string) {
+    super(message);
+    this.statusCode = statusCode;
+    this.type = type;
+  }
+}
+
+export function handleApiError(res: Response, err: any) {
+  console.error("API Error:", err);
+
+  if (err instanceof z.ZodError) {
+    return res.status(400).json({
+      type: "validation_error",
+      error: "Données invalides",
+      message: "Données invalides",
+      details: err.errors
+    });
+  }
+
+  // Handle SQLite Errors
+  if (err.name === 'SqliteError' && err.code) {
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({
+        type: "database_error",
+        error: "Une ressource avec cette valeur existe déjà",
+        message: "Une ressource avec cette valeur existe déjà",
+        details: err.message
+      });
+    }
+    if (err.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+      return res.status(400).json({
+        type: "database_error",
+        error: "Référence à une ressource inexistante ou liée",
+        message: "Référence à une ressource inexistante ou liée",
+        details: err.message
+      });
+    }
+    if (err.code === 'SQLITE_CONSTRAINT_NOTNULL') {
+      return res.status(400).json({
+        type: "database_error",
+        error: "Un champ obligatoire est manquant",
+        message: "Un champ obligatoire est manquant",
+        details: err.message
+      });
+    }
+    return res.status(500).json({
+      type: "database_error",
+      error: "Erreur de base de données",
+      message: "Erreur de base de données",
+      details: err.message
+    });
+  }
+
+  if (err.name === 'TokenExpiredError') {
+    return res.status(401).json({
+      type: "auth_error",
+      error: "Session expirée, veuillez vous reconnecter",
+      message: "Session expirée, veuillez vous reconnecter"
+    });
+  }
+  
+  if (err.name === 'JsonWebTokenError') {
+    return res.status(401).json({
+      type: "auth_error",
+      error: "Token invalide",
+      message: "Token invalide"
+    });
+  }
+  
+  // Axios Network errors
+  if (err.isAxiosError) {
+     return res.status(err.response?.status || 502).json({
+        type: "network_error",
+        error: "Erreur de communication avec un service externe",
+        message: "Erreur de communication avec un service externe",
+        details: err.message
+     });
+  }
+
+  if (err instanceof AppError) {
+    return res.status(err.statusCode).json({
+      type: err.type,
+      error: err.message,
+      message: err.message
+    });
+  }
+
+  // Fallback
+  const status = err.statusCode || 500;
+  const type = err.type || (status < 500 ? "client_error" : "server_error");
+  
+  res.status(status).json({
+    type,
+    error: err.message || "Une erreur interne du serveur est survenue",
+    message: err.message || "Une erreur interne du serveur est survenue"
+  });
+}
+
 const app = express();
 app.set('trust proxy', 1); // Trust first proxy (required for rate limiting behind nginx)
 const PORT = 3000;
@@ -313,7 +417,7 @@ app.use('/api', authenticateToken);
 // --- Multer Configuration ---
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(process.cwd(), 'uploads');
+    const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -406,7 +510,7 @@ app.post('/api/auth/google', async (req, res) => {
     });
   } catch (err) {
     console.error('Google Auth Error:', err);
-    res.status(500).json({ error: "Une erreur est survenue lors de la connexion Google" });
+    handleApiError(res, new AppError("Une erreur est survenue lors de la connexion Google" , 500, "server_error"));
   }
 });
 
@@ -456,7 +560,7 @@ app.get('/api/audit-logs', (req, res) => {
     res.json(logs);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Erreur lors de la récupération des logs" });
+    handleApiError(res, new AppError("Erreur lors de la récupération des logs" , 500, "server_error"));
   }
 });
 
@@ -502,7 +606,7 @@ app.post('/api/auth/register', validate(schemas.registerSchema), async (req, res
     }
   } catch (err) {
     console.error("Registration error:", err);
-    res.status(500).json({ error: "Erreur lors de l'inscription" });
+    handleApiError(res, new AppError("Erreur lors de l'inscription" , 500, "server_error"));
   }
 });
 
@@ -546,7 +650,7 @@ app.post('/api/auth/login', validate(schemas.loginSchema), async (req, res) => {
     });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: "Une erreur est survenue lors de la connexion" });
+    handleApiError(res, new AppError("Une erreur est survenue lors de la connexion" , 500, "server_error"));
   }
 });
 
@@ -576,7 +680,7 @@ app.get("/api/audit-logs", (req, res) => {
     const logs = stmt.all();
     res.json(logs);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -586,7 +690,7 @@ app.get("/api/fiscal-years", (req, res) => {
     const years = db.prepare("SELECT * FROM fiscal_years ORDER BY start_date DESC").all();
     res.json(years);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -595,7 +699,7 @@ app.get("/api/fiscal-years/active", (req, res) => {
     const year = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
     res.json(year || null);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -621,7 +725,7 @@ app.post("/api/fiscal-years", (req, res) => {
     logAction(req.user?.email || 'Admin', 'CREATE', 'FiscalYear', info.lastInsertRowid, { name, start_date, end_date });
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -635,7 +739,7 @@ app.put("/api/fiscal-years/:id/activate", (req, res) => {
     logAction(req.user?.email || 'Admin', 'ACTIVATE', 'FiscalYear', id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -646,7 +750,7 @@ app.put("/api/fiscal-years/:id/close", (req, res) => {
     logAction(req.user?.email || 'Admin', 'CLOSE', 'FiscalYear', id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -663,7 +767,7 @@ app.get("/api/advances", (req, res) => {
     `).all();
     res.json(advances);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -678,7 +782,7 @@ app.post("/api/advances", (req, res) => {
     logAction(req.user?.email || 'Admin', 'CREATE', 'SalaryAdvance', info.lastInsertRowid, { employee_id, amount, date });
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -696,7 +800,7 @@ app.put("/api/advances/:id", (req, res) => {
     logAction(req.user?.email || 'Admin', 'UPDATE', 'SalaryAdvance', id, { amount, date });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -706,7 +810,7 @@ app.delete("/api/advances/:id", (req, res) => {
     db.prepare("DELETE FROM salary_advances WHERE id = ? AND status = 'pending'").run(id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -717,7 +821,7 @@ app.get("/api/employees/:id/advances/pending", (req, res) => {
     const advances = db.prepare("SELECT * FROM salary_advances WHERE employee_id = ? AND status = 'pending'").all(id);
     res.json(advances);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -743,7 +847,7 @@ app.get("/api/assets/stats", (req, res) => {
       count: assets.length
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -754,7 +858,7 @@ app.get("/api/assets", (req, res) => {
     const assets = stmt.all();
     res.json(assets);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -826,7 +930,7 @@ app.post("/api/assets", (req, res) => {
     createNotification('success', 'Nouvelle immobilisation', `L'actif ${name} (${type}) a été enregistré avec succès.`, '/assets');
     res.json({ success: true, transactionId: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -843,7 +947,7 @@ app.get("/api/assets/:id", (req, res) => {
 
     res.json(asset);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -871,7 +975,7 @@ app.get("/api/assets/:id/depreciation-schedule", (req, res) => {
 
     res.json({ schedule: scheduleWithStatus });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -893,7 +997,7 @@ app.get("/api/assets/pending-depreciations-count", (req, res) => {
 
     res.json({ count });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -955,7 +1059,7 @@ app.post("/api/assets/generate-monthly-depreciations", (req, res) => {
     transaction();
     res.json({ success: true, count: results.length, details: results });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1024,7 +1128,7 @@ app.post("/api/assets/:id/record-depreciation", (req, res) => {
     logAction('User', 'RECORD_DEPRECIATION', 'Asset', id, { type, period, amount });
     res.json({ success: true, transactionId: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1144,7 +1248,7 @@ app.post("/api/assets/:id/sell", (req, res) => {
     res.json({ success: true, ...result });
   } catch (err) {
     console.error("Sale error:", err);
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1283,7 +1387,7 @@ app.get("/api/recurring-transactions", (req, res) => {
     }
     res.json(transactions);
   } catch (error) {
-    res.status(500).json({ error: "Erreur lors de la récupération des écritures récurrentes" });
+    handleApiError(res, new AppError("Erreur lors de la récupération des écritures récurrentes" , 500, "server_error"));
   }
 });
 
@@ -1316,7 +1420,7 @@ app.post("/api/recurring-transactions", (req, res) => {
     res.json({ id, success: true });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Erreur lors de la création de l'écriture récurrente" });
+    handleApiError(res, new AppError("Erreur lors de la création de l'écriture récurrente" , 500, "server_error"));
   }
 });
 
@@ -1328,7 +1432,7 @@ app.post("/api/recurring-transactions/:id/process", (req, res) => {
     if (success) res.json({ success: true });
     else res.status(400).json({ error: "Impossible de traiter cette écriture (échéance non atteinte ou limite atteinte)" });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleApiError(res, error);
   }
 });
 
@@ -1346,7 +1450,7 @@ app.post("/api/recurring-transactions/process-all", (req, res) => {
     
     res.json({ success: true, processedCount });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    handleApiError(res, error);
   }
 });
 
@@ -1380,7 +1484,7 @@ app.patch("/api/recurring-transactions/:id", (req, res) => {
     
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Erreur lors de la mise à jour" });
+    handleApiError(res, new AppError("Erreur lors de la mise à jour" , 500, "server_error"));
   }
 });
 
@@ -1390,7 +1494,7 @@ app.delete("/api/recurring-transactions/:id", (req, res) => {
     db.prepare("DELETE FROM recurring_transactions WHERE id = ?").run(id);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Erreur lors de la suppression" });
+    handleApiError(res, new AppError("Erreur lors de la suppression" , 500, "server_error"));
   }
 });
 
@@ -1525,7 +1629,7 @@ app.get("/api/notifications", authenticateToken, (req, res) => {
     res.json(notifications || []);
   } catch (error) {
     console.error('Error fetching notifications:', error);
-    res.status(500).json({ error: "Failed to fetch notifications" });
+    handleApiError(res, new AppError("Failed to fetch notifications" , 500, "server_error"));
   }
 });
 
@@ -1534,7 +1638,7 @@ app.post("/api/notifications/:id/read", (req, res) => {
     db.prepare("UPDATE notifications SET is_read = 1 WHERE id = ?").run(req.params.id);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to mark notification as read" });
+    handleApiError(res, new AppError("Failed to mark notification as read" , 500, "server_error"));
   }
 });
 
@@ -1543,7 +1647,7 @@ app.post("/api/notifications/read-all", (req, res) => {
     db.prepare("UPDATE notifications SET is_read = 1").run();
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to mark all notifications as read" });
+    handleApiError(res, new AppError("Failed to mark all notifications as read" , 500, "server_error"));
   }
 });
 
@@ -1552,7 +1656,7 @@ app.delete("/api/notifications/:id", (req, res) => {
     db.prepare("DELETE FROM notifications WHERE id = ?").run(req.params.id);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Failed to delete notification" });
+    handleApiError(res, new AppError("Failed to delete notification" , 500, "server_error"));
   }
 });
 
@@ -1562,7 +1666,7 @@ app.get("/api/company/status", (req, res) => {
     const result = stmt.get();
     res.json({ created: result.count > 0 });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1722,7 +1826,7 @@ app.post("/api/company/create", (req, res) => {
     res.json({ success: true, companyId });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1754,7 +1858,7 @@ app.get("/api/company/modules", (req, res) => {
 
     res.json(allModules);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1786,7 +1890,7 @@ app.put("/api/company/modules/:key", (req, res) => {
       }
       res.json({ success: true });
     } catch (innerErr) {
-      res.status(500).json({ error: innerErr.message });
+      handleApiError(res, new AppError(innerErr.message , 500, "server_error"));
     }
   }
 });
@@ -1805,7 +1909,7 @@ app.get("/api/audit-logs", (req, res) => {
     
     res.json({ logs, total: total.count });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1920,7 +2024,7 @@ app.get("/api/treasury", (req, res) => {
       forecastData: dailyBalances
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -1966,7 +2070,7 @@ app.post("/api/treasury/transfer", (req, res) => {
     logAction('Admin', 'TRANSFER', 'Treasury', txId, { fromAccount, toAccount, amount });
     res.json({ success: true, transactionId: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2071,7 +2175,7 @@ app.get("/api/third-parties", (req, res) => {
     
     res.json(partiesWithBalance);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2119,7 +2223,7 @@ app.get("/api/third-parties/defaults", (req, res) => {
     
     res.json(defaults);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2185,7 +2289,7 @@ app.post("/api/third-parties", (req, res) => {
     createNotification('success', 'Nouveau tiers créé', `Le tiers ${name} (${type}) a été créé avec succès.`, '/third-parties');
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2211,7 +2315,7 @@ app.put("/api/third-parties/:id", (req, res) => {
     logAction('User', 'UPDATE', 'ThirdParty', id, { name });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2240,7 +2344,7 @@ app.delete("/api/third-parties/:id", (req, res) => {
     logAction('User', 'DELETE', 'ThirdParty', id, {});
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2297,7 +2401,7 @@ app.post("/api/third-parties/:id/payment", (req, res) => {
     res.json({ success: true, transactionId: txId });
     
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2384,7 +2488,7 @@ app.get("/api/reports/aged-balance", (req, res) => {
     
     res.json(report);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2428,7 +2532,7 @@ app.get("/api/third-parties/:id/transactions", (req, res) => {
 
     res.json(transactionsWithRunningBalance);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2465,7 +2569,7 @@ app.get("/api/company/dossier", (req, res) => {
 
     res.json({ settings, transactions, balanceSheet });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2475,7 +2579,7 @@ app.get("/api/company/settings", (req, res) => {
     const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
     res.json(settings || {});
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2551,7 +2655,7 @@ app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial(
 
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2561,7 +2665,7 @@ app.get("/api/exchange-rates", (req, res) => {
     const rates = db.prepare("SELECT * FROM exchange_rates ORDER BY from_currency, to_currency").all();
     res.json(rates);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2579,7 +2683,7 @@ app.post("/api/exchange-rates", (req, res) => {
     stmt.run(from_currency, to_currency, rate, is_default ? 1 : 0);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2589,7 +2693,7 @@ app.delete("/api/exchange-rates/:id", (req, res) => {
     db.prepare("DELETE FROM exchange_rates WHERE id = ?").run(id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2742,7 +2846,7 @@ app.get("/api/recurring-invoices", (req, res) => {
     `).all();
     res.json(recurring);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2760,7 +2864,7 @@ app.get("/api/recurring-invoices/:id", (req, res) => {
     const items = db.prepare("SELECT * FROM recurring_invoice_items WHERE recurring_invoice_id = ?").all(id);
     res.json({ ...ri, items });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2790,7 +2894,7 @@ app.post("/api/recurring-invoices", (req, res) => {
     logAction(req.user?.name || 'Admin', 'CREATE', 'RecurringInvoice', id);
     res.json({ success: true, id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2821,7 +2925,7 @@ app.put("/api/recurring-invoices/:id", (req, res) => {
     logAction(req.user?.name || 'Admin', 'UPDATE', 'RecurringInvoice', id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2831,7 +2935,7 @@ app.delete("/api/recurring-invoices/:id", (req, res) => {
     db.prepare("DELETE FROM recurring_invoices WHERE id = ?").run(id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -2910,7 +3014,7 @@ app.post("/api/payment/init", async (req, res) => {
     }
   } catch (err) {
     console.error('Payment Init Error:', err);
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3020,7 +3124,7 @@ app.post("/api/payment/webhook", async (req, res) => {
     
   } catch (err) {
     console.error('Webhook Error:', err);
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3064,7 +3168,7 @@ app.post("/api/payment/mock-confirm", (req, res) => {
      transaction();
      res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3085,7 +3189,7 @@ app.get("/api/subscription/status", (req, res) => {
       res.json({ active: false, plan_name: 'free', max_users: 1 });
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3148,11 +3252,7 @@ app.get("/api/health/full", (req, res) => {
     res.json(diagnostics);
 
   } catch (err) {
-    res.status(500).json({ 
-      error: "System Diagnostic Failed", 
-      details: err.message,
-      partial_results: diagnostics 
-    });
+    handleApiError(res, err);
   }
 });
 
@@ -3174,7 +3274,7 @@ app.post("/api/accounts", validate(schemas.accountSchema), (req, res) => {
     logAction(req.user?.email || 'Admin', 'CREATE', 'Account', code, { name, type });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3188,7 +3288,7 @@ app.put("/api/accounts/:code", validate(schemas.accountSchema.partial()), (req, 
     logAction(req.user?.email || 'Admin', 'UPDATE', 'Account', code, { name, type });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3206,7 +3306,7 @@ app.delete("/api/accounts/:code", (req, res) => {
     logAction(req.user?.email || 'Admin', 'DELETE', 'Account', code);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3274,7 +3374,7 @@ app.get("/api/journal/suggestions", authenticateToken, (req, res) => {
     res.json(suggestions);
   } catch (err) {
     console.error("Error fetching journal suggestions:", err);
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3350,7 +3450,7 @@ app.get("/api/transactions", (req, res) => {
     const transactions = stmt.all(...params);
     res.json(transactions);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3419,7 +3519,7 @@ app.get("/api/journal/export", (req, res) => {
     
     res.json(transactions);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3488,7 +3588,7 @@ app.post("/api/transactions", validate(schemas.transactionSchema), (req, res) =>
     createNotification('success', 'Nouvelle transaction', `La transaction "${description}" a été enregistrée avec succès.`, '/journal');
     res.json({ success: true, id: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3516,7 +3616,7 @@ app.get("/api/transactions/:id", (req, res) => {
     const attachments = db.prepare("SELECT * FROM transaction_attachments WHERE transaction_id = ?").all(id);
     res.json({ ...transaction, entries, attachments });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3583,7 +3683,7 @@ app.put("/api/transactions/:id", (req, res) => {
     logAction('Admin', 'UPDATE', 'Transaction', id, { date, description, entries });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3635,7 +3735,7 @@ app.delete("/api/transactions/:id", (req, res) => {
     logAction('Admin', 'DELETE', 'Transaction', id, { id });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3729,7 +3829,7 @@ app.post("/api/transactions/:id/generate-invoice", (req, res) => {
     res.json({ success: true, id: newId, number: nextNumber });
   } catch (error) {
     console.error('Error generating invoice:', error);
-    res.status(500).json({ error: 'Erreur lors de la génération de la facture' });
+    handleApiError(res, new AppError('Erreur lors de la génération de la facture' , 500, "server_error"));
   }
 });
 
@@ -3781,7 +3881,7 @@ app.post("/api/transactions/bulk-delete", (req, res) => {
     logAction('Admin', 'DELETE_BULK', 'Transaction', null, { count: ids.length });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3795,7 +3895,7 @@ app.get("/api/custom-operations", (req, res) => {
     }));
     res.json(ops);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -3807,7 +3907,7 @@ app.post("/api/custom-operations", (req, res) => {
     logAction(req.user?.email || 'Admin', 'CREATE', 'CustomOperation', info.lastInsertRowid, { label });
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4027,7 +4127,7 @@ app.get("/api/compliance/audit", (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4105,7 +4205,7 @@ app.get("/api/dashboard/stats", (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4160,7 +4260,7 @@ app.get("/api/dashboard/charts", (req, res) => {
 
     res.json(chartData);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4206,7 +4306,7 @@ app.get("/api/dashboard/breakdown", (req, res) => {
 
     res.json(breakdownData);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4258,7 +4358,7 @@ app.get("/api/dashboard/ratios", (req, res) => {
       roi: assets !== 0 ? parseFloat((netIncome / assets * 100).toFixed(1)) : 0
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4284,7 +4384,7 @@ app.get("/api/dashboard/recent", (req, res) => {
     const recent = recentStmt.all(startDate, endDate);
     res.json(recent);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4295,7 +4395,7 @@ app.get("/api/accounts/expenses", (req, res) => {
     const accounts = stmt.all();
     res.json(accounts);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4311,7 +4411,7 @@ app.get("/api/budgets", (req, res) => {
     const budgets = stmt.all(year, month);
     res.json(budgets);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4326,7 +4426,7 @@ app.post("/api/budgets", (req, res) => {
     stmt.run(account_code, amount, period_month, period_year);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4375,7 +4475,7 @@ app.get("/api/dashboard/budget-vs-actual", (req, res) => {
 
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4444,7 +4544,7 @@ app.get('/api/dashboard/cashflow-forecast', (req, res) => {
     res.json(forecast);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Erreur serveur" });
+    handleApiError(res, new AppError("Erreur serveur" , 500, "server_error"));
   }
 });
 
@@ -4457,7 +4557,7 @@ app.get('/api/users', (req, res) => {
     const users = db.prepare('SELECT id, email, name, role, created_at FROM users').all();
     res.json(users);
   } catch (err) {
-    res.status(500).json({ error: "Erreur serveur" });
+    handleApiError(res, new AppError("Erreur serveur" , 500, "server_error"));
   }
 });
 
@@ -4475,7 +4575,7 @@ app.post('/api/users', async (req, res) => {
     
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: "Erreur lors de la création" });
+    handleApiError(res, new AppError("Erreur lors de la création" , 500, "server_error"));
   }
 });
 
@@ -4496,7 +4596,7 @@ app.put('/api/users/:id', async (req, res) => {
     
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: "Erreur lors de la modification" });
+    handleApiError(res, new AppError("Erreur lors de la modification" , 500, "server_error"));
   }
 });
 
@@ -4514,7 +4614,7 @@ app.delete('/api/users/:id', (req, res) => {
     
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: "Erreur lors de la suppression" });
+    handleApiError(res, new AppError("Erreur lors de la suppression" , 500, "server_error"));
   }
 });
 
@@ -4671,7 +4771,7 @@ app.get("/api/financial-statements", (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4715,7 +4815,7 @@ app.get("/api/ai/audit-data", async (req, res) => {
 
     res.json({ ca, charges, cash, topExpenses });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4734,7 +4834,7 @@ app.get("/api/ai/reconcile-data", async (req, res) => {
 
     res.json({ bankEntries, internalEntries });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4803,7 +4903,7 @@ app.get("/api/reports/general-ledger", (req, res) => {
 
     res.json(Object.values(ledger));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4850,7 +4950,7 @@ app.get("/api/reports/trial-balance", (req, res) => {
 
     res.json(trialBalance);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4878,7 +4978,7 @@ app.post("/api/transactions/:id/attachments", upload.array('files'), (req, res) 
     transaction();
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4888,7 +4988,7 @@ app.get("/api/transactions/:id/attachments", (req, res) => {
     const attachments = db.prepare("SELECT * FROM transaction_attachments WHERE transaction_id = ?").all(id);
     res.json(attachments);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4898,14 +4998,15 @@ app.get("/api/attachments/:id", (req, res) => {
     const attachment = db.prepare("SELECT * FROM transaction_attachments WHERE id = ?").get(id) as any;
     if (!attachment) return res.status(404).json({ error: "Pièce jointe non trouvée" });
 
-    const filePath = path.join(process.cwd(), 'uploads', attachment.file_path);
+    const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
+    const filePath = path.join(uploadDir, attachment.file_path);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: "Fichier physique non trouvé" });
     }
 
     res.sendFile(filePath);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -4915,7 +5016,8 @@ app.delete("/api/attachments/:id", (req, res) => {
     const attachment = db.prepare("SELECT * FROM transaction_attachments WHERE id = ?").get(id) as any;
     if (!attachment) return res.status(404).json({ error: "Pièce jointe non trouvée" });
 
-    const filePath = path.join(process.cwd(), 'uploads', attachment.file_path);
+    const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
+    const filePath = path.join(uploadDir, attachment.file_path);
     
     db.prepare("DELETE FROM transaction_attachments WHERE id = ?").run(id);
     
@@ -4925,7 +5027,7 @@ app.delete("/api/attachments/:id", (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5005,7 +5107,7 @@ app.get("/api/reports/custom", (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5095,7 +5197,7 @@ app.get("/api/vat/declaration", (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5106,7 +5208,7 @@ app.get("/api/vat-settings", (req, res) => {
     const settings = db.prepare("SELECT * FROM vat_settings ORDER BY rate DESC").all();
     res.json(settings);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5120,7 +5222,7 @@ app.post("/api/vat-settings", (req, res) => {
     const result = stmt.run(rate, label, account_collected, account_deductible);
     res.json({ id: result.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5135,7 +5237,7 @@ app.put("/api/vat-settings/:id", (req, res) => {
     stmt.run(rate, label, account_collected, account_deductible, is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5144,7 +5246,7 @@ app.delete("/api/vat-settings/:id", (req, res) => {
     db.prepare("DELETE FROM vat_settings WHERE id = ?").run(req.params.id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5270,7 +5372,7 @@ app.get("/api/tax/summary", (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5282,7 +5384,7 @@ app.get("/api/tax-rules", (req, res) => {
     const rules = db.prepare("SELECT * FROM tax_rules ORDER BY type, code").all();
     res.json(rules);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5307,7 +5409,7 @@ app.put("/api/tax-rules/:code", (req, res) => {
     logAction('Admin', 'UPDATE', 'TaxRule', code, { rate, ceiling, fixed_amount, is_active });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5319,7 +5421,7 @@ app.get("/api/payroll/brackets", (req, res) => {
     const brackets = db.prepare("SELECT * FROM payroll_tax_brackets ORDER BY tax_code, min_value").all();
     res.json(brackets);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5334,7 +5436,7 @@ app.put("/api/payroll/brackets/:id", (req, res) => {
     `).run(rate, min_value, max_value, deduction, id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5344,7 +5446,7 @@ app.get("/api/payroll/reductions", (req, res) => {
     const reductions = db.prepare("SELECT * FROM payroll_tax_reductions ORDER BY marital_status, children_count").all();
     res.json(reductions);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5355,7 +5457,7 @@ app.put("/api/payroll/reductions/:id", (req, res) => {
     db.prepare("UPDATE payroll_tax_reductions SET parts = ? WHERE id = ?").run(parts, id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5365,7 +5467,7 @@ app.get("/api/payroll/rules", (req, res) => {
     const rules = db.prepare("SELECT * FROM payroll_rules ORDER BY type, name").all();
     res.json(rules);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5378,7 +5480,7 @@ app.post("/api/payroll/rules", (req, res) => {
     `).run(code, name, type, formula, is_taxable ? 1 : 0, is_social_taxable ? 1 : 0);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5393,7 +5495,7 @@ app.put("/api/payroll/rules/:id", (req, res) => {
     `).run(name, formula, is_taxable ? 1 : 0, is_social_taxable ? 1 : 0, is_active ? 1 : 0, id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5403,7 +5505,7 @@ app.delete("/api/payroll/rules/:id", (req, res) => {
     db.prepare("DELETE FROM payroll_rules WHERE id = ?").run(id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5480,7 +5582,7 @@ app.get("/api/employees", (req, res) => {
     const employees = stmt.all();
     res.json(employees);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5496,7 +5598,7 @@ app.post("/api/employees", (req, res) => {
     logAction('Admin', 'CREATE', 'Employee', info.lastInsertRowid, { firstName, lastName });
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5517,7 +5619,7 @@ app.put("/api/employees/:id", (req, res) => {
     logAction('Admin', 'UPDATE', 'Employee', id, { firstName, lastName, status });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5536,7 +5638,7 @@ app.get("/api/payroll/periods", (req, res) => {
       details: p.details ? JSON.parse(p.details) : null
     })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5555,7 +5657,7 @@ app.post("/api/payroll/periods", (req, res) => {
     logAction('Admin', 'CREATE', 'PayrollPeriod', info.lastInsertRowid, { month, year });
     res.json({ success: true, id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5650,7 +5752,7 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
     generate();
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5764,7 +5866,7 @@ app.put("/api/payslips/:id", (req, res) => {
     logAction('Admin', 'UPDATE', 'Payslip', id, { bonuses, deductions, bonusDetails });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5781,7 +5883,7 @@ app.get("/api/payroll/periods/:id/payslips", (req, res) => {
     const payslips = stmt.all(id);
     res.json(payslips);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5898,7 +6000,7 @@ app.post("/api/payroll/periods/:id/validate", (req, res) => {
     logAction('Admin', 'VALIDATE', 'PayrollPeriod', id, { transactionId: txId });
     res.json({ success: true, transactionId: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5954,7 +6056,7 @@ app.post("/api/payroll/periods/:id/pay", (req, res) => {
     logAction('Admin', 'PAY', 'PayrollPeriod', id, { transactionId: txId, account: paymentAccount });
     res.json({ success: true, transactionId: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -5975,7 +6077,7 @@ app.delete("/api/employees/:id", (req, res) => {
     logAction('Admin', 'DELETE', 'Employee', id, {});
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6020,7 +6122,7 @@ app.delete("/api/payroll/periods/:id", (req, res) => {
     logAction('Admin', 'DELETE', 'PayrollPeriod', id, {});
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6051,7 +6153,7 @@ app.get("/api/journal-entries", (req, res) => {
     const entries = db.prepare(query).all(...params);
     res.json(entries);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6060,7 +6162,7 @@ app.get("/api/bank-accounts", (req, res) => {
     const accounts = db.prepare("SELECT * FROM bank_accounts ORDER BY name ASC").all();
     res.json(accounts);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6075,7 +6177,7 @@ app.post("/api/bank-accounts", (req, res) => {
     logAction(req.user?.name || 'Admin', 'CREATE', 'BankAccount', info.lastInsertRowid, { name, bank_name, gl_account_code });
     res.json({ id: info.lastInsertRowid });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6092,7 +6194,7 @@ app.get("/api/bank-transactions/:accountId", (req, res) => {
     `).all(accountId);
     res.json(transactions);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6127,7 +6229,7 @@ app.post("/api/bank-accounts/:accountId/sync", (req, res) => {
     logAction(req.user?.name || 'Admin', 'SYNC', 'BankAccount', accountId, { count: mockTxs.length });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6154,7 +6256,7 @@ app.post("/api/bank-accounts/:accountId/import", (req, res) => {
     logAction(req.user?.name || 'Admin', 'IMPORT', 'BankAccount', accountId, { count: transactions.length });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6165,7 +6267,7 @@ app.post("/api/bank-reconciliation/match", (req, res) => {
     logAction(req.user?.name || 'Admin', 'MATCH', 'BankTransaction', bankTransactionId, { glId });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6176,7 +6278,7 @@ app.post("/api/bank-reconciliation/unmatch", (req, res) => {
     logAction(req.user?.name || 'Admin', 'UNMATCH', 'BankTransaction', bankTransactionId);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6225,7 +6327,7 @@ app.post("/api/bank-reconciliation/create-entry", (req, res) => {
     logAction(req.user?.name || 'Admin', 'CREATE', 'JournalEntry', glId, { bankTransactionId, accountCode });
     res.json({ success: true, glId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6249,7 +6351,7 @@ app.get("/api/invoices", (req, res) => {
     const invoices = db.prepare(query).all(...params);
     res.json(invoices);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6268,7 +6370,7 @@ app.get("/api/invoices/:id", (req, res) => {
     const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
     res.json({ ...invoice, items });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6342,7 +6444,7 @@ app.post("/api/invoices/:id/convert", (req, res) => {
     res.json({ success: true, id: newId, number: nextNumber });
   } catch (error) {
     console.error('Error converting quote:', error);
-    res.status(500).json({ error: 'Erreur lors de la conversion du devis' });
+    handleApiError(res, new AppError('Erreur lors de la conversion du devis' , 500, "server_error"));
   }
 });
 
@@ -6395,7 +6497,7 @@ app.post("/api/invoices", validate(z.object({
     createNotification('info', type === 'invoice' ? 'Nouvelle facture' : 'Nouveau devis', `Le document a été créé avec succès.`, '/invoicing');
     res.json({ success: true, id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6444,7 +6546,7 @@ app.put("/api/invoices/:id", (req, res) => {
     logAction(req.user?.name || 'Admin', 'UPDATE', 'Invoice/Quote', id);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6501,7 +6603,7 @@ app.post("/api/invoices/:id/validate", (req, res) => {
     logAction(req.user?.name || 'Admin', 'VALIDATE', 'Invoice', id, { transactionId: txId });
     res.json({ success: true, transactionId: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6547,7 +6649,7 @@ app.post("/api/invoices/:id/pay", (req, res) => {
     logAction(req.user?.name || 'Admin', 'PAY', 'Invoice', id, { transactionId: txId });
     res.json({ success: true, transactionId: txId });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6568,7 +6670,7 @@ app.post("/api/invoices/:id/send", (req, res) => {
     
     res.json({ success: true, message: "Email envoyé avec succès" });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6587,7 +6689,7 @@ app.get("/api/invoices/stats", (req, res) => {
     
     res.json(stats);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 
@@ -6607,7 +6709,7 @@ app.get("/api/revenue/monthly", (req, res) => {
     
     res.json(revenue);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    handleApiError(res, err);
   }
 });
 

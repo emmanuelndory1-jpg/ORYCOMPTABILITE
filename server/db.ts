@@ -1,7 +1,10 @@
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 
-const db = new Database('compta.db');
+const dbPath = process.env.DB_PATH || 'compta.db';
+const db = new Database(dbPath);
+
+console.log(`Database connected at ${dbPath}`);
 
 // Initialize database
 db.exec(`
