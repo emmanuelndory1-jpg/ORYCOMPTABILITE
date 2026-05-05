@@ -393,11 +393,18 @@ export const suggestCorrection = async (
   }
 };
 
+let lastInsightCache: { data: string, insight: string } | null = null;
+
 export const getQuickInsight = async (data: any) => {
   try {
+    const dataString = JSON.stringify(data);
+    if (lastInsightCache && lastInsightCache.data === dataString) {
+      return lastInsightCache.insight;
+    }
+
     const systemPrompt = `Tu es un conseiller financier stratégique ORY IA.
     Donne un SEUL conseil financier court, percutant et actionnable (max 18 mots) basé sur ces données actuelles de l'entreprise :
-    ${JSON.stringify(data)}
+    ${dataString}
     
     CONSIGNES :
     - Sois très spécifique. Si tu vois un risque de trésorerie, mentionne-le.
@@ -410,8 +417,15 @@ export const getQuickInsight = async (data: any) => {
       contents: systemPrompt,
     });
 
-    return response.text.trim();
-  } catch (error) {
+    const insight = response.text.trim();
+    lastInsightCache = { data: dataString, insight };
+    return insight;
+  } catch (error: any) {
+    const errorString = JSON.stringify(error);
+    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
+      console.warn("Gemini API rate limit exceeded for quick insight.");
+      return "Optimisation : Maintenez un suivi rigoureux de vos comptes clients pour sécuriser votre trésorerie ce mois-ci.";
+    }
     console.error("Error getting quick insight:", error);
     return null;
   }
@@ -491,7 +505,19 @@ export const generateAudit = async (auditData: any) => {
     });
 
     return JSON.parse(response.text);
-  } catch (error) {
+  } catch (error: any) {
+    const errorString = JSON.stringify(error);
+    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
+      console.warn("Gemini API rate limit exceeded for audit.");
+      return {
+        summary: "Audit momentanément indisponible en raison d'une forte demande. Veuillez réessayer dans quelques minutes.",
+        healthScore: auditData.ca > auditData.charges ? 75 : 45,
+        strengths: ["Continuité d'exploitation"],
+        weaknesses: ["Indisponibilité temporaire du module IA"],
+        recommendations: [{ title: "Ressayer plus tard", description: "Le service d'audit par IA est saturé.", impact: "Bas" }],
+        ratios: [{ name: "Ratio de marge brute", value: auditData.ca > 0 ? Math.round(((auditData.ca - auditData.charges) / auditData.ca) * 100) : 0 }]
+      };
+    }
     console.error("Error generating audit:", error);
     return null;
   }
@@ -530,7 +556,11 @@ export const getP2PAdvice = async (p2pData: any) => {
 
     const data = JSON.parse(response.text);
     return data.advices as string[];
-  } catch (error) {
+  } catch (error: any) {
+    const errorString = JSON.stringify(error);
+    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
+      return ["Surveillez vos délais de livraison fournisseurs.", "Optimisez la validation des factures reçues."];
+    }
     console.error("Error getting P2P advice:", error);
     return [];
   }
@@ -841,8 +871,19 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
       }
     });
 
-    return JSON.parse(response.text);
-  } catch (error) {
+    const data = JSON.parse(response.text);
+    return data;
+  } catch (error: any) {
+    const errorString = JSON.stringify(error);
+    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
+      console.warn("Gemini API rate limit exceeded for bank reconciliation.");
+      return {
+        matches: [],
+        discrepancies: [{ source: "System", amount: 0, description: "Limite de quota IA atteinte. Le rapprochement doit être fait manuellement." }],
+        suggestions: [],
+        reconciliationSummary: "Le module d'IA est temporairement saturé. Veuillez procéder au rapprochement manuel ou réessayer plus tard."
+      };
+    }
     console.error("Error reconciling bank:", error);
     return null;
   }
@@ -902,7 +943,11 @@ export const askAssistant = async (
     }
 
     return text;
-  } catch (error) {
+  } catch (error: any) {
+    const errorString = JSON.stringify(error);
+    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
+      return "Désolé, le service d'IA est actuellement saturé (limite de quota atteinte). Veuillez réessayer dans quelques instants ou contactez le support si le problème persiste.";
+    }
     console.error("Error in askAssistant:", error);
     return "Désolé, je n'ai pas pu traiter votre demande pour le moment.";
   }
