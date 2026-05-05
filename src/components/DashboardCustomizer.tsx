@@ -35,7 +35,7 @@ export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, 
             exit={{ opacity: 0, x: 400 }}
             className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white dark:bg-slate-900 shadow-2xl z-[70] flex flex-col border-l border-slate-200 dark:border-slate-800"
           >
-            <div className="p-8 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+            <div className="p-6 sm:p-8 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
               <div className="space-y-1">
                 <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight uppercase">Personnaliser</h2>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tableau de Bord</p>
@@ -48,7 +48,7 @@ export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, 
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8 space-y-8">
+            <div className="flex-1 overflow-y-auto p-6 sm:p-8 space-y-8">
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Visibilité des Widgets</h3>
@@ -110,7 +110,7 @@ export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, 
               </div>
             </div>
 
-            <div className="p-8 border-t border-slate-100 dark:border-slate-800">
+            <div className="p-6 sm:p-8 border-t border-slate-100 dark:border-slate-800">
               <button 
                 onClick={onClose}
                 className="w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-slate-900/20 transition-all active:scale-95"

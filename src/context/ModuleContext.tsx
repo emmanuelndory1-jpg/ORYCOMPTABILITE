@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { apiFetch as fetch } from '@/lib/api';
 
@@ -22,7 +23,7 @@ export function ModuleProvider({ children }: { children: React.ReactNode }) {
 
   const fetchModules = async () => {
     try {
-      const res = await fetch('/api/company/modules');
+      const res = await apiFetch('/api/company/modules');
       if (res.ok) {
         const data = await res.json();
         setModules(data);

@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   Repeat, 
@@ -79,7 +80,7 @@ export function RecurringTransactions() {
 
   const fetchTransactions = async () => {
     try {
-      const response = await fetch('/api/recurring-transactions');
+      const response = await apiFetch('/api/recurring-transactions');
       const data = await response.json();
       setTransactions(data);
     } catch (error) {
@@ -107,7 +108,7 @@ export function RecurringTransactions() {
     }
 
     try {
-      const response = await fetch('/api/recurring-transactions', {
+      const response = await apiFetch('/api/recurring-transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -154,7 +155,7 @@ export function RecurringTransactions() {
 
     setIsProcessingAll(true);
     try {
-      const response = await fetch('/api/recurring-transactions/process-all', {
+      const response = await apiFetch('/api/recurring-transactions/process-all', {
         method: 'POST'
       });
       if (response.ok) {
@@ -198,7 +199,7 @@ export function RecurringTransactions() {
 
     setIsProcessing(id);
     try {
-      const response = await fetch(`/api/recurring-transactions/${id}/process`, {
+      const response = await apiFetch(`/api/recurring-transactions/${id}/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: true })
@@ -222,7 +223,7 @@ export function RecurringTransactions() {
     const confirmed = await confirm('Êtes-vous sûr de vouloir supprimer cette écriture récurrente ?');
     if (!confirmed) return;
     try {
-      const response = await fetch(`/api/recurring-transactions/${id}`, {
+      const response = await apiFetch(`/api/recurring-transactions/${id}`, {
         method: 'DELETE'
       });
       if (response.ok) {
@@ -429,7 +430,7 @@ export function RecurringTransactions() {
                               checked={tx.auto_process === 1}
                               onChange={async (e) => {
                                 try {
-                                  await fetch(`/api/recurring-transactions/${tx.id}`, {
+                                  await apiFetch(`/api/recurring-transactions/${tx.id}`, {
                                     method: 'PATCH',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ auto_process: e.target.checked })

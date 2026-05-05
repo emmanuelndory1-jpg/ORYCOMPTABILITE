@@ -1,6 +1,8 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Users, FileText, Download, Plus, Calendar, CheckCircle, AlertCircle, ChevronRight, ArrowLeft, Calculator, Loader2, Trash2, Pencil, Printer, Coins, Banknote } from 'lucide-react';
+import { PageHeader } from './ui/PageHeader';
+import { Users, FileText, Download, Plus, Calendar, CheckCircle, AlertCircle, ChevronRight, ArrowLeft, Calculator, Loader2, Trash2, Pencil, Printer, Coins, Banknote, List, BarChart3, Settings as SettingsIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useFiscalYear } from '@/context/FiscalYearContext';
@@ -8,6 +10,7 @@ import { useDialog } from './DialogProvider';
 import { useLanguage } from '@/context/LanguageContext';
 import { PayrollWizard } from './PayrollWizard';
 import { PayrollSettingsManager } from './PayrollSettingsManager';
+import { generatePayslipPDF, CompanySettings } from '../lib/exportUtils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -67,6 +70,7 @@ interface SalaryAdvance {
 }
 
 export function PayrollManager() {
+  const { alert: dialogAlert } = useDialog();
   const [searchParams] = useSearchParams();
   const { formatCurrency, currency } = useCurrency();
   const { activeYear } = useFiscalYear();
@@ -112,73 +116,8 @@ export function PayrollManager() {
   } | null>(null);
 
   const printPayslip = (slip: Payslip) => {
-    if (!selectedPeriod) return;
-    
-    const doc = new jsPDF();
-    const details = JSON.parse(slip.details);
-    
-    // Header
-    doc.setFontSize(18);
-    doc.text("BULLETIN DE PAIE", 105, 20, { align: "center" });
-    
-    doc.setFontSize(10);
-    doc.text(`Période: ${getMonthName(selectedPeriod.month)} ${selectedPeriod.year}`, 105, 30, { align: "center" });
-
-    // Employee Info
-    autoTable(doc, {
-        startY: 40,
-        head: [['Employé', 'Matricule', 'Fonction']],
-        body: [[`${slip.first_name} ${slip.last_name}`, slip.employee_id, slip.position]],
-        theme: 'plain',
-        styles: { fontSize: 10 }
-    });
-
-    // Body
-    const body = [
-        ['Salaire de base', formatCurrency(slip.base_salary)],
-    ];
-
-    // Bonuses
-    if (details.bonusDetails && details.bonusDetails.length > 0) {
-        details.bonusDetails.forEach((b: any) => {
-             body.push([`${b.label} (${b.type === 'taxable' ? 'Imposable' : 'Non Imposable'})`, formatCurrency(b.amount)]);
-        });
-    } else if (slip.bonuses > 0) {
-        body.push(['Primes', formatCurrency(slip.bonuses)]);
-    }
-
-    body.push(['Salaire Brut Imposable', formatCurrency(details.grossTaxable || details.gross)]);
-    body.push(['Salaire Brut Total', formatCurrency(details.grossTotal || details.gross)]);
-
-    // Deductions
-    body.push(['--- Retenues ---', '']);
-    body.push(['CNPS (Retraite)', `-${formatCurrency(details.cnpsEmployee)}`]);
-    body.push(['Impôt sur Salaire (IS)', `-${formatCurrency(details.taxes.is)}`]);
-    body.push(['Contribution Nationale (CN)', `-${formatCurrency(details.taxes.cn)}`]);
-    body.push(['Impôt Général sur le Revenu (IGR)', `-${formatCurrency(details.taxes.igr)}`]);
-    
-    if (details.deductionDetails && details.deductionDetails.length > 0) {
-        details.deductionDetails.forEach((d: any) => {
-             body.push([d.label, `-${formatCurrency(d.amount)}`]);
-        });
-    } else if (details.extraDeductions > 0) {
-        body.push(['Autres Retenues (Avances, Prêts)', `-${formatCurrency(details.extraDeductions)}`]);
-    }
-
-    body.push(['--- Total Retenues ---', `-${formatCurrency((details.grossTotal || details.gross) - slip.net_salary)}`]);
-
-    // Net
-    body.push(['NET À PAYER', formatCurrency(slip.net_salary)]);
-
-    autoTable(doc, {
-        startY: ((doc as any).lastAutoTable?.finalY || 40) + 10,
-        head: [['Rubrique', 'Montant']],
-        body: body,
-        theme: 'grid',
-        headStyles: { fillColor: [16, 185, 129] }
-    });
-
-    doc.save(`Bulletin_${slip.last_name}_${selectedPeriod.month}_${selectedPeriod.year}.pdf`);
+    if (!selectedPeriod || !companySettings) return;
+    generatePayslipPDF(slip, selectedPeriod, companySettings);
   };
 
   // Forms
@@ -217,7 +156,7 @@ export function PayrollManager() {
 
   const fetchCompanySettings = async () => {
     try {
-      const res = await fetch('/api/company/settings');
+      const res = await apiFetch('/api/company/settings');
       if (res.ok) {
         const data = await res.json();
         setCompanySettings(data);
@@ -240,7 +179,7 @@ export function PayrollManager() {
 
   const fetchEmployees = async () => {
     try {
-      const res = await fetch('/api/employees');
+      const res = await apiFetch('/api/employees');
       const data = await res.json();
       setEmployees(data);
     } catch (err) {
@@ -250,7 +189,12 @@ export function PayrollManager() {
 
   const fetchPeriods = async () => {
     try {
-      const res = await fetch('/api/payroll/periods');
+      const res = await apiFetch('/api/payroll/periods');
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Fetch periods failed: ${res.status}`, text);
+        return;
+      }
       const data = await res.json();
       setPeriods(data);
     } catch (err) {
@@ -260,7 +204,7 @@ export function PayrollManager() {
 
   const fetchAdvances = async () => {
     try {
-      const res = await fetch('/api/advances');
+      const res = await apiFetch('/api/advances');
       const data = await res.json();
       setAdvances(data);
     } catch (err) {
@@ -271,7 +215,7 @@ export function PayrollManager() {
   const handleCreateAdvance = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newAdvance.employee_id === 0 || newAdvance.amount <= 0) {
-      alert("Veuillez remplir tous les champs obligatoires.", 'error');
+      dialogAlert("Veuillez remplir tous les champs obligatoires.", 'error');
       return;
     }
 
@@ -279,7 +223,7 @@ export function PayrollManager() {
       const url = editingAdvanceId ? `/api/advances/${editingAdvanceId}` : '/api/advances';
       const method = editingAdvanceId ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newAdvance)
@@ -297,11 +241,11 @@ export function PayrollManager() {
         });
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur est survenue.", 'error');
+      dialogAlert("Une erreur est survenue.", 'error');
     }
   };
 
@@ -321,23 +265,23 @@ export function PayrollManager() {
     if (!confirmed) return;
 
     try {
-      const res = await fetch(`/api/advances/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/advances/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchAdvances();
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur est survenue.", 'error');
+      dialogAlert("Une erreur est survenue.", 'error');
     }
   };
 
   const fetchPayslips = async (periodId: number) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/payroll/periods/${periodId}/payslips`);
+      const res = await apiFetch(`/api/payroll/periods/${periodId}/payslips`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setPayslips(data);
@@ -358,7 +302,7 @@ export function PayrollManager() {
       const url = editingEmployeeId ? `/api/employees/${editingEmployeeId}` : '/api/employees';
       const method = editingEmployeeId ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newEmployee)
@@ -410,7 +354,7 @@ export function PayrollManager() {
     if (!editingPayslip) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/payslips/${editingPayslip.id}`, {
+      const res = await apiFetch(`/api/payslips/${editingPayslip.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -430,11 +374,11 @@ export function PayrollManager() {
         }
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur inattendue est survenue.", 'error');
+      dialogAlert("Une erreur inattendue est survenue.", 'error');
     } finally {
       setLoading(false);
     }
@@ -442,7 +386,7 @@ export function PayrollManager() {
 
   const handleCreatePeriod = async () => {
     try {
-      const res = await fetch('/api/payroll/periods', {
+      const res = await apiFetch('/api/payroll/periods', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newPeriod)
@@ -452,11 +396,11 @@ export function PayrollManager() {
         fetchPeriods();
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur inattendue est survenue.", 'error');
+      dialogAlert("Une erreur inattendue est survenue.", 'error');
     }
   };
 
@@ -464,7 +408,7 @@ export function PayrollManager() {
     if (!selectedPeriod) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/payroll/periods/${selectedPeriod.id}/generate`, { method: 'POST' });
+      const res = await apiFetch(`/api/payroll/periods/${selectedPeriod.id}/generate`, { method: 'POST' });
       if (res.ok) {
         fetchPayslips(selectedPeriod.id);
         fetchPeriods(); // Update total amount
@@ -483,18 +427,18 @@ export function PayrollManager() {
     
     setLoading(true);
     try {
-      const res = await fetch(`/api/payroll/periods/${selectedPeriod.id}/validate`, { method: 'POST' });
+      const res = await apiFetch(`/api/payroll/periods/${selectedPeriod.id}/validate`, { method: 'POST' });
       if (res.ok) {
-        alert("Période validée et écritures comptables générées !", 'success');
+        dialogAlert("Période validée et écritures comptables générées !", 'success');
         setSelectedPeriod({ ...selectedPeriod, status: 'validated' });
         fetchPeriods();
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur inattendue est survenue.", 'error');
+      dialogAlert("Une erreur inattendue est survenue.", 'error');
     } finally {
       setLoading(false);
     }
@@ -504,23 +448,23 @@ export function PayrollManager() {
     if (!selectedPeriod) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/payroll/periods/${selectedPeriod.id}/pay`, {
+      const res = await apiFetch(`/api/payroll/periods/${selectedPeriod.id}/pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ paymentAccount })
       });
       if (res.ok) {
-        alert("Paiement enregistré avec succès !", 'success');
+        dialogAlert("Paiement enregistré avec succès !", 'success');
         setSelectedPeriod({ ...selectedPeriod, status: 'paid' });
         fetchPeriods();
         setIsPaymentModalOpen(false);
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur inattendue est survenue.", 'error');
+      dialogAlert("Une erreur inattendue est survenue.", 'error');
     } finally {
       setLoading(false);
     }
@@ -536,18 +480,18 @@ export function PayrollManager() {
     if (!confirmed) return;
 
     try {
-      const res = await fetch(`/api/payroll/periods/${period.id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/payroll/periods/${period.id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchPeriods();
         if (selectedPeriod?.id === period.id) setSelectedPeriod(null);
         if (activeView === 'period_details') setActiveView('periods');
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur inattendue est survenue.", 'error');
+      dialogAlert("Une erreur inattendue est survenue.", 'error');
     }
   };
 
@@ -557,16 +501,16 @@ export function PayrollManager() {
     if (!confirmed) return;
 
     try {
-      const res = await fetch(`/api/employees/${employeeId}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/employees/${employeeId}`, { method: 'DELETE' });
       if (res.ok) {
         fetchEmployees();
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur inattendue est survenue.", 'error');
+      dialogAlert("Une erreur inattendue est survenue.", 'error');
     }
   };
 
@@ -584,16 +528,16 @@ export function PayrollManager() {
     doc.setFontSize(18);
     doc.text(`Déclarations Sociales & Fiscales - ${periodName}`, 14, 20);
     
-    const details = selectedPeriod.details;
+    const details = selectedPeriod.details || {};
     const data = [
-      ['CNPS (Part Salariale)', formatCurrency(details.cnpsEmployee)],
-      ['CNPS (Part Patronale)', formatCurrency(details.cnpsEmployer)],
-      ['Total CNPS', formatCurrency(details.cnpsEmployee + details.cnpsEmployer)],
+      ['CNPS (Part Salariale)', formatCurrency(details.cnpsEmployee || 0)],
+      ['CNPS (Part Patronale)', formatCurrency(details.cnpsEmployer || 0)],
+      ['Total CNPS', formatCurrency((details.cnpsEmployee || 0) + (details.cnpsEmployer || 0))],
       ['', ''],
-      ['Impôt sur le Revenu (ITS)', formatCurrency(details.totalTaxes)],
-      ['FDFP (Formation)', formatCurrency(details.fdfp)],
+      ['Impôt sur le Revenu (ITS)', formatCurrency(details.totalTaxes || 0)],
+      ['FDFP (Formation)', formatCurrency(details.fdfp || 0)],
       ['', ''],
-      ['TOTAL À PAYER', formatCurrency(details.cnpsEmployee + details.cnpsEmployer + details.totalTaxes + details.fdfp)]
+      ['TOTAL À PAYER', formatCurrency((details.cnpsEmployee || 0) + (details.cnpsEmployer || 0) + (details.totalTaxes || 0) + (details.fdfp || 0))]
     ];
 
     autoTable(doc, {
@@ -1065,7 +1009,16 @@ export function PayrollManager() {
           <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
             <p className="text-xs text-slate-500 dark:text-slate-400 uppercase font-semibold">Total Charges (Patronales)</p>
             <p className="text-lg font-bold text-slate-900 dark:text-white">
-              {formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details).employerCharges || 0), 0))}
+              {formatCurrency(payslips.reduce((sum, p) => {
+                let employerCharges = 0;
+                try {
+                  const details = p.details ? JSON.parse(p.details) : {};
+                  employerCharges = details?.employerCharges || 0;
+                } catch (e) {
+                  console.error("Error parsing payslip details", e);
+                }
+                return sum + employerCharges;
+              }, 0))}
             </p>
           </div>
           <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
@@ -1095,10 +1048,10 @@ export function PayrollManager() {
                 <tr><td colSpan={6} className="p-8 text-center text-slate-500">Aucun bulletin généré pour cette période.</td></tr>
               ) : (
                 payslips.map((slip) => {
-                  const details = JSON.parse(slip.details);
+                  const details = JSON.parse(slip.details || '{}') || {};
                   const employerTotal = details.employerDetails 
                     ? Object.values(details.employerDetails).reduce((a: any, b: any) => a + b, 0) as number
-                    : details.employerCharges;
+                    : (details.employerCharges || 0);
 
                   return (
                     <tr key={slip.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
@@ -1112,10 +1065,10 @@ export function PayrollManager() {
                       <td className="px-6 py-4 text-right font-mono text-rose-600 dark:text-rose-400">
                         <div>-{formatCurrency(slip.deductions)}</div>
                         <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
-                          CNPS: {formatCurrency(details.cnpsEmployee)}<br/>
-                          IS: {formatCurrency(details.taxes.is)}<br/>
-                          CN: {formatCurrency(details.taxes.cn)}<br/>
-                          IGR: {formatCurrency(details.taxes.igr)}
+                          CNPS: {formatCurrency(details.cnpsEmployee || 0)}<br/>
+                          IS: {formatCurrency(details.taxes?.is || 0)}<br/>
+                          CN: {formatCurrency(details.taxes?.cn || 0)}<br/>
+                          IGR: {formatCurrency(details.taxes?.igr || 0)}
                           {details.extraDeductions > 0 && (
                             <>
                               <br/>Avances: {formatCurrency(details.extraDeductions)}
@@ -1138,14 +1091,21 @@ export function PayrollManager() {
                           {selectedPeriod.status === 'draft' && (
                             <button 
                               onClick={() => {
-                                const details = JSON.parse(slip.details);
+                                let details = {};
+                                try {
+                                  details = slip.details ? JSON.parse(slip.details) : {};
+                                } catch (e) {
+                                  console.error("Error parsing slip details for edit", e);
+                                }
+                                
+                                const typedDetails = details as any;
                                 setEditingPayslip({
                                   id: slip.id,
                                   name: `${slip.last_name} ${slip.first_name}`,
                                   bonuses: slip.bonuses,
-                                  deductions: details.extraDeductions || 0,
-                                  bonusDetails: details.bonusDetails || [],
-                                  deductionDetails: details.deductionDetails || []
+                                  deductions: typedDetails.extraDeductions || 0,
+                                  bonusDetails: typedDetails.bonusDetails || [],
+                                  deductionDetails: typedDetails.deductionDetails || []
                                 });
                                 setIsPayslipModalOpen(true);
                               }}
@@ -1202,12 +1162,12 @@ export function PayrollManager() {
     let totalFDFP_FPC = 0;
 
     payslips.forEach(p => {
-      const details = JSON.parse(p.details);
+      const details = JSON.parse(p.details || '{}') || {};
       totalGross += (p.base_salary + p.bonuses);
-      totalCnpsEmployee += details.cnpsEmployee;
-      totalIS += details.taxes.is;
-      totalCN += details.taxes.cn;
-      totalIGR += details.taxes.igr;
+      totalCnpsEmployee += (details.cnpsEmployee || 0);
+      totalIS += (details.taxes?.is || 0);
+      totalCN += (details.taxes?.cn || 0);
+      totalIGR += (details.taxes?.igr || 0);
 
       if (details.employerDetails) {
         totalCnpsEmployer += (details.employerDetails.CNPS_RET_PAT || 0);
@@ -1217,9 +1177,9 @@ export function PayrollManager() {
         totalFDFP_FPC += (details.employerDetails.FDFP_FPC || 0);
       } else {
         // Fallback logic if detailed breakdown missing
-        totalCnpsEmployer += (details.employerCharges * 0.45); // Approx
-        totalPF += (details.employerCharges * 0.35); // Approx
-        totalAT += (details.employerCharges * 0.20); // Approx
+        totalCnpsEmployer += ((details.employerCharges || 0) * 0.45); // Approx
+        totalPF += ((details.employerCharges || 0) * 0.35); // Approx
+        totalAT += ((details.employerCharges || 0) * 0.20); // Approx
       }
     });
 
@@ -1345,51 +1305,119 @@ export function PayrollManager() {
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Header Navigation */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-brand-green/10 text-brand-green rounded-xl">
-            <Calculator size={24} />
+    <div className="space-y-6 pb-20">
+      <PageHeader
+        title="Module Paie"
+        subtitle="Gestion des salaires et cotisations sociales"
+        icon={<Calculator size={24} />}
+        actions={
+          <div className="flex items-center gap-3">
+             <div className="hidden lg:flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner mr-2">
+              {[
+                { id: 'dashboard', icon: BarChart3, title: 'Tableau de bord' },
+                { id: 'employees', icon: Users, title: 'Salariés' },
+                { id: 'periods', icon: Calendar, title: 'Périodes' },
+                { id: 'advances', icon: Coins, title: 'Avances' },
+                { id: 'settings', icon: SettingsIcon, title: 'Configuration' }
+              ].map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveView(item.id as any)}
+                  className={cn(
+                    "p-2 rounded-lg transition-all",
+                    activeView === item.id ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400"
+                  )}
+                  title={item.title}
+                >
+                  <item.icon size={20} />
+                </button>
+              ))}
+            </div>
+
+            {activeView === 'employees' && (
+               <button 
+                onClick={() => {
+                  setEditingEmployeeId(null);
+                  setNewEmployee({
+                    firstName: '', lastName: '', email: '', phone: '', position: '', 
+                    department: '', baseSalary: 0, startDate: '', maritalStatus: 'single',
+                    childrenCount: 0, cnpsNumber: '', status: 'active'
+                  });
+                  setIsEmployeeModalOpen(true);
+                }}
+                className="bg-brand-green text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-green/90 transition-all active:scale-95 shadow-lg shadow-brand-green/20"
+              >
+                <Plus size={18} />
+                <span className="hidden sm:inline">Nouveau Salarié</span>
+                <span className="sm:hidden">Ajouter</span>
+              </button>
+            )}
+            
+            {activeView === 'advances' && (
+              <button 
+                onClick={() => {
+                  setEditingAdvanceId(null);
+                  setNewAdvance({
+                    employee_id: 0,
+                    amount: 0,
+                    date: new Date().toISOString().split('T')[0],
+                    description: ''
+                  });
+                  setIsAdvanceModalOpen(true);
+                }}
+                className="bg-brand-green text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-green/90 transition-all active:scale-95 shadow-lg shadow-brand-green/20"
+              >
+                <Plus size={18} />
+                <span className="hidden sm:inline">Nouvelle Avance</span>
+                <span className="sm:hidden">Ajouter</span>
+              </button>
+            )}
+
+            {activeView === 'periods' && (
+               <button 
+                onClick={() => setIsPeriodModalOpen(true)}
+                className="bg-brand-green text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-brand-green/90 transition-all active:scale-95 shadow-lg shadow-brand-green/20"
+              >
+                <Plus size={18} />
+                <span className="hidden sm:inline">Nouvelle Période</span>
+                <span className="sm:hidden">Ajouter</span>
+              </button>
+            )}
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white leading-tight">Gestion de la Paie</h1>
-            <p className="text-slate-500 dark:text-slate-400 text-xs font-medium uppercase tracking-wider">Salaires & Charges Sociales</p>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl overflow-x-auto no-scrollbar">
-          {[
-            { id: 'dashboard', label: 'Tableau de bord', icon: <Calculator size={16} /> },
-            { id: 'employees', label: 'Salariés', icon: <Users size={16} /> },
-            { id: 'periods', label: 'Périodes', icon: <Calendar size={16} /> },
-            { id: 'advances', label: 'Avances', icon: <Coins size={16} /> },
-            { id: 'settings', label: 'Paramètres', icon: <Plus size={16} className="rotate-45" /> }
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveView(tab.id as any)}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap",
-                activeView === tab.id 
-                  ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" 
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-              )}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        }
+      />
+
+      {/* Mobile Nav for Payroll */}
+      <div className="lg:hidden flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner overflow-x-auto no-scrollbar">
+        {[
+          { id: 'dashboard', icon: BarChart3 },
+          { id: 'employees', icon: Users },
+          { id: 'periods', icon: Calendar },
+          { id: 'advances', icon: Coins },
+          { id: 'settings', icon: SettingsIcon }
+        ].map(item => (
+          <button
+            key={item.id}
+            onClick={() => setActiveView(item.id as any)}
+            className={cn(
+              "flex-1 p-2.5 rounded-lg transition-all flex justify-center",
+              activeView === item.id ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400"
+            )}
+          >
+            <item.icon size={18} />
+          </button>
+        ))}
       </div>
 
-      {activeView === 'dashboard' && renderDashboard()}
-      {activeView === 'employees' && renderEmployees()}
-      {activeView === 'periods' && renderPeriods()}
-      {activeView === 'period_details' && renderPeriodDetails()}
-      {activeView === 'declarations' && renderDeclarations()}
-      {activeView === 'advances' && renderAdvances()}
-      {activeView === 'settings' && <PayrollSettingsManager />}
+      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+        {activeView === 'dashboard' && renderDashboard()}
+        {activeView === 'employees' && renderEmployees()}
+        {activeView === 'periods' && renderPeriods()}
+        {activeView === 'period_details' && renderPeriodDetails()}
+        {activeView === 'declarations' && renderDeclarations()}
+        {activeView === 'advances' && renderAdvances()}
+        {activeView === 'settings' && <PayrollSettingsManager />}
+      </div>
 
       {/* Payroll Wizard */}
       {isWizardOpen && (

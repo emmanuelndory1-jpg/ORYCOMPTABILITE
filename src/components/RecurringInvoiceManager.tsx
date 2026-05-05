@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
@@ -37,7 +38,7 @@ interface RecurringInvoice {
 }
 
 export function RecurringInvoiceManager() {
-  const { confirm, alert } = useDialog();
+  const { confirm, alert: dialogAlert } = useDialog();
   const { t } = useLanguage();
   const { formatCurrency } = useCurrency();
   const [recurring, setRecurring] = useState<RecurringInvoice[]>([]);
@@ -53,7 +54,7 @@ export function RecurringInvoiceManager() {
   const fetchRecurring = async () => {
     setLoading(true);
     try {
-      const data = await fetch('/api/recurring-invoices').then(res => res.json());
+      const data = await apiFetch('/api/recurring-invoices').then(res => res.json());
       setRecurring(data);
     } catch (err) {
       console.error("Failed to fetch recurring invoices", err);
@@ -64,23 +65,23 @@ export function RecurringInvoiceManager() {
 
   const toggleActive = async (ri: RecurringInvoice) => {
     try {
-      await fetch(`/api/recurring-invoices/${ri.id}`, {
+      await apiFetch(`/api/recurring-invoices/${ri.id}`, {
         method: 'PUT',
         body: JSON.stringify({ ...ri, active: !ri.active })
       });
       fetchRecurring();
     } catch (err) {
-      alert("Erreur lors de la modification du statut.");
+      dialogAlert("Erreur lors de la modification du statut.");
     }
   };
 
   const deleteRecurring = async (id: number) => {
     if (await confirm("Êtes-vous sûr de vouloir supprimer ce modèle récurrent ?")) {
       try {
-        await fetch(`/api/recurring-invoices/${id}`, { method: 'DELETE' });
+        await apiFetch(`/api/recurring-invoices/${id}`, { method: 'DELETE' });
         fetchRecurring();
       } catch (err) {
-        alert("Erreur lors de la suppression.");
+        dialogAlert("Erreur lors de la suppression.");
       }
     }
   };
@@ -257,7 +258,7 @@ export function RecurringInvoiceManager() {
 }
 
 function RecurringInvoiceEditor({ id, onClose }: { id: number | null, onClose: () => void }) {
-  const { alert } = useDialog();
+  const { alert: dialogAlert } = useDialog();
   const [loading, setLoading] = useState(id !== null);
   const [saving, setSaving] = useState(false);
   const [thirdParties, setThirdParties] = useState<any[]>([]);
@@ -274,9 +275,9 @@ function RecurringInvoiceEditor({ id, onClose }: { id: number | null, onClose: (
   });
 
   useEffect(() => {
-    fetch('/api/third-parties').then(res => res.json()).then(setThirdParties);
+    apiFetch('/api/third-parties').then(res => res.json()).then(setThirdParties);
     if (id) {
-      fetch(`/api/recurring-invoices/${id}`)
+      apiFetch(`/api/recurring-invoices/${id}`)
         .then(res => res.json())
         .then(data => {
           setFormData(data);
@@ -330,7 +331,7 @@ function RecurringInvoiceEditor({ id, onClose }: { id: number | null, onClose: (
       if (!res.ok) throw new Error();
       onClose();
     } catch (err) {
-      alert("Erreur lors de l'enregistrement.");
+      dialogAlert("Erreur lors de l'enregistrement.");
     } finally {
       setSaving(false);
     }

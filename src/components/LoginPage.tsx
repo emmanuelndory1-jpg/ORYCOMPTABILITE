@@ -287,6 +287,35 @@ export function LoginPage() {
                 </div>
               </div>
 
+              {/* Demo Accounts Section */}
+              <div className="bg-brand-green/5 dark:bg-brand-green/10 border border-brand-green/20 rounded-2xl p-4 shadow-sm">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-green mb-3 block flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse"></span>
+                  Comptes de Démonstration
+                </label>
+                <div className="relative">
+                  <select 
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val) {
+                        setEmail(val);
+                        setPassword('admin123');
+                      }
+                    }}
+                    className="w-full appearance-none bg-white dark:bg-slate-800 border border-brand-green/30 text-slate-700 dark:text-slate-200 text-sm font-bold rounded-xl py-3 pl-4 pr-10 focus:outline-none focus:ring-2 focus:ring-brand-green focus:border-transparent transition-all cursor-pointer"
+                    defaultValue=""
+                  >
+                    <option value="" disabled>Sélectionner un profil d'accès rapide...</option>
+                    <option value="admin@example.com">Administrateur (Accès Total)</option>
+                    <option value="comptable@example.com">Comptable Expert (Validation & Saisie)</option>
+                    <option value="utilisateur@example.com">Utilisateur Standard (Consultation)</option>
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-brand-green">
+                    <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                  </div>
+                </div>
+              </div>
+
               <form onSubmit={handleSubmit} className="space-y-8">
                 <div className="space-y-3">
                   <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500 ml-1">E-mail Professionnel</label>

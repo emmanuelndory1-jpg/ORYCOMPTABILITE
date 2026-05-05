@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, TrendingUp, TrendingDown, AlertCircle, CheckCircle2, Loader2, Globe, Clock, Save } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
@@ -79,7 +80,7 @@ export function CurrencyAnalyzer() {
     setUpdating(true);
     try {
       for (const res of results) {
-        await fetch('/api/exchange-rates', {
+        await apiFetch('/api/exchange-rates', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

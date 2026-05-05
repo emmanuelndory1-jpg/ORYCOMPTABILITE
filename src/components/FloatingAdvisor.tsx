@@ -1,9 +1,10 @@
+import { useDialog } from './DialogProvider';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { MessageSquareText, X, Send, Loader2, Sparkles, Maximize2, Minimize2, Camera, Image as ImageIcon, Paperclip, Trash2, ChevronRight, Info } from 'lucide-react';
+import { MessageSquareText, X, Send, Loader2, Sparkles, Maximize2, Minimize2, Camera, Image as ImageIcon, Paperclip, Trash2, ChevronRight, Info, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { SafeImage } from './SafeImage';
 import { askAssistant } from '@/services/geminiService';
@@ -17,6 +18,8 @@ interface Message {
 }
 
 export function FloatingAdvisor() {
+  const { alert: dialogAlert } = useDialog();
+  const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [input, setInput] = useState('');
@@ -111,7 +114,7 @@ export function FloatingAdvisor() {
 
   const startVoiceInput = () => {
     if (!('webkitSpeechRecognition' in window)) {
-      alert("La reconnaissance vocale n'est pas supportée par votre navigateur.");
+      dialogAlert("La reconnaissance vocale n'est pas supportée par votre navigateur.");
       return;
     }
 
@@ -165,6 +168,13 @@ export function FloatingAdvisor() {
                   title="Effacer la conversation"
                 >
                   <Trash2 size={18} />
+                </button>
+                <button 
+                  onClick={() => navigate('/assistant')}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors text-slate-400 hover:text-white"
+                  title="Ouvrir la page complète"
+                >
+                  <ExternalLink size={18} />
                 </button>
                 <button 
                   onClick={() => setIsExpanded(!isExpanded)}

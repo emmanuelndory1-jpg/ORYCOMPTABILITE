@@ -1,6 +1,34 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, useLocation, Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
-import { Plus, Upload, FileText, Check, X, Loader2, Calculator, ArrowRight, Wand2, Pencil, Download, Settings, Filter, Trash2, FileSpreadsheet, Zap, ExternalLink, FileX, FilePlus, Edit, Settings2, Hash, Search } from 'lucide-react';
+import { PageHeader } from './ui/PageHeader';
+import { 
+  BookOpen, 
+  Upload, 
+  Trash2, 
+  FileSpreadsheet, 
+  Download, 
+  Wand2, 
+  Plus, 
+  MicOff, 
+  Mic, 
+  Loader2, 
+  ArrowRight, 
+  Calculator, 
+  FileText, 
+  Zap, 
+  Filter, 
+  Settings2, 
+  Hash, 
+  FilePlus, 
+  X, 
+  Settings, 
+  Check, 
+  ExternalLink, 
+  FileX, 
+  Edit,
+  Pencil
+} from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -21,7 +49,17 @@ import {
   JournalEntryLine, 
   PaymentMode 
 } from '@/lib/accounting';
-import { suggestJournalEntry, AISuggestion, analyzeInvoice, suggestAccountCode } from '@/services/geminiService';
+import { 
+  suggestJournalEntry, 
+  AISuggestion, 
+  analyzeInvoice, 
+  suggestAccountCode, 
+  parseNaturalLanguageEntry,
+  logOcrFeedback,
+  InvoiceAnalysis
+} from '@/services/geminiService';
+
+import * as XLSX from 'xlsx';
 
 interface Transaction {
   id: number;
@@ -71,6 +109,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const { t } = useLanguage();
   const { formatCurrency, currency: baseCurrency, exchangeRates, getExchangeRate, getCurrencyIcon } = useCurrency();
   const { activeYear } = useFiscalYear();
+  const location = useLocation();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [thirdPartyFilter, setThirdPartyFilter] = useState('');
@@ -104,12 +143,25 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [isScanning, setIsScanning] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [existingAttachments, setExistingAttachments] = useState<Attachment[]>([]);
+  const [magicInput, setMagicInput] = useState('');
+  const [isMagicLoading, setIsMagicLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [lastAiPrediction, setLastAiPrediction] = useState<InvoiceAnalysis | null>(null);
+  const [lastAiImage, setLastAiImage] = useState<string | null>(null);
+  const [currentView, setCurrentView] = useState<'active' | 'trash'>('active');
+  const magicInputRef = useRef<HTMLInputElement>(null);
+  const descriptionInputRef = useRef<HTMLInputElement>(null);
+  const amountInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (openModal) {
       openNewModal();
     }
   }, [openModal]);
+
+  const [accounts, setAccounts] = useState<{code: string, name: string}[]>([]);
+  const [thirdParties, setThirdParties] = useState<{id: number, name: string, type: string, account_code: string, is_occasional?: boolean, balance?: number}[]>([]);
+  const [defaultOccasional, setDefaultOccasional] = useState<{ client: any | null, supplier: any | null }>({ client: null, supplier: null });
 
   const generateReference = () => {
     const now = new Date();
@@ -156,9 +208,6 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [newOpTemplate, setNewOpTemplate] = useState<CustomOperationTemplate[]>([
     { account_code: '', type: 'debit', formula: 'ht' }
   ]);
-  const [accounts, setAccounts] = useState<{code: string, name: string}[]>([]);
-  const [thirdParties, setThirdParties] = useState<{id: number, name: string, type: string, account_code: string, is_occasional?: boolean}[]>([]);
-  const [defaultOccasional, setDefaultOccasional] = useState<{ client: any | null, supplier: any | null }>({ client: null, supplier: null });
   const [selectedThirdParty, setSelectedThirdParty] = useState<string>(''); // account_code
   const [occasionalName, setOccasionalName] = useState('');
   const [selectedTreasuryAccount, setSelectedTreasuryAccount] = useState<string>('');
@@ -202,6 +251,38 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (onModalClose) onModalClose();
   };
 
+  useEffect(() => {
+    if (isModalOpen) {
+      setTimeout(() => {
+        descriptionInputRef.current?.focus();
+      }, 150);
+    }
+  }, [isModalOpen]);
+
+  const handleEntryKeyDown = (e: React.KeyboardEvent, idx: number, field: 'account' | 'debit' | 'credit' | 'description') => {
+    if (e.key === 'Enter') {
+      const row = (e.currentTarget.closest('.space-y-1') as HTMLElement);
+      if (field === 'account') {
+        const next = row?.querySelector('input[placeholder="Débit"]') as HTMLInputElement;
+        next?.focus();
+      } else if (field === 'debit') {
+        const next = row?.querySelector('input[placeholder="Crédit"]') as HTMLInputElement;
+        next?.focus();
+      } else if (field === 'credit') {
+        if (idx === entries.length - 1 && !isBalanced) {
+          setEntries([...entries, { account_code: '', debit: 0, credit: 0, description: '' }]);
+        }
+        setTimeout(() => {
+          const allRows = row?.parentElement?.children;
+          if (allRows && allRows[idx+1]) {
+            const nextAccount = (allRows[idx+1] as HTMLElement).querySelector('input[placeholder="Cpt"]') as HTMLInputElement;
+            nextAccount?.focus();
+          }
+        }, 0);
+      }
+    }
+  };
+
   const clearForm = async () => {
     const proceed = await confirm("Voulez-vous réinitialiser le formulaire ?");
     if (!proceed) return;
@@ -226,6 +307,18 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isModalOpen) return;
 
+      // Ctrl+K to focus Magic Input
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        magicInputRef.current?.focus();
+      }
+
+      // Ctrl+B to balance
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        handleBalance();
+      }
+
       // Ctrl+S or Cmd+S to save
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
@@ -249,7 +342,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (operationType) params.append('operationType', operationType);
 
     if (params.toString()) {
-      fetch(`/api/journal/suggestions?${params.toString()}`)
+      apiFetch(`/api/journal/suggestions?${params.toString()}`)
         .then(res => res.json())
         .then(data => setSuggestedAccounts(data))
         .catch(err => console.error(err));
@@ -271,7 +364,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   const fetchDefaultOccasional = async () => {
     try {
-      const res = await fetch('/api/third-parties/defaults');
+      const res = await apiFetch('/api/third-parties/defaults');
       if (res.ok) {
         const data = await res.json();
         setDefaultOccasional(data);
@@ -284,8 +377,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const fetchCompanySettings = async () => {
     try {
       const [settingsRes, vatRes] = await Promise.all([
-        fetch('/api/company/settings'),
-        fetch('/api/vat-settings')
+        apiFetch('/api/company/settings'),
+        apiFetch('/api/vat-settings')
       ]);
       const settings = await settingsRes.json();
       const vatSettings = await vatRes.json();
@@ -320,7 +413,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   const fetchAccounts = async () => {
     try {
-      const res = await fetch('/api/accounts');
+      const res = await apiFetch('/api/accounts');
       const data = await res.json();
       setAccounts(data);
     } catch (err) {
@@ -330,7 +423,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   const fetchThirdParties = async () => {
     try {
-      const res = await fetch('/api/third-parties');
+      const res = await apiFetch('/api/third-parties');
       const data = await res.json();
       setThirdParties(data);
     } catch (err) {
@@ -352,8 +445,10 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       if (accountFilter) params.append('accountCode', accountFilter);
       if (minAmount) params.append('minAmount', minAmount);
       if (maxAmount) params.append('maxAmount', maxAmount);
+      if (activeYear?.id) params.append('fiscalYearId', activeYear.id.toString());
+      if (currentView === 'trash') params.append('isDeleted', 'true');
 
-      const res = await fetch(`/api/transactions?${params.toString()}`);
+      const res = await apiFetch(`/api/transactions?${params.toString()}`);
       const data = await res.json();
       setTransactions(data);
     } catch (err) {
@@ -363,9 +458,51 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
+  const handleRestore = async (id: number) => {
+    try {
+      const res = await apiFetch(`/api/transactions/${id}/restore`, { method: 'POST' });
+      if (res.ok) {
+        dialogAlert("Transaction restaurée avec succès !");
+        fetchTransactions();
+      } else {
+        const err = await res.json();
+        dialogAlert(err.error || "Erreur lors de la restauration", 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert("Erreur de communication", 'error');
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    const isTrash = currentView === 'trash';
+    const message = isTrash 
+      ? "Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT cette transaction ? Cette action est irréversible."
+      : "Voulez-vous déplacer cette transaction vers la corbeille ?";
+    
+    const proceed = await confirm(message);
+    if (!proceed) return;
+
+    try {
+      const url = isTrash ? `/api/transactions/${id}?permanent=true` : `/api/transactions/${id}`;
+      const res = await apiFetch(url, { method: 'DELETE' });
+      const data = await res.json();
+      
+      if (res.ok) {
+        dialogAlert(isTrash ? "Transaction supprimée définitivement" : "Transaction déplacée dans la corbeille");
+        fetchTransactions();
+      } else {
+        dialogAlert(data.error || "Erreur lors de la suppression", 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert("Erreur lors de la suppression", 'error');
+    }
+  };
+
   const fetchCustomOperations = async () => {
     try {
-      const res = await fetch('/api/custom-operations');
+      const res = await apiFetch('/api/custom-operations');
       const data = await res.json();
       setCustomOperations(data);
     } catch (err) {
@@ -390,7 +527,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (!validateCustomOp()) return;
     
     try {
-      const res = await fetch('/api/custom-operations', {
+      const res = await apiFetch('/api/custom-operations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -419,7 +556,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   const handleCreateInvoiceFromTransaction = async (id: number) => {
     try {
-      const res = await fetch(`/api/transactions/${id}`);
+      const res = await apiFetch(`/api/transactions/${id}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       
@@ -501,7 +638,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/invoices', {
+      const res = await apiFetch('/api/invoices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -536,19 +673,19 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   const handleShowDetail = async (id: number) => {
     try {
-      const res = await fetch(`/api/transactions/${id}`);
+      const res = await apiFetch(`/api/transactions/${id}`);
       const data = await res.json();
       setSelectedTransactionDetail(data);
       setIsDetailOpen(true);
     } catch (err) {
       console.error("Failed to fetch transaction details", err);
-      alert("Erreur lors du chargement des détails");
+      dialogAlert("Erreur lors du chargement des détails");
     }
   };
 
   const handleDuplicate = async (id: number) => {
     try {
-      const res = await fetch(`/api/transactions/${id}`);
+      const res = await apiFetch(`/api/transactions/${id}`);
       const data = await res.json();
       
       if (data.error) throw new Error(data.error);
@@ -590,7 +727,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   const handleEdit = async (id: number) => {
     try {
-      const res = await fetch(`/api/transactions/${id}`);
+      const res = await apiFetch(`/api/transactions/${id}`);
       const data = await res.json();
       
       if (data.error) throw new Error(data.error);
@@ -744,11 +881,142 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
+  const startListening = () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      dialogAlert("La reconnaissance vocale n'est pas supportée par votre navigateur.");
+      return;
+    }
+
+    // @ts-ignore
+    const recognition = new window.webkitSpeechRecognition();
+    recognition.lang = 'fr-FR';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    recognition.onresult = async (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setMagicInput(transcript);
+      // Wait a bit for state update before submitting
+      setTimeout(() => {
+        handleMagicSubmit();
+      }, 500);
+    };
+
+    recognition.start();
+  };
+
+  useEffect(() => {
+    const state = location.state as { prefilled?: any, triggerVoice?: boolean };
+    if (state?.triggerVoice) {
+      // Clear state so it doesn't trigger again on reload
+      window.history.replaceState({}, document.title);
+      startListening();
+    }
+    if (state?.prefilled) {
+      const data = state.prefilled;
+      setMode('guided');
+      setEditingId(null);
+      setDescription(data.description || '');
+      setAmountHT(data.amount || 0);
+
+      if (data.date) setDate(data.date);
+      if (data.operationType) setOperationType(data.operationType);
+      if (data.paymentMode) setPaymentMode(data.paymentMode);
+
+      if (data.thirdPartyName) {
+        const type = ['vente_marchandises', 'vente_services', 'encaissement_client'].includes(data.operationType) ? 'client' : 'supplier';
+        const match = thirdParties.find(tp => 
+          tp.name.toLowerCase().includes(data.thirdPartyName!.toLowerCase()) || 
+          data.thirdPartyName!.toLowerCase().includes(tp.name.toLowerCase())
+        );
+        
+        if (match) {
+          setSelectedThirdParty(match.account_code);
+        } else {
+          setOccasionalName(data.thirdPartyName);
+          const def = type === 'client' ? defaultOccasional.client : defaultOccasional.supplier;
+          if (def) setSelectedThirdParty(def.account_code);
+        }
+      }
+
+      setReference(generateReference());
+      setIsModalOpen(true);
+      // Clear location state to prevent re-opening on refresh
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state, thirdParties, defaultOccasional]);
+
+  const handleMagicSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!magicInput.trim()) return;
+
+    setIsMagicLoading(true);
+    try {
+      const data = await parseNaturalLanguageEntry(magicInput);
+      if (!data) {
+        dialogAlert("Impossible de comprendre cette demande. Essayez d'être plus explicite : 'Achat de fournitures 50000 FCFA par caisse chez Inova'", "error");
+        return;
+      }
+
+      setMode('guided');
+      setEditingId(null);
+      setDescription(data.description || magicInput);
+      setAmountHT(data.amount || 0);
+
+      if (data.date) {
+        setDate(data.date);
+      }
+
+      if (data.operationType) {
+        setOperationType(data.operationType);
+      }
+
+      if (data.paymentMode) {
+        setPaymentMode(data.paymentMode);
+      }
+
+      if (data.thirdPartyName) {
+        const type = ['vente_marchandises', 'vente_services', 'encaissement_client'].includes(data.operationType) ? 'client' : 'supplier';
+        
+        const match = thirdParties.find(tp => 
+          tp.name.toLowerCase().includes(data.thirdPartyName!.toLowerCase()) || 
+          data.thirdPartyName!.toLowerCase().includes(tp.name.toLowerCase())
+        );
+        
+        if (match) {
+          setSelectedThirdParty(match.account_code);
+        } else {
+          setOccasionalName(data.thirdPartyName);
+          const def = type === 'client' ? defaultOccasional.client : defaultOccasional.supplier;
+          if (def) {
+            setSelectedThirdParty(def.account_code);
+          }
+        }
+      }
+
+      const generatedReference = generateReference();
+      setReference(generatedReference);
+
+      setIsModalOpen(true);
+      setMagicInput('');
+    } catch (err) {
+      console.error(err);
+      dialogAlert("Erreur lors de la suggestion IA", "error");
+    } finally {
+      setIsMagicLoading(false);
+    }
+  };
+
   const performAIAnalysis = async (base64: string, sType: 'vente' | 'achat') => {
     try {
       const data = await analyzeInvoice(base64, sType, companySettings?.vat_settings || []);
       
       if (!data) throw new Error("L'analyse IA a échoué");
+
+      setLastAiPrediction(data);
+      setLastAiImage(base64);
 
       if (data.date) setDate(data.date);
       if (data.description) setDescription(data.description);
@@ -819,7 +1087,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (!confirmed) return;
 
     try {
-      const res = await fetch(`/api/attachments/${id}`, {
+      const res = await apiFetch(`/api/attachments/${id}`, {
         method: 'DELETE'
       });
       
@@ -835,7 +1103,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         }
         // If we are editing, we might need to refresh the attachments list
         if (editingId) {
-          const txRes = await fetch(`/api/transactions/${editingId}`);
+          const txRes = await apiFetch(`/api/transactions/${editingId}`);
           const txData = await txRes.json();
           setSelectedTransactionDetail(txData); // This is a bit hacky but works if we use it for edit too
         }
@@ -851,7 +1119,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   const handleAISuggestion = async () => {
     if (!description || !amountHT) {
-      alert("Veuillez saisir un libellé et un montant pour obtenir une suggestion.");
+      dialogAlert("Veuillez saisir un libellé et un montant pour obtenir une suggestion.");
       return;
     }
 
@@ -872,11 +1140,11 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       if (suggestion && suggestion.entries.length > 0) {
         setAiSuggestion(suggestion);
       } else {
-        alert("L'IA n'a pas pu générer de suggestion pertinente.");
+        dialogAlert("L'IA n'a pas pu générer de suggestion pertinente.");
       }
     } catch (err) {
       console.error("AI Suggestion failed", err);
-      alert("Erreur lors de la suggestion IA.");
+      dialogAlert("Erreur lors de la suggestion IA.");
     } finally {
       setSuggesting(false);
     }
@@ -1014,16 +1282,25 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (Math.abs(diff) < 0.01) return;
 
     const newEntries = [...entries];
-    const lastEntry = newEntries[newEntries.length - 1];
+    // Use the first row that lacks an amount, or the last row if all have amounts
+    let targetIdx = newEntries.findIndex(e => !e.debit && !e.credit);
+    if (targetIdx === -1) {
+      targetIdx = newEntries.length - 1;
+    }
+    
+    const target = { ...newEntries[targetIdx] };
 
     if (diff > 0) {
-      // More debit than credit, add to credit of the last entry
-      lastEntry.credit = Number((lastEntry.credit + diff).toFixed(2));
+      // More debit than credit, add to credit
+      target.credit = Number((Number(target.credit || 0) + diff).toFixed(2));
+      target.debit = 0; // Clear opposite
     } else {
-      // More credit than debit, add to debit of the last entry
-      lastEntry.debit = Number((lastEntry.debit + Math.abs(diff)).toFixed(2));
+      // More credit than debit, add to debit
+      target.debit = Number((Number(target.debit || 0) + Math.abs(diff)).toFixed(2));
+      target.credit = 0; // Clear opposite
     }
 
+    newEntries[targetIdx] = target;
     setEntries(newEntries);
   };
 
@@ -1076,7 +1353,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             formData.append('files', file);
           });
 
-          const uploadRes = await fetch(`/api/transactions/${transactionId}/attachments`, {
+          const uploadRes = await apiFetch(`/api/transactions/${transactionId}/attachments`, {
             method: 'POST',
             body: formData
           });
@@ -1096,12 +1373,38 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         setEditingId(null);
         setSelectedThirdParty('');
         setPendingFiles([]);
+
+        // Log OCR feedback if it was an AI-assisted creation
+        if (lastAiPrediction && lastAiImage && !editingId) {
+          const finalData: InvoiceAnalysis = {
+            date,
+            description,
+            third_party: party?.name || (party?.is_occasional ? occasionalName : ''),
+            amount_ht: amountHT,
+            amount_tva: (amountHT * vatRate / 100),
+            amount_ttc: (amountHT * (1 + vatRate / 100)),
+            vat_rate: vatRate,
+            operation_type: operationType,
+            invoice_number: reference,
+            currency: transactionCurrency,
+            entries: entriesToSave.map(e => ({
+              account_code: e.account_code,
+              debit: e.debit,
+              credit: e.credit,
+              description: e.description
+            }))
+          };
+          
+          logOcrFeedback(lastAiImage, lastAiPrediction, finalData);
+          setLastAiPrediction(null);
+          setLastAiImage(null);
+        }
       } else {
         throw new Error(data.error || "Erreur lors de l'enregistrement");
       }
     } catch (err) {
       console.error(err);
-      alert(err instanceof Error ? err.message : "Une erreur est survenue");
+      dialogAlert(err instanceof Error ? err.message : "Une erreur est survenue");
     } finally {
       setSubmitting(false);
     }
@@ -1121,6 +1424,64 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     setIsModalOpen(true);
   };
 
+  const handleImportExcel = () => {
+    importInputRef.current?.click();
+  };
+
+  const onImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target?.result as string;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws);
+        
+        const entries = data.map((row: any) => ({
+          date: row.date || row.Date || new Date().toISOString().split('T')[0],
+          description: row.description || row.Description || row.Libellé || 'Import Excel',
+          reference: row.reference || row.Reference || row.Réf || '',
+          lines: [
+            { account_code: String(row.account_debit || row.Débit || ''), debit: Number(row.amount || row.Montant || 0), credit: 0 },
+            { account_code: String(row.account_credit || row.Crédit || ''), debit: 0, credit: Number(row.amount || row.Montant || 0) }
+          ]
+        })).filter(e => e.lines[0].account_code && e.lines[1].account_code && (e.lines[0].debit > 0 || e.lines[1].credit > 0));
+
+        if (entries.length === 0) {
+          dialogAlert("Aucune donnée valide trouvée dans le fichier. Assurez-vous d'avoir les colonnes: date, description, account_debit, account_credit, amount.");
+          return;
+        }
+
+        const confirmed = await confirm(`Importer ${entries.length} écritures ?`);
+        if (!confirmed) return;
+
+        const res = await apiFetch('/api/import/journal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries })
+        });
+
+        if (res.ok) {
+          const result = await res.json();
+          dialogAlert(`${result.success} écritures importées avec succès.`);
+          fetchTransactions();
+        } else {
+          const errorData = await res.json();
+          dialogAlert("Erreur lors de l'import: " + (errorData.error || "Inconnu"));
+        }
+      } catch (err) {
+        console.error(err);
+        dialogAlert("Le fichier Excel n'a pas pu être lu. Vérifiez son format.");
+      }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = '';
+  };
+
   const handleExportExcel = async () => {
     try {
       const params = new URLSearchParams();
@@ -1128,7 +1489,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       if (endDate) params.append('endDate', endDate);
       if (statusFilter && statusFilter !== 'all') params.append('status', statusFilter);
 
-      const res = await fetch(`/api/journal/export?${params.toString()}`);
+      const res = await apiFetch(`/api/journal/export?${params.toString()}`);
       const data: DetailedTransaction[] = await res.json();
 
       const excelData = data.flatMap(tx => tx.entries.map(entry => ({
@@ -1144,7 +1505,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       utils.exportToExcel(excelData, `Journal_${new Date().toISOString().split('T')[0]}`, 'JOURNAL');
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de l'export Excel");
+      dialogAlert("Erreur lors de l'export Excel");
     }
   };
 
@@ -1156,7 +1517,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       if (endDate) params.append('endDate', endDate);
       if (statusFilter && statusFilter !== 'all') params.append('status', statusFilter);
 
-      const res = await fetch(`/api/journal/export?${params.toString()}`);
+      const res = await apiFetch(`/api/journal/export?${params.toString()}`);
       const data: DetailedTransaction[] = await res.json();
 
       // --- VALIDATION AVANT EXPORT ---
@@ -1236,7 +1597,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
     } catch (err) {
       console.error("Export failed", err);
-      alert("Erreur technique lors de l'export PDF");
+      dialogAlert("Erreur technique lors de l'export PDF");
     }
   };
 
@@ -1302,6 +1663,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const formConfig = getFormConfig(operationType);
 
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const toggleSelection = (id: number) => {
     setSelectedIds(prev => 
@@ -1317,33 +1679,12 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
-  const handleDelete = async (id: number) => {
-    const confirmed = await confirm(t('common.confirm_delete'));
-    if (!confirmed) return;
-
-    try {
-      const res = await fetch(`/api/transactions/${id}`, {
-        method: 'DELETE'
-      });
-      
-      if (res.ok) {
-        fetchTransactions();
-      } else {
-        const data = await res.json();
-        throw new Error(data.error || "Erreur lors de la suppression");
-      }
-    } catch (err) {
-      console.error(err);
-      dialogAlert(err instanceof Error ? err.message : "Erreur lors de la suppression", 'error');
-    }
-  };
-
   const handleGenerateInvoice = async (id: number) => {
     const confirmed = await confirm("Voulez-vous générer une facture à partir de cette transaction ? Les détails du client et les montants seront pré-remplis.");
     if (!confirmed) return;
 
     try {
-      const res = await fetch(`/api/transactions/${id}/generate-invoice`, {
+      const res = await apiFetch(`/api/transactions/${id}/generate-invoice`, {
         method: 'POST'
       });
       
@@ -1365,7 +1706,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (!confirmed) return;
 
     try {
-      const res = await fetch('/api/transactions/bulk-delete', {
+      const res = await apiFetch('/api/transactions/bulk-delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: selectedIds })
@@ -1394,7 +1735,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="relative space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700"
+      className="relative space-y-6"
     >
       <AnimatePresence>
         {isDragging && (
@@ -1416,65 +1757,132 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-        <div>
-          <h1 className="text-4xl font-black text-slate-900 dark:text-white tracking-tight font-display mb-2">Journal Intelligent</h1>
-          <p className="text-slate-500 dark:text-slate-400 font-medium">Saisie simplifiée & conforme SYSCOHADA</p>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          {selectedIds.length > 0 && (
-            <button 
-              onClick={handleBulkDelete}
-              className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/40 px-5 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-sm animate-in fade-in zoom-in duration-200"
-            >
-              <Trash2 size={18} />
-              Supprimer ({selectedIds.length})
-            </button>
-          )}
-          <div className="flex bg-white dark:bg-slate-900 rounded-2xl p-1 border border-slate-200 dark:border-slate-800 shadow-sm">
-            <button 
-              onClick={handleExportExcel}
-              className="hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 p-3 rounded-xl transition-colors"
-              title="Exporter en Excel"
-            >
-              <FileSpreadsheet size={20} className="text-brand-green" />
-            </button>
-            <div className="w-px bg-slate-100 dark:bg-slate-800 my-2" />
-            <button 
-              onClick={handleExportPDF}
-              className="hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 p-3 rounded-xl transition-colors"
-              title="Exporter en PDF Détaillé"
-            >
-              <Download size={20} />
-            </button>
-          </div>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            accept="image/*"
-            onChange={handleFileChange}
-          />
-          <div className="group relative">
+
+      <PageHeader
+        title="Journal Intelligent"
+        subtitle="Saisie simplifiée & conforme SYSCOHADA"
+        icon={<BookOpen size={24} />}
+        actions={
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {selectedIds.length > 0 && (
+              <button 
+                onClick={handleBulkDelete}
+                className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/40 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
+              >
+                <Trash2 size={18} />
+                <span className="hidden md:inline">Supprimer ({selectedIds.length})</span>
+                <span className="md:hidden">{selectedIds.length}</span>
+              </button>
+            )}
+            <div className="hidden sm:flex bg-white dark:bg-slate-900 rounded-xl p-1 border border-slate-200 dark:border-slate-800 shadow-sm">
+              <button 
+                onClick={handleImportExcel}
+                className="hover:bg-slate-50 dark:hover:bg-slate-800 text-blue-500 p-2 rounded-lg transition-colors"
+                title="Importer Excel"
+              >
+                <Plus size={18} />
+              </button>
+              <input 
+                type="file" 
+                ref={importInputRef} 
+                onChange={onImportFileChange} 
+                accept=".xlsx, .xls, .csv" 
+                className="hidden" 
+              />
+              <button 
+                onClick={handleExportExcel}
+                className="hover:bg-slate-50 dark:hover:bg-slate-800 text-brand-green p-2 rounded-lg transition-colors"
+                title="Exporter Excel"
+              >
+                <FileSpreadsheet size={18} />
+              </button>
+              <button 
+                onClick={handleExportPDF}
+                className="hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-500 p-2 rounded-lg transition-colors"
+                title="PDF"
+              >
+                <Download size={18} />
+              </button>
+            </div>
+            
             <button 
               onClick={handleScanButtonClick}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-sm"
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
             >
-              <Wand2 size={20} className="text-brand-gold" />
-              <span>Scanner</span>
+              <Wand2 size={18} className="text-brand-gold" />
+              <span className="hidden md:inline">Scanner</span>
             </button>
-            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] font-black px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none uppercase tracking-widest z-10">
-              Ou glissez-déposez ici
-            </div>
+            
+            <button 
+              onClick={openNewModal}
+              className="bg-brand-green text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-brand-green/90 transition-all shadow-lg shadow-brand-green/20 whitespace-nowrap active:scale-95"
+            >
+              <Plus size={20} />
+              <span className="hidden sm:inline">Saisie Manuelle</span>
+              <span className="sm:hidden">Saisie</span>
+            </button>
           </div>
-          <button 
-            onClick={openNewModal}
-            className="bg-brand-green text-white px-8 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-brand-green/90 transition-all shadow-lg shadow-brand-green/20"
-          >
-            <Plus size={20} />
-            Saisie Manuelle
-          </button>
+        }
+      />
+
+      {/* Magic Input */}
+      <form onSubmit={handleMagicSubmit} className="relative z-10">
+        <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-green mb-2 block flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse"></span>
+          Saisie Express
+        </label>
+        <div className="relative group">
+          <input 
+            type="text" 
+            ref={magicInputRef}
+            value={magicInput}
+            onChange={(e) => setMagicInput(e.target.value)}
+            placeholder="Dictez votre opération (ex: Consultation patient Koffi 15000 FCFA reçu par espèce...)"
+            className="w-full bg-white dark:bg-slate-900 border-2 border-brand-green/30 focus:border-brand-green text-slate-900 dark:text-white rounded-2xl py-4 pl-14 pr-44 transition-all outline-none font-medium shadow-sm hover:shadow-md"
+            disabled={isMagicLoading}
+          />
+          <div className="absolute left-5 top-1/2 -translate-y-1/2 text-brand-green">
+            <Wand2 size={24} />
+          </div>
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={startListening}
+              disabled={isListening}
+              className={`p-2 rounded-xl transition-all flex items-center justify-center ${isListening ? 'bg-red-100 text-red-500 animate-pulse' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-brand-green hover:bg-brand-green/10'}`}
+              title="Dicter l'opération"
+            >
+              {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+            </button>
+            <button
+              type="submit"
+              disabled={isMagicLoading || !magicInput.trim()}
+              className="bg-brand-green text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-brand-green/90 transition-all disabled:opacity-50"
+            >
+              {isMagicLoading ? <Loader2 size={18} className="animate-spin" /> : <ArrowRight size={18} />}
+              <span className="hidden sm:inline">Créer</span>
+            </button>
+          </div>
         </div>
+      </form>
+      
+      {/* Quick Suggestions / Templates */}
+      <div className="flex flex-wrap gap-2 mt-2 items-center text-xs font-medium relative z-10">
+        <span className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Rapide :</span>
+        {[
+          "Consultation patient 15000 FCFA par espèces", 
+          "Achat de matériel médical 200000 FCFA par banque chez Laborex", 
+          "Frais d'électricité cabinet 45000 FCFA par Orange Money",
+          "Encaissement honoraires chirurgie 1200000 FCFA par virement"
+        ].map((template, idx) => (
+          <button 
+            key={idx}
+            onClick={() => setMagicInput(template)}
+            className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg hover:bg-brand-green/10 hover:text-brand-green transition-all"
+          >
+            {template.substring(0, 30)}...
+          </button>
+        ))}
       </div>
 
       {/* Summary Cards */}
@@ -1517,6 +1925,34 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             </div>
           </div>
         </div>
+      </div>
+
+      {/* View Toggle */}
+      <div className="flex bg-slate-100/50 dark:bg-slate-800/30 p-1 rounded-2xl border border-slate-200 dark:border-slate-800 w-fit">
+        <button 
+          onClick={() => setCurrentView('active')}
+          className={cn(
+            "px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2",
+            currentView === 'active' 
+              ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" 
+              : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+          )}
+        >
+          <BookOpen size={14} />
+          Opérations
+        </button>
+        <button 
+          onClick={() => setCurrentView('trash')}
+          className={cn(
+            "px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2",
+            currentView === 'trash' 
+              ? "bg-rose-500 text-white shadow-lg shadow-rose-500/20" 
+              : "text-slate-500 hover:text-rose-500"
+          )}
+        >
+          <Trash2 size={14} />
+          Corbeille
+        </button>
       </div>
 
       {/* Filters Bar */}
@@ -1880,33 +2316,45 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       </td>
                       <td className="px-4 sm:px-6 py-5 text-center" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1 sm:gap-2">
-                          <button 
-                            onClick={() => handleEdit(tx.id)}
-                            className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-brand-green dark:hover:text-brand-green-light hover:bg-brand-green/10 dark:hover:bg-brand-green/20 rounded-lg transition-colors"
-                            title="Modifier"
-                          >
-                            <Pencil size={14} className="sm:w-4 sm:h-4" />
-                          </button>
-                          <button 
-                            onClick={() => handleDuplicate(tx.id)}
-                            className="hidden sm:block p-2 text-slate-400 dark:text-slate-500 hover:text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-colors"
-                            title="Dupliquer"
-                          >
-                            <FilePlus size={16} />
-                          </button>
-                          {tx.status === 'validated' && !tx.invoice_number && (
+                          {currentView === 'active' ? (
+                            <>
+                              <button 
+                                onClick={() => handleEdit(tx.id)}
+                                className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-brand-green dark:hover:text-brand-green-light hover:bg-brand-green/10 dark:hover:bg-brand-green/20 rounded-lg transition-colors"
+                                title="Modifier"
+                              >
+                                <Pencil size={14} className="sm:w-4 sm:h-4" />
+                              </button>
+                              <button 
+                                onClick={() => handleDuplicate(tx.id)}
+                                className="hidden sm:block p-2 text-slate-400 dark:text-slate-500 hover:text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-colors"
+                                title="Dupliquer"
+                              >
+                                <FilePlus size={16} />
+                              </button>
+                              {tx.status === 'validated' && !tx.invoice_number && (
+                                <button 
+                                  onClick={() => handleGenerateInvoice(tx.id)}
+                                  className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-brand-gold dark:hover:text-brand-gold hover:bg-brand-gold/10 dark:hover:bg-brand-gold/20 rounded-lg transition-colors"
+                                  title="Générer Facture"
+                                >
+                                  <Zap size={14} className="sm:w-4 sm:h-4" />
+                                </button>
+                              )}
+                            </>
+                          ) : (
                             <button 
-                              onClick={() => handleGenerateInvoice(tx.id)}
-                              className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-brand-gold dark:hover:text-brand-gold hover:bg-brand-gold/10 dark:hover:bg-brand-gold/20 rounded-lg transition-colors"
-                              title="Générer Facture"
+                              onClick={() => handleRestore(tx.id)}
+                              className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-brand-green dark:hover:text-brand-green-light hover:bg-brand-green/10 dark:hover:bg-brand-green/20 rounded-lg transition-colors"
+                              title="Restaurer"
                             >
-                              <Zap size={14} className="sm:w-4 sm:h-4" />
+                              <BookOpen size={14} className="sm:w-4 sm:h-4" />
                             </button>
                           )}
                           <button 
                             onClick={() => handleDelete(tx.id)}
                             className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
-                            title="Supprimer"
+                            title={currentView === 'trash' ? "Supprimer définitivement" : "Supprimer"}
                           >
                             <Trash2 size={14} className="sm:w-4 sm:h-4" />
                           </button>
@@ -2113,7 +2561,14 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                   </div>
                   <input 
                     type="text" 
+                    ref={descriptionInputRef}
                     value={description}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        amountInputRef.current?.focus();
+                      }
+                    }}
                     onChange={(e) => {
                       setDescription(e.target.value);
                       if (errors.description) setErrors(prev => ({ ...prev, description: '' }));
@@ -2277,7 +2732,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                     const name = prompt(`Nom du nouveau ${type === 'client' ? 'client' : 'fournisseur'} occasionnel :`);
                                     if (name) {
                                       try {
-                                        const res = await fetch('/api/third-parties', {
+                                        const res = await apiFetch('/api/third-parties', {
                                           method: 'POST',
                                           headers: { 'Content-Type': 'application/json' },
                                           body: JSON.stringify({
@@ -2304,6 +2759,32 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                 </button>
                               </div>
                             </div>
+
+                            {selectedTP && (
+                              <div className="mx-1 px-4 py-3 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl flex items-center justify-between animate-in fade-in slide-in-from-top-1 duration-300 shadow-sm">
+                                <div className="flex items-center gap-3">
+                                  <div className={cn(
+                                    "w-8 h-8 rounded-xl flex items-center justify-center font-bold text-xs",
+                                    type === 'client' ? "bg-blue-50 text-blue-500" : "bg-brand-green/10 text-brand-green"
+                                  )}>
+                                    {selectedTP.name.charAt(0)}
+                                  </div>
+                                  <div>
+                                    <div className="text-xs font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Solde Actuel</div>
+                                    <div className={cn(
+                                      "text-sm font-black",
+                                      (selectedTP.balance || 0) > 0 ? "text-rose-500" : (selectedTP.balance || 0) < 0 ? "text-emerald-500" : "text-slate-500"
+                                    )}>
+                                      {formatCurrency(selectedTP.balance || 0, baseCurrency)}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-[9px] font-black text-slate-300 uppercase tracking-[0.2em] leading-none mb-1">Compte</div>
+                                  <div className="text-xs font-mono font-bold text-slate-500">{selectedTP.account_code}</div>
+                                </div>
+                              </div>
+                            )}
 
                             {selectedTP?.is_occasional && (
                               <motion.div
@@ -2455,7 +2936,16 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                         <div className="relative">
                           <input 
                             type="number" 
+                            ref={amountInputRef}
+                            inputMode="decimal"
                             value={isNaN(amountHT) ? '' : amountHT}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                // Try to focus first payment mode button or save button
+                                (e.currentTarget.closest('.space-y-8')?.querySelector('button[className*="bg-slate-900"]') as HTMLElement)?.focus();
+                              }
+                            }}
                             onChange={(e) => {
                               setAmountHT(Number(e.target.value));
                               if (errors.amountHT) setErrors(prev => ({ ...prev, amountHT: '' }));
@@ -2707,6 +3197,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                   errors[`account_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
                                 )}
                                 value={entry.account_code}
+                                onKeyDown={(e) => handleEntryKeyDown(e, idx, 'account')}
                                 onChange={(e) => {
                                   const newEntries = [...entries];
                                   newEntries[idx].account_code = e.target.value;
@@ -2731,14 +3222,19 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                             <input 
                               placeholder="Débit" 
                               type="number"
+                              inputMode="decimal"
                               className={cn(
                                 "flex-1 px-4 py-2.5 rounded-xl border text-sm font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all outline-none focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green text-right",
                                 errors[`amount_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
                               )}
                               value={isNaN(entry.debit) ? '' : entry.debit}
+                              onKeyDown={(e) => handleEntryKeyDown(e, idx, 'debit')}
                               onChange={(e) => {
                                 const newEntries = [...entries];
-                                newEntries[idx].debit = Number(e.target.value);
+                                const val = Number(e.target.value);
+                                newEntries[idx].debit = val;
+                                // Auto-clear credit if debit is set
+                                if (val > 0) newEntries[idx].credit = 0;
                                 setEntries(newEntries);
                                 if (errors.balance) setErrors(prev => ({ ...prev, balance: '' }));
                               }}
@@ -2746,14 +3242,19 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                             <input 
                               placeholder="Crédit" 
                               type="number"
+                              inputMode="decimal"
                               className={cn(
                                 "flex-1 px-4 py-2.5 rounded-xl border text-sm font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all outline-none focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green text-right",
                                 errors[`amount_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
                               )}
                               value={isNaN(entry.credit) ? '' : entry.credit}
+                              onKeyDown={(e) => handleEntryKeyDown(e, idx, 'credit')}
                               onChange={(e) => {
                                 const newEntries = [...entries];
-                                newEntries[idx].credit = Number(e.target.value);
+                                const val = Number(e.target.value);
+                                newEntries[idx].credit = val;
+                                // Auto-clear debit if credit is set
+                                if (val > 0) newEntries[idx].debit = 0;
                                 setEntries(newEntries);
                                 if (errors.balance) setErrors(prev => ({ ...prev, balance: '' }));
                               }}

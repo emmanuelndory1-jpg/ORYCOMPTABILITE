@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
-import { AlertCircle, Check, X } from 'lucide-react';
+import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import { AlertCircle, Check, X, Info } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface DialogContextType {
   alert: (message: string, type?: 'error' | 'success' | 'info') => void;
@@ -16,17 +17,24 @@ export function useDialog() {
   return context;
 }
 
-export function DialogProvider({ children }: { children: ReactNode }) {
-  const [alertState, setAlertState] = useState<{ isOpen: boolean; message: string; type: 'error' | 'success' | 'info' }>({
-    isOpen: false,
-    message: '',
-    type: 'info'
-  });
+interface ToastMessage {
+  id: string;
+  message: string;
+  type: 'error' | 'success' | 'info';
+}
 
+export function DialogProvider({ children }: { children: ReactNode }) {
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [confirmState, setConfirmState] = useState<{ isOpen: boolean; message: string; resolve: (value: boolean) => void } | null>(null);
 
   const alert = (message: string, type: 'error' | 'success' | 'info' = 'info') => {
-    setAlertState({ isOpen: true, message, type });
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts(prev => [...prev, { id, message, type }]);
+    
+    // Auto-dismiss after 4 seconds
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
   };
 
   const confirm = (message: string): Promise<boolean> => {
@@ -35,7 +43,9 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const closeAlert = () => setAlertState(prev => ({ ...prev, isOpen: false }));
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
 
   const handleConfirm = (value: boolean) => {
     if (confirmState) {
@@ -48,41 +58,45 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     <DialogContext.Provider value={{ alert, confirm }}>
       {children}
 
-      {/* Alert Modal */}
-      {alertState.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800">
-            <div className="p-6 text-center">
-              <div className={`w-12 h-12 rounded-full mx-auto flex items-center justify-center mb-4 ${
-                alertState.type === 'error' ? 'bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400' :
-                alertState.type === 'success' ? 'bg-brand-green/10 text-brand-green' :
-                'bg-brand-gold/10 dark:bg-brand-gold/20 text-brand-gold'
+      {/* Toast Notifications */}
+      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none w-full max-w-sm">
+        <AnimatePresence>
+          {toasts.map(toast => (
+            <motion.div
+              key={toast.id}
+              initial={{ opacity: 0, y: 50, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+              className="pointer-events-auto bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 shadow-xl rounded-2xl p-4 flex items-start gap-3 w-full"
+            >
+              <div className={`mt-0.5 shrink-0 ${
+                toast.type === 'error' ? 'text-rose-500' :
+                toast.type === 'success' ? 'text-brand-green' : 'text-brand-gold'
               }`}>
-                {alertState.type === 'error' ? <AlertCircle size={24} /> :
-                 alertState.type === 'success' ? <Check size={24} /> :
-                 <AlertCircle size={24} />}
+                {toast.type === 'error' ? <AlertCircle size={20} /> :
+                 toast.type === 'success' ? <Check size={20} /> : <Info size={20} />}
               </div>
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">
-                {alertState.type === 'error' ? 'Erreur' :
-                 alertState.type === 'success' ? 'Succès' : 'Information'}
-              </h3>
-              <p className="text-slate-500 dark:text-slate-400 text-sm">{alertState.message}</p>
-            </div>
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800">
-              <button
-                onClick={closeAlert}
-                className="w-full py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl font-medium hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors"
+              <div className="flex-1">
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {toast.type === 'error' ? 'Erreur' :
+                   toast.type === 'success' ? 'Succès' : 'Information'}
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{toast.message}</p>
+              </div>
+              <button 
+                onClick={() => removeToast(toast.id)}
+                className="text-slate-400 hover:text-slate-600 transition-colors shrink-0"
               >
-                Fermer
+                <X size={16} />
               </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
 
       {/* Confirm Modal */}
       {confirmState?.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800">
             <div className="p-6 text-center">
               <div className="w-12 h-12 rounded-full bg-brand-gold/10 dark:bg-brand-gold/20 text-brand-gold mx-auto flex items-center justify-center mb-4">

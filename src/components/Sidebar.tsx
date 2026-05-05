@@ -8,8 +8,10 @@ import {
   Settings, 
   X,
   Wallet,
+  Landmark,
   FileText,
   ShieldCheck,
+  Brain,
   Building2,
   Building,
   Search,
@@ -28,7 +30,8 @@ import {
   ChevronDown,
   Settings2,
   Banknote,
-  Calendar
+  Calendar,
+  ShoppingBag
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -41,10 +44,11 @@ interface SidebarProps {
   isMobileOpen: boolean;
   setIsMobileOpen: (open: boolean) => void;
   companyName?: string;
+  logoUrl?: string | null;
   user?: any;
 }
 
-export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: SidebarProps) {
+export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, user }: SidebarProps) {
   const { logout } = useAuth();
   const { t } = useLanguage();
   const { isActive } = useModules();
@@ -53,6 +57,9 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
     const saved = localStorage.getItem('sidebar_collapsed');
     return saved === 'true';
   });
+  const [isHovered, setIsHovered] = React.useState(false);
+
+  const isEffectivelyCollapsed = isCollapsed && !isHovered;
 
   const [searchQuery, setSearchQuery] = React.useState('');
   const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>({
@@ -86,6 +93,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
         { id: 'invoicing', label: t('nav.invoicing'), icon: FileText, badge: '3', module: 'invoicing' },
         { id: 'reconciliation', label: t('nav.reconciliation'), icon: Calculator, module: 'bankRec' },
         { id: 'budgets', label: t('nav.budgets'), icon: Target, module: 'budget' },
+        { id: 'p2p', label: 'Procure-to-Pay', icon: ShoppingBag, module: 'procure_to_pay' },
       ]
     },
     {
@@ -101,10 +109,13 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
       label: t('group.management') || 'États & Gestion',
       items: [
         { id: 'financials', label: t('nav.financials'), icon: FileText },
+        { id: 'treasury', label: t('nav.treasury') || 'Trésorerie', icon: Wallet },
+        { id: 'reconciliation', label: t('nav.reconciliation') || 'Rapprochement', icon: Landmark },
         { id: 'custom-reports', label: 'Rapports Personnalisés', icon: Settings2 },
         { id: 'third-parties', label: t('nav.third_parties'), icon: Briefcase, module: 'third_parties' },
         { id: 'assets', label: t('nav.assets'), icon: Building2, module: 'assets' },
         { id: 'vat', label: t('nav.vat'), icon: Percent, module: 'vat' },
+        { id: 'tax-report', label: 'Rapport Fiscal', icon: FileText, module: 'vat' },
         { id: 'company', label: t('nav.company') || 'Création Entreprise', icon: Building },
       ]
     },
@@ -131,6 +142,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
         { id: 'team', label: t('nav.team'), icon: Users },
         { id: 'assistant', label: t('nav.assistant'), icon: MessageSquareText },
         { id: 'tax-assistant', label: t('nav.tax_assistant') || 'Audit Fiscal Expert', icon: ShieldCheck },
+        { id: 'ai-training', label: 'Entraînement IA', icon: Brain },
         { id: 'settings', label: t('nav.settings'), icon: Settings },
       ]
     }
@@ -161,7 +173,9 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
 
       {/* Sidebar */}
       <motion.div
-        animate={{ width: isCollapsed ? 80 : 288 }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        animate={{ width: isEffectivelyCollapsed ? 80 : 288 }}
         className={cn(
           "fixed inset-y-0 left-0 z-[70] bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl text-slate-900 dark:text-slate-100 shadow-2xl transform transition-all duration-300 ease-in-out md:translate-x-0 md:sticky md:top-0 md:h-screen flex flex-col border-r border-slate-200 dark:border-white/5",
           isMobileOpen ? "translate-x-0" : "-translate-x-full"
@@ -170,16 +184,16 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
         {/* Header */}
         <div className={cn(
           "p-6 flex items-center justify-between border-b border-slate-100 dark:border-white/5 overflow-hidden",
-          isCollapsed ? "px-4" : "px-6"
+          isEffectivelyCollapsed ? "px-4" : "px-6"
         )}>
           <Link to="/" className="flex items-center gap-3 group shrink-0">
             <div className="relative">
               <div className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 flex items-center justify-center shadow-lg shadow-brand-green/10 group-hover:scale-105 transition-transform duration-200 overflow-hidden border border-slate-100 dark:border-white/10">
-                <Logo className="w-6 h-6 text-brand-green" showText={false} />
+                <Logo className="w-6 h-6 text-brand-green" showText={false} src={logoUrl} />
               </div>
               <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-brand-green-light rounded-full border-2 border-white dark:border-slate-950 shadow-sm" />
             </div>
-            {!isCollapsed && (
+            {!isEffectivelyCollapsed && (
               <motion.div 
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -192,7 +206,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
               </motion.div>
             )}
           </Link>
-          {!isCollapsed && (
+          {!isEffectivelyCollapsed && (
             <button onClick={() => setIsMobileOpen(false)} className="md:hidden p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors">
               <X size={20} />
             </button>
@@ -203,7 +217,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-800 scrollbar-track-transparent">
           {filteredGroups.map((group, idx) => (
             <div key={idx} className="space-y-1">
-              {!isCollapsed && (
+              {!isEffectivelyCollapsed && (
                 <button 
                   onClick={() => toggleGroup(group.label)}
                   className="w-full flex items-center justify-between text-[10px] uppercase text-slate-400 dark:text-slate-500 font-black tracking-[0.15em] px-3 mb-2 group"
@@ -214,9 +228,9 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
               )}
               
               <AnimatePresence initial={false}>
-                {(isCollapsed || openGroups[group.label] || searchQuery) && (
+                {(isEffectivelyCollapsed || openGroups[group.label] || searchQuery) && (
                   <motion.nav 
-                    initial={isCollapsed ? false : { height: 0, opacity: 0 }}
+                    initial={isEffectivelyCollapsed ? false : { height: 0, opacity: 0 }}
                     animate={{ height: "auto", opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
                     className="space-y-0.5 overflow-hidden"
@@ -230,10 +244,10 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
                           onClick={() => {
                             setIsMobileOpen(false);
                           }}
-                          title={isCollapsed ? item.label : undefined}
+                          title={isEffectivelyCollapsed ? item.label : undefined}
                           className={cn(
                             "w-full flex items-center px-3 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 group relative overflow-hidden",
-                            isCollapsed ? "justify-center" : "justify-between",
+                            isEffectivelyCollapsed ? "justify-center" : "justify-between",
                             isActive 
                               ? "bg-brand-green/5 dark:bg-brand-green/10 text-brand-green dark:text-brand-green-light shadow-sm border border-brand-green/10 dark:border-brand-green/20" 
                               : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-slate-200 border border-transparent"
@@ -246,10 +260,10 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
                             )}>
                               <item.icon size={18} />
                             </div>
-                            {!isCollapsed && <span className="tracking-tight">{item.label}</span>}
+                            {!isEffectivelyCollapsed && <span className="tracking-tight">{item.label}</span>}
                           </div>
                           
-                          {!isCollapsed && item.badge && (
+                          {!isEffectivelyCollapsed && item.badge && (
                             <span className={cn(
                               "px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider",
                               item.badge === 'Draft' ? "bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400" : "bg-brand-green/10 text-brand-green"
@@ -258,7 +272,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
                             </span>
                           )}
 
-                          {isActive && !isCollapsed && (
+                          {isActive && !isEffectivelyCollapsed && (
                             <motion.div
                               layoutId="activeTabIndicator"
                               className="absolute inset-0 bg-gradient-to-r from-brand-green/10 to-transparent rounded-xl z-0"
@@ -266,7 +280,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
                             />
                           )}
                           
-                          {isActive && !isCollapsed && (
+                          {isActive && !isEffectivelyCollapsed && (
                             <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-brand-green rounded-r-full shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
                           )}
                         </Link>
@@ -282,7 +296,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
         {/* Footer */}
         <div className="p-4 border-t border-slate-100 dark:border-white/5 bg-slate-50/50 dark:bg-slate-950/50 space-y-3">
           {/* Help & Support */}
-          {!isCollapsed && (
+          {!isEffectivelyCollapsed && (
             <Link to="/assistant" className="flex items-center gap-3 px-3 py-2 text-slate-500 hover:text-brand-green transition-colors group">
               <HelpCircle size={18} className="group-hover:rotate-12 transition-transform" />
               <span className="text-xs font-bold">Aide & Support</span>
@@ -291,7 +305,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
 
           <div className={cn(
             "bg-white/50 dark:bg-white/5 backdrop-blur-sm rounded-3xl p-4 border border-slate-100 dark:border-white/10 hover:border-brand-green/30 dark:hover:border-brand-green/30 transition-all cursor-pointer group shadow-sm hover:shadow-md",
-            isCollapsed ? "flex justify-center p-2" : ""
+            isEffectivelyCollapsed ? "flex justify-center p-2" : ""
           )}>
             <div className="flex items-center gap-3">
               <div className="relative shrink-0">
@@ -302,7 +316,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
                   <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
                 </div>
               </div>
-              {!isCollapsed && (
+              {!isEffectivelyCollapsed && (
                 <motion.div 
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -332,12 +346,12 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, user }: Si
               onClick={logout}
               className={cn(
                 "flex-1 flex items-center justify-center gap-2 p-2 text-slate-400 dark:text-slate-500 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl transition-all text-xs font-black uppercase tracking-widest",
-                isCollapsed ? "px-0" : ""
+                isEffectivelyCollapsed ? "px-0" : ""
               )}
-              title={isCollapsed ? t('auth.logout') || 'Déconnexion' : undefined}
+              title={isEffectivelyCollapsed ? t('auth.logout') || 'Déconnexion' : undefined}
             >
               <LogOut size={14} />
-              {!isCollapsed && (t('auth.logout') || 'Déconnexion')}
+              {!isEffectivelyCollapsed && (t('auth.logout') || 'Déconnexion')}
             </button>
           </div>
         </div>

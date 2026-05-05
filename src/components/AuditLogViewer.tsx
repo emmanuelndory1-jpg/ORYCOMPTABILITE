@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   History, 
@@ -18,6 +19,8 @@ import { apiFetch as fetch } from '@/lib/api';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
+import { generateAuditTrailPDF, CompanySettings } from '@/lib/exportUtils';
+import { useDialog } from './DialogProvider';
 
 interface AuditLog {
   id: number;
@@ -38,15 +41,35 @@ export function AuditLogViewer() {
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+  const [settings, setSettings] = useState<CompanySettings | null>(null);
+  const { alert } = useDialog();
 
   useEffect(() => {
     fetchLogs();
+    fetchSettings();
   }, [offset, filterAction]);
+
+  const fetchSettings = async () => {
+    try {
+      const res = await apiFetch('/api/company/settings');
+      if (res.ok) setSettings(await res.json());
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleExportPDF = () => {
+    if (logs.length === 0 || !settings) {
+      alert("Aucune donnée à exporter ou paramètres manquants.");
+      return;
+    }
+    generateAuditTrailPDF(logs, settings);
+  };
 
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/audit-logs?limit=${limit}&offset=${offset}`);
+      const res = await apiFetch(`/api/audit-logs?limit=${limit}&offset=${offset}`);
       if (res.ok) {
         const data = await res.json();
         setLogs(data.logs);
@@ -129,8 +152,11 @@ export function AuditLogViewer() {
         </div>
 
         <div className="flex items-center gap-2">
-          <button className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-50 transition-colors shadow-sm">
-            <Download size={18} /> Exporter
+          <button 
+            onClick={handleExportPDF}
+            className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-50 transition-colors shadow-sm font-bold"
+          >
+            <Download size={18} /> Exporter PDF
           </button>
         </div>
       </div>
@@ -293,11 +319,50 @@ export function AuditLogViewer() {
               </div>
 
               <div className="space-y-2">
-                <p className="text-[10px] text-slate-400 uppercase font-bold ml-1">Données techniques (JSON)</p>
-                <div className="bg-slate-900 rounded-2xl p-4 overflow-auto max-h-[300px]">
-                  <pre className="text-xs text-emerald-400 font-mono leading-relaxed">
-                    {JSON.stringify(JSON.parse(selectedLog.details || '{}'), null, 2)}
-                  </pre>
+                <p className="text-[10px] text-slate-400 uppercase font-bold ml-1">Données techniques</p>
+                <div className="bg-slate-50 dark:bg-slate-800/30 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 overflow-auto max-h-[400px]">
+                  {(() => {
+                    const details = JSON.parse(selectedLog.details || '{}');
+                    if (details.previous && details.current) {
+                      return (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <p className="text-[9px] font-black text-rose-500 uppercase tracking-widest mb-2 px-2">Ancienne Valeur</p>
+                              <div className="bg-rose-50/50 dark:bg-rose-900/20 p-3 rounded-xl border border-rose-100 dark:border-rose-900/30">
+                                <pre className="text-[10px] text-rose-700 dark:text-rose-300 font-mono whitespace-pre-wrap">
+                                  {JSON.stringify(details.previous, null, 2)}
+                                </pre>
+                              </div>
+                            </div>
+                            <div>
+                              <p className="text-[9px] font-black text-emerald-500 uppercase tracking-widest mb-2 px-2">Nouvelle Valeur</p>
+                              <div className="bg-emerald-50/50 dark:bg-emerald-900/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/30">
+                                <pre className="text-[10px] text-emerald-700 dark:text-emerald-300 font-mono whitespace-pre-wrap">
+                                  {JSON.stringify(details.current, null, 2)}
+                                </pre>
+                              </div>
+                            </div>
+                          </div>
+                          {details.entries && (
+                            <div>
+                              <p className="text-[9px] font-black text-blue-500 uppercase tracking-widest mb-2 px-2">Détails supplémentaires</p>
+                              <div className="bg-blue-50/50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-100 dark:border-blue-900/30">
+                                <pre className="text-[10px] text-blue-700 dark:text-blue-300 font-mono whitespace-pre-wrap">
+                                  {JSON.stringify({ entries: details.entries }, null, 2)}
+                                </pre>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    return (
+                      <pre className="text-xs text-slate-700 dark:text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
+                        {JSON.stringify(details, null, 2)}
+                      </pre>
+                    );
+                  })()}
                 </div>
               </div>
             </div>

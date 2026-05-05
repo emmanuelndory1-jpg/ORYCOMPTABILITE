@@ -57,8 +57,8 @@ service cloud.firestore {
         (data.institutionName == null || (data.institutionName is string && data.institutionName.size() <= 200)) &&
         (data.budgetLine == null || (data.budgetLine is string && data.budgetLine.size() <= 100)) &&
         (data.projectCode == null || (data.projectCode is string && data.projectCode.size() <= 100)) &&
-        (data.items == null || (data.items is list && data.items.size() <= 60)) &&
-        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 20)) &&
+        (data.items == null || (data.items is list && data.items.size() <= 50)) &&
+        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 10)) &&
         data.createdAt is string;
     }
 
@@ -68,8 +68,8 @@ service cloud.firestore {
         data.requisitionId is string &&
         data.status in ["sent", "received", "closed"] &&
         data.date is string &&
-        (data.supplier_ids == null || (data.supplier_ids is list && data.supplier_ids.size() <= 50)) &&
-        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 20)) &&
+        (data.supplier_ids == null || (data.supplier_ids is list && data.supplier_ids.size() <= 20)) &&
+        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 10)) &&
         data.createdAt is string;
     }
 
@@ -82,8 +82,8 @@ service cloud.firestore {
         data.status in ["draft", "sent", "partially_received", "received", "cancelled"] &&
         data.date is string &&
         data.expected_delivery is string &&
-        (data.items == null || (data.items is list && data.items.size() <= 60)) &&
-        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 20)) &&
+        (data.items == null || (data.items is list && data.items.size() <= 50)) &&
+        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 10)) &&
         data.createdAt is string;
     }
 
@@ -95,7 +95,7 @@ service cloud.firestore {
         data.supplier_name is string &&
         data.status in ["received", "pending_inspection"] &&
         data.date is string &&
-        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 20)) &&
+        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 10)) &&
         data.createdAt is string;
     }
 
@@ -110,7 +110,7 @@ service cloud.firestore {
         data.date is string &&
         (data.discrepancies == null || data.discrepancies is list) &&
         (data.anomalies == null || data.anomalies is list) &&
-        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 20)) &&
+        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 10)) &&
         data.createdAt is string;
     }
 
@@ -122,84 +122,85 @@ service cloud.firestore {
         data.payment_date is string &&
         data.status in ["scheduled", "paid", "cancelled"] &&
         (data.priority_score == null || (data.priority_score is number && data.priority_score >= 1 && data.priority_score <= 10)) &&
-        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 20)) &&
+        (data.attachments == null || (data.attachments is list && data.attachments.size() <= 10)) &&
         data.createdAt is string;
     }
 
     // ===============================================================
-    // Collection Rules (Eight Pillars)
+    // Collection Rules
     // ===============================================================
 
     match /p2p_requisitions/{reqId} {
-      allow get: if isVerified() && isValidId(reqId) && (isOwner(existing().userId) || isAdmin());
+      allow get: if isVerified() && (isOwner(existing().userId) || isAdmin());
       allow list: if isVerified() && existing().userId == request.auth.uid;
-      allow create: if isVerified() && isValidId(reqId) && isValidRequisition(incoming());
-      allow update: if isVerified() && isValidId(reqId) && isOwner(existing().userId) && isValidRequisition(incoming()) && (
+      allow create: if isVerified() && isValidRequisition(incoming());
+      allow update: if isVerified() && isOwner(existing().userId) && isValidRequisition(incoming()) && (
+        // Identity integrity
         incoming().userId == existing().userId &&
         incoming().reference == existing().reference &&
         incoming().createdAt == existing().createdAt
       );
-      allow delete: if isVerified() && isValidId(reqId) && (isOwner(existing().userId) || isAdmin());
+      allow delete: if isVerified() && (isOwner(existing().userId) || isAdmin());
     }
 
     match /p2p_rfqs/{rfqId} {
-      allow get: if isVerified() && isValidId(rfqId) && (isOwner(existing().userId) || isAdmin());
+      allow get: if isVerified() && (isOwner(existing().userId) || isAdmin());
       allow list: if isVerified() && existing().userId == request.auth.uid;
-      allow create: if isVerified() && isValidId(rfqId) && isValidRFQ(incoming());
-      allow update: if isVerified() && isValidId(rfqId) && isOwner(existing().userId) && isValidRFQ(incoming()) && (
+      allow create: if isVerified() && isValidRFQ(incoming());
+      allow update: if isVerified() && isOwner(existing().userId) && isValidRFQ(incoming()) && (
         incoming().userId == existing().userId &&
         incoming().createdAt == existing().createdAt
       );
-      allow delete: if isVerified() && isValidId(rfqId) && (isOwner(existing().userId) || isAdmin());
+      allow delete: if isVerified() && (isOwner(existing().userId) || isAdmin());
     }
 
     match /p2p_purchase_orders/{poId} {
-      allow get: if isVerified() && isValidId(poId) && (isOwner(existing().userId) || isAdmin());
+      allow get: if isVerified() && (isOwner(existing().userId) || isAdmin());
       allow list: if isVerified() && existing().userId == request.auth.uid;
-      allow create: if isVerified() && isValidId(poId) && isValidPurchaseOrder(incoming());
-      allow update: if isVerified() && isValidId(poId) && isOwner(existing().userId) && isValidPurchaseOrder(incoming()) && (
+      allow create: if isVerified() && isValidPurchaseOrder(incoming());
+      allow update: if isVerified() && isOwner(existing().userId) && isValidPurchaseOrder(incoming()) && (
         incoming().userId == existing().userId &&
         incoming().createdAt == existing().createdAt
       );
-      allow delete: if isVerified() && isValidId(poId) && (isOwner(existing().userId) || isAdmin());
+      allow delete: if isVerified() && (isOwner(existing().userId) || isAdmin());
     }
 
     match /p2p_goods_receipts/{receiptId} {
-      allow get: if isVerified() && isValidId(receiptId) && (isOwner(existing().userId) || isAdmin());
+      allow get: if isVerified() && (isOwner(existing().userId) || isAdmin());
       allow list: if isVerified() && existing().userId == request.auth.uid;
-      allow create: if isVerified() && isValidId(receiptId) && isValidGoodsReceipt(incoming());
-      allow update: if isVerified() && isValidId(receiptId) && isOwner(existing().userId) && isValidGoodsReceipt(incoming()) && (
+      allow create: if isVerified() && isValidGoodsReceipt(incoming());
+      allow update: if isVerified() && isOwner(existing().userId) && isValidGoodsReceipt(incoming()) && (
         incoming().userId == existing().userId &&
         incoming().createdAt == existing().createdAt
       );
-      allow delete: if isVerified() && isValidId(receiptId) && (isOwner(existing().userId) || isAdmin());
+      allow delete: if isVerified() && (isOwner(existing().userId) || isAdmin());
     }
 
     match /p2p_invoice_matching/{matchId} {
-      allow get: if isVerified() && isValidId(matchId) && (isOwner(existing().userId) || isAdmin());
+      allow get: if isVerified() && (isOwner(existing().userId) || isAdmin());
       allow list: if isVerified() && existing().userId == request.auth.uid;
-      allow create: if isVerified() && isValidId(matchId) && isValidInvoiceMatching(incoming());
-      allow update: if isVerified() && isValidId(matchId) && isOwner(existing().userId) && isValidInvoiceMatching(incoming()) && (
+      allow create: if isVerified() && isValidInvoiceMatching(incoming());
+      allow update: if isVerified() && isOwner(existing().userId) && isValidInvoiceMatching(incoming()) && (
         incoming().userId == existing().userId &&
         incoming().createdAt == existing().createdAt
       );
-      allow delete: if isVerified() && isValidId(matchId) && (isOwner(existing().userId) || isAdmin());
+      allow delete: if isVerified() && (isOwner(existing().userId) || isAdmin());
     }
 
     match /p2p_payments/{paymentId} {
-      allow get: if isVerified() && isValidId(paymentId) && (isOwner(existing().userId) || isAdmin());
+      allow get: if isVerified() && (isOwner(existing().userId) || isAdmin());
       allow list: if isVerified() && existing().userId == request.auth.uid;
-      allow create: if isVerified() && isValidId(paymentId) && isValidPayment(incoming());
-      allow update: if isVerified() && isValidId(paymentId) && isOwner(existing().userId) && isValidPayment(incoming()) && (
+      allow create: if isVerified() && isValidPayment(incoming());
+      allow update: if isVerified() && isOwner(existing().userId) && isValidPayment(incoming()) && (
         incoming().userId == existing().userId &&
         incoming().createdAt == existing().createdAt
       );
-      allow delete: if isVerified() && isValidId(paymentId) && (isOwner(existing().userId) || isAdmin());
+      allow delete: if isVerified() && (isOwner(existing().userId) || isAdmin());
     }
 
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId) && incoming().uid == userId && (incoming().role == 'user' || isAdmin());
+      allow create: if isOwner(userId) && incoming().uid == userId && incoming().role in ['user', 'accountant'];
       allow update: if isOwner(userId) && incoming().uid == existing().uid && (incoming().role == existing().role || isAdmin());
     }
 

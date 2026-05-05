@@ -1,5 +1,7 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { Wallet, ArrowUpRight, ArrowDownLeft, CreditCard, Smartphone, Loader2, ArrowRightLeft, X, AlertCircle } from 'lucide-react';
+import { PageHeader } from './ui/PageHeader';
+import { Wallet, ArrowUpRight, ArrowDownLeft, CreditCard, Smartphone, Loader2, ArrowRightLeft, X, AlertCircle, PiggyBank } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useFiscalYear } from '@/context/FiscalYearContext';
@@ -71,7 +73,7 @@ export function Treasury() {
 
   const fetchTreasuryData = async () => {
     try {
-      const response = await fetch('/api/treasury');
+      const response = await apiFetch('/api/treasury');
       if (!response.ok) throw new Error('Failed to fetch treasury data');
       const result = await response.json();
       setData(result);
@@ -84,7 +86,7 @@ export function Treasury() {
 
   const fetchForecastData = async () => {
     try {
-      const response = await fetch('/api/dashboard/cashflow-forecast');
+      const response = await apiFetch('/api/dashboard/cashflow-forecast');
       if (response.ok) {
         const result = await response.json();
         setForecastData(result);
@@ -116,7 +118,7 @@ export function Treasury() {
     setTransferError(null);
 
     try {
-      const response = await fetch('/api/treasury/transfer', {
+      const response = await apiFetch('/api/treasury/transfer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -155,21 +157,22 @@ export function Treasury() {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100">Trésorerie & Liquidités</h1>
-          <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400">Suivi en temps réel et prévisions de flux</p>
-        </div>
-        <div className="flex flex-wrap gap-3">
+    <div className="space-y-6 pb-20">
+      <PageHeader
+        title="Trésorerie & Liquidités"
+        subtitle="Suivi en temps réel et prévisions de flux"
+        icon={<PiggyBank size={24} />}
+        actions={
           <button 
             onClick={() => setIsTransferModalOpen(true)}
-            className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 sm:px-4 py-2 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors shadow-sm text-sm"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm text-sm active:scale-95"
           >
-            <ArrowRightLeft size={18} /> Virement Interne
+            <ArrowRightLeft size={18} />
+            <span className="hidden sm:inline">Virement Interne</span>
+            <span className="sm:hidden">Virement</span>
           </button>
-        </div>
-      </div>
+        }
+      />
 
       {/* Summary Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">

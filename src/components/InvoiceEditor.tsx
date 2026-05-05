@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   X, 
@@ -186,7 +187,7 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
 
   const fetchDefaultOccasional = async () => {
     try {
-      const res = await fetch('/api/third-parties/defaults');
+      const res = await apiFetch('/api/third-parties/defaults');
       if (res.ok) {
         const data = await res.json();
         setDefaultOccasional(data);
@@ -198,7 +199,7 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
 
   const fetchThirdParties = async () => {
     try {
-      const res = await fetch('/api/third-parties?type=client');
+      const res = await apiFetch('/api/third-parties?type=client');
       if (res.ok) {
         const data = await res.json();
         setThirdParties(data);
@@ -210,7 +211,7 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
 
   const fetchAccounts = async () => {
     try {
-      const res = await fetch('/api/accounts');
+      const res = await apiFetch('/api/accounts');
       if (res.ok) {
         const data = await res.json();
         // Filter for revenue accounts (Class 7)
@@ -224,7 +225,7 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
   const fetchInvoice = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/invoices/${id}`);
+      const res = await apiFetch(`/api/invoices/${id}`);
       if (res.ok) {
         const data = await res.json();
         setDate(data.date);
@@ -293,7 +294,7 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
     
     setSaving(true);
     try {
-      const res = await fetch('/api/third-parties', {
+      const res = await apiFetch('/api/third-parties', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -357,11 +358,11 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
         onClose();
       } else {
         const err = await res.json();
-        alert(err.error || "Erreur lors de l'enregistrement");
+        dialogAlert(err.error || "Erreur lors de l'enregistrement");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur réseau");
+      dialogAlert("Erreur réseau");
     } finally {
       setSaving(false);
     }
@@ -434,13 +435,25 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
                 )}
               >
                 {selectedThirdParty ? (
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-brand-green/10 flex items-center justify-center text-brand-green font-bold">
-                      {selectedThirdParty.name.charAt(0)}
+                  <div className="flex items-center justify-between w-full">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-brand-green/10 flex items-center justify-center text-brand-green font-bold">
+                        {selectedThirdParty.name.charAt(0)}
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">{selectedThirdParty.name}</div>
+                        <div className="text-xs text-slate-500">Compte: {selectedThirdParty.account_code}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="font-bold text-slate-900 dark:text-white">{selectedThirdParty.name}</div>
-                      <div className="text-xs text-slate-500">Compte: {selectedThirdParty.account_code}</div>
+                    {/* Display Balance */}
+                    <div className="text-right ml-4 pr-2">
+                       <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Solde actuel</div>
+                       <div className={cn(
+                         "text-sm font-bold",
+                         (selectedThirdParty as any).balance > 0 ? "text-rose-500" : (selectedThirdParty as any).balance < 0 ? "text-emerald-500" : "text-slate-500"
+                       )}>
+                         {formatCurrency((selectedThirdParty as any).balance || 0, baseCurrency)}
+                       </div>
                     </div>
                   </div>
                 ) : (

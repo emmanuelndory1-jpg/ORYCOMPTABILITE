@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   Save, RefreshCw, AlertCircle, Percent, ToggleLeft, ToggleRight, 
@@ -77,11 +78,11 @@ export function PayrollSettingsManager() {
     setLoading(true);
     try {
       const [rulesRes, settingsRes, bracketsRes, reductionsRes, payrollRulesRes] = await Promise.all([
-        fetch('/api/tax-rules'),
-        fetch('/api/company/settings'),
-        fetch('/api/payroll/brackets'),
-        fetch('/api/payroll/reductions'),
-        fetch('/api/payroll/rules')
+        apiFetch('/api/tax-rules'),
+        apiFetch('/api/company/settings'),
+        apiFetch('/api/pr/brackets'),
+        apiFetch('/api/pr/reductions'),
+        apiFetch('/api/pr/rules')
       ]);
       
       if (!rulesRes.ok || !settingsRes.ok || !bracketsRes.ok || !reductionsRes.ok || !payrollRulesRes.ok) 
@@ -110,7 +111,7 @@ export function PayrollSettingsManager() {
   const handleUpdateRule = async (rule: TaxRule) => {
     setSaving(rule.code);
     try {
-      const res = await fetch(`/api/tax-rules/${rule.code}`, {
+      const res = await apiFetch(`/api/tax-rules/${rule.code}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -132,7 +133,7 @@ export function PayrollSettingsManager() {
   const handleUpdateBracket = async (bracket: TaxBracket) => {
     setSaving(`bracket-${bracket.id}`);
     try {
-      const res = await fetch(`/api/payroll/brackets/${bracket.id}`, {
+      const res = await apiFetch(`/api/pr/brackets/${bracket.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bracket)
@@ -148,7 +149,7 @@ export function PayrollSettingsManager() {
   const handleUpdateReduction = async (reduction: TaxReduction) => {
     setSaving(`reduction-${reduction.id}`);
     try {
-      const res = await fetch(`/api/payroll/reductions/${reduction.id}`, {
+      const res = await apiFetch(`/api/pr/reductions/${reduction.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reduction)
@@ -164,7 +165,7 @@ export function PayrollSettingsManager() {
   const handleUpdatePayrollRule = async (rule: PayrollRule) => {
     setSaving(`prule-${rule.id}`);
     try {
-      const res = await fetch(`/api/payroll/rules/${rule.id}`, {
+      const res = await apiFetch(`/api/pr/rules/${rule.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rule)
@@ -181,7 +182,7 @@ export function PayrollSettingsManager() {
     if (!companySettings) return;
     setSaving('settings');
     try {
-      const res = await fetch('/api/company/settings', {
+      const res = await apiFetch('/api/company/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...companySettings, ...updates })

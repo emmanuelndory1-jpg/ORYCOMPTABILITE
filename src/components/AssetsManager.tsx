@@ -1,3 +1,5 @@
+import { useDialog } from './DialogProvider';
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   Building2, Car, Laptop, Armchair, Factory, FileCode, Map, Plus, 
@@ -39,6 +41,7 @@ interface ScheduleItem {
 }
 
 export function AssetsManager() {
+  const { alert: dialogAlert } = useDialog();
   const { formatCurrency, currency, getCurrencyIcon } = useCurrency();
   const { activeYear } = useFiscalYear();
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -74,7 +77,7 @@ export function AssetsManager() {
 
   const fetchCompanySettings = async () => {
     try {
-      const res = await fetch('/api/company/settings');
+      const res = await apiFetch('/api/company/settings');
       if (res.ok) {
         const data = await res.json();
         setCompanySettings(data);
@@ -86,7 +89,7 @@ export function AssetsManager() {
 
   const fetchAssets = async () => {
     try {
-      const res = await fetch('/api/assets');
+      const res = await apiFetch('/api/assets');
       const data = await res.json();
       setAssets(data);
     } catch (err) {
@@ -98,7 +101,7 @@ export function AssetsManager() {
 
   const fetchAssetDetails = async (id: number) => {
     try {
-      const res = await fetch(`/api/assets/${id}`);
+      const res = await apiFetch(`/api/assets/${id}`);
       if (res.ok) {
         const data = await res.json();
         setDetailedAsset(data);
@@ -115,7 +118,7 @@ export function AssetsManager() {
   const fetchSchedule = async (assetId: number, type: 'annual' | 'monthly' = 'annual') => {
     setLoadingSchedule(true);
     try {
-      const res = await fetch(`/api/assets/${assetId}/depreciation-schedule?type=${type}`);
+      const res = await apiFetch(`/api/assets/${assetId}/depreciation-schedule?type=${type}`);
       const data = await res.json();
       setSchedule(data.schedule);
     } catch (err) {
@@ -129,7 +132,7 @@ export function AssetsManager() {
     if (!selectedAsset) return;
     setRecordingDep(item.period);
     try {
-      const res = await fetch(`/api/assets/${selectedAsset.id}/record-depreciation`, {
+      const res = await apiFetch(`/api/assets/${selectedAsset.id}/record-depreciation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -146,7 +149,7 @@ export function AssetsManager() {
         }
       } else {
         const data = await res.json();
-        alert(data.error || "Erreur lors de l'enregistrement");
+        dialogAlert(data.error || "Erreur lors de l'enregistrement");
       }
     } catch (err) {
       console.error(err);
@@ -160,7 +163,7 @@ export function AssetsManager() {
 
   const fetchPendingCount = async () => {
     try {
-      const res = await fetch('/api/assets/pending-depreciations-count');
+      const res = await apiFetch('/api/assets/pending-depreciations-count');
       const data = await res.json();
       setPendingCount(data.count);
     } catch (err) {
@@ -177,14 +180,14 @@ export function AssetsManager() {
   const handleGenerateAllMonthly = async () => {
     setGeneratingAll(true);
     try {
-      const res = await fetch('/api/assets/generate-monthly-depreciations', { method: 'POST' });
+      const res = await apiFetch('/api/assets/generate-monthly-depreciations', { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
-        alert(`${data.count} dotation(s) générée(s) avec succès.`);
+        dialogAlert(`${data.count} dotation(s) générée(s) avec succès.`);
         fetchAssets();
         fetchPendingCount();
       } else {
-        alert(data.error || "Erreur lors de la génération");
+        dialogAlert(data.error || "Erreur lors de la génération");
       }
     } catch (err) {
       console.error(err);
@@ -202,7 +205,7 @@ export function AssetsManager() {
     const ttc = ht + tva;
 
     try {
-      const res = await fetch('/api/assets', {
+      const res = await apiFetch('/api/assets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -237,7 +240,7 @@ export function AssetsManager() {
     if (!sellingAsset || !salePrice || !saleDate) return;
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/assets/${sellingAsset.id}/sell`, {
+      const res = await apiFetch(`/api/assets/${sellingAsset.id}/sell`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -253,7 +256,7 @@ export function AssetsManager() {
         setSalePrice('');
       } else {
         const data = await res.json();
-        alert(data.error || "Erreur lors de la cession");
+        dialogAlert(data.error || "Erreur lors de la cession");
       }
     } catch (err) {
       console.error(err);

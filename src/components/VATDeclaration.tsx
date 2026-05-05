@@ -1,3 +1,5 @@
+import { useDialog } from './DialogProvider';
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Calculator, Calendar, Download, FileText, Printer, ArrowLeft, FileDown } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -21,6 +23,7 @@ interface VATData {
 }
 
 export const VATDeclaration = ({ onBack }: { onBack: () => void }) => {
+  const { alert: dialogAlert } = useDialog();
   const { formatCurrency } = useCurrency();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<VATData | null>(null);
@@ -34,8 +37,8 @@ export const VATDeclaration = ({ onBack }: { onBack: () => void }) => {
     setLoading(true);
     try {
       const [vatRes, companyRes] = await Promise.all([
-        fetch(`/api/vat/declaration?month=${period.month}&year=${period.year}`),
-        fetch('/api/company/settings')
+        apiFetch(`/api/vat/declaration?month=${period.month}&year=${period.year}`),
+        apiFetch('/api/company/settings')
       ]);
 
       if (vatRes.ok) {
@@ -143,7 +146,7 @@ export const VATDeclaration = ({ onBack }: { onBack: () => void }) => {
 
     } catch (err) {
       console.error("PDF Export failed", err);
-      alert("Erreur lors de la génération du PDF");
+      dialogAlert("Erreur lors de la génération du PDF");
     }
   };
 

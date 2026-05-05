@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Bell, Save, Loader2, Mail, Clock, FileText } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -23,7 +24,7 @@ export function InvoiceReminderSettings() {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('/api/company/dossier');
+      const res = await apiFetch('/api/company/dossier');
       const data = await res.json();
       if (data.settings) {
         setSettings({
@@ -52,11 +53,11 @@ export function InvoiceReminderSettings() {
 
     try {
       // Get current full settings to not overwrite other fields
-      const dossierRes = await fetch('/api/company/dossier');
+      const dossierRes = await apiFetch('/api/company/dossier');
       const dossierData = await dossierRes.json();
       const currentSettings = dossierData.settings || {};
 
-      const res = await fetch('/api/company/settings', {
+      const res = await apiFetch('/api/company/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -97,7 +98,7 @@ export function InvoiceReminderSettings() {
 
   const triggerCheck = async () => {
     try {
-      const res = await fetch('/api/invoices/check-reminders', { method: 'POST' });
+      const res = await apiFetch('/api/invoices/check-reminders', { method: 'POST' });
       if (res.ok) {
         setSuccess("Vérification manuelle des rappels lancée.");
       }

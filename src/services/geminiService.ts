@@ -1,4 +1,6 @@
 import { GoogleGenAI, Modality, Type } from "@google/genai";
+import { db, auth, OperationType, handleFirestoreError } from '../lib/firebase';
+import { collection, addDoc } from 'firebase/firestore';
 
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
@@ -22,6 +24,7 @@ export interface InvoiceAnalysis {
   date: string;
   description: string;
   third_party: string;
+  third_party_id?: string; // NIF, IFU, NINEA, RCCM
   amount_ht: number;
   amount_tva: number;
   amount_ttc: number;
@@ -29,12 +32,77 @@ export interface InvoiceAnalysis {
   operation_type: string;
   invoice_number?: string;
   currency?: string;
+  tax_details?: {
+    label: string;
+    amount: number;
+  }[];
+  compliance_score?: number;
   entries: {
     account_code: string;
     debit: number;
     credit: number;
     description?: string;
   }[];
+}
+
+export interface NaturalLanguageEntry {
+  amount: number;
+  operationType: string;
+  thirdPartyName: string | null;
+  paymentMode: 'caisse' | 'banque' | 'mobile_money' | 'credit';
+  description: string;
+  date?: string;
+  currency?: string;
+}
+
+export const parseNaturalLanguageEntry = async (text: string): Promise<NaturalLanguageEntry | null> => {
+  try {
+    const prompt = `
+      Analysez le texte suivant qui décrit une opération comptable et extrayez les informations structurées.
+      Texte : "${text}"
+      Date actuelle : ${new Date().toISOString().split('T')[0]}
+      
+      Instructions :
+      - Identifiez le montant, le tiers, le mode de paiement et la nature de l'opération.
+      - Si une date est mentionnée (ex: 'hier', 'le 12'), convertissez-la en YYYY-MM-DD. Sinon, utilisez la date actuelle.
+      - Associez l'opération au type le plus proche parmis la liste autorisée : achat_marchandises, achat_services, frais_generaux, vente_marchandises, vente_services, paiement_fournisseur, encaissement_client, virement_interne, depot_especes, retrait_especes, frais_bancaires, paiement_impots, salaire, loyer, remboursement_emprunt.
+    `;
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            amount: { type: Type.NUMBER },
+            operationType: { 
+              type: Type.STRING,
+              description: "Une valeur parmi: achat_marchandises, achat_services, frais_generaux, vente_marchandises, vente_services, paiement_fournisseur, encaissement_client, virement_interne, depot_especes, retrait_especes, frais_bancaires, paiement_impots, salaire, loyer, remboursement_emprunt"
+            },
+            thirdPartyName: { type: Type.STRING, nullable: true },
+            paymentMode: { 
+              type: Type.STRING, 
+              enum: ['caisse', 'banque', 'mobile_money', 'credit'],
+              description: "Par défaut: caisse"
+            },
+            description: { type: Type.STRING, description: "Reformulation professionnelle" },
+            date: { type: Type.STRING, description: "Date au format YYYY-MM-DD" },
+            currency: { type: Type.STRING, description: "Code devise ISO (ex: XOF, EUR, USD)" }
+          },
+          required: ["amount", "operationType", "paymentMode", "description"]
+        }
+      }
+    });
+
+    const result = response.text;
+    if (result) {
+      return JSON.parse(result) as NaturalLanguageEntry;
+    }
+  } catch(e) {
+    console.error("Error in parseNaturalLanguageEntry:", e);
+  }
+  return null;
 }
 
 export const analyzeInvoice = async (
@@ -53,34 +121,38 @@ export const analyzeInvoice = async (
       : "Il s'agit d'un ACHAT (Facture reçue d'un fournisseur). Le tiers est donc le FOURNISSEUR.";
 
     const prompt = `
-      Analyse cette facture ou reçu. ${typeContext}
-      Ta priorité absolue est l'exactitude des informations extraites.
+      Analyse cette facture ou reçu dans le contexte de l'espace OHADA (UEMOA/CEMAC). ${typeContext}
+      Ta priorité absolue est l'exactitude des informations extraites malgré la présence possible de tampons, signatures ou logos.
+      
+      CONSIGNES SPÉCIFIQUES AFRIQUE :
+      - Identifiants : Recherche activement les mentions RCCM, IFU, NINEA, NIF ou Agrément.
+      - Taxes : Identifie la TVA (18% ou 19.25%) mais aussi les Timbres Fiscaux, Précomptes ou AIR.
+      - Devises : Par défaut XOF (CFA) sauf mention contraire explicite.
+      - Langues : Gère les mentions en Français et Anglais.
+      
       Extrais les informations suivantes au format JSON :
       - date (YYYY-MM-DD)
       - description (Objet sommaire de la facture)
-      - third_party (Nom du tiers : ${scanType === 'vente' ? 'Client' : 'Fournisseur'})
+      - third_party (Nom de l'entreprise tiers)
+      - third_party_id (Identifiant fiscal type NIF/IFU/RCCM/NINEA)
       - amount_ht (Montant Hors Taxes)
-      - amount_tva (Montant de la TVA)
-      - amount_ttc (Montant Total Toutes Taxes Comprises)
-      - vat_rate (Taux de TVA en pourcentage, ex: 18)
-      - invoice_number (Numéro de facture si présent)
-      - currency (Devise, ex: XOF, EUR, USD)
-      - operation_type (Choisis STRICTEMENT parmi : 'achat_marchandises', 'achat_services', 'vente_marchandises', 'vente_services', 'frais_generaux')
-      - entries: Un tableau d'écritures comptables (SYSCOHADA révisé) représentant cette facture.
-        Chaque écriture doit avoir :
-        - account_code (ex: "6011", "4452", "4011")
-        - debit (montant au débit, 0 si crédit)
-        - credit (montant au crédit, 0 si débit)
-        - description (Libellé spécifique court pour cette ligne, ex: "Achat Marchandises", "TVA Déductible", "Net à payer")
-        Prends en compte les différentes lignes de la facture et les différentes taxes (TVA, etc.) si présentes.
-        Assure-toi que le total des débits est égal au total des crédits.
+      - amount_tva (Montant de la TVA uniquement)
+      - amount_ttc (Montant Net à Payer)
+      - vat_rate (Taux de TVA, ex: 18)
+      - invoice_number (Numéro de facture)
+      - currency (Devise ISO, ex: XOF)
+      - tax_details (Tableau des autres taxes comme timbre fiscal ou précompte)
+      - compliance_score (0-100 basé sur la présence des mentions légales obligatoires OHADA)
+      - operation_type (STRICTEMENT : 'achat_marchandises', 'achat_services', 'vente_marchandises', 'vente_services', 'frais_generaux')
+      - entries: Ecritures SYSCOHADA (4452/4431 pour TVA, 6x/7x pour HT, 401/411 pour tiers).
+      
       ${vatContext}
       
-      Réponds UNIQUEMENT avec le JSON.
+      Réponds UNIQUEMENT avec le JSON validé.
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-pro-preview",
       contents: {
         parts: [
           { text: prompt },
@@ -88,7 +160,7 @@ export const analyzeInvoice = async (
         ]
       },
       config: {
-        systemInstruction: "Tu es un expert en OCR comptable spécialisé dans le SYSCOHADA. Ton but est d'extraire des données 100% exactes à partir de documents financiers. Ne devine jamais si une information est illisible, laisse le champ vide ou utilise une valeur par défaut sûre.",
+        systemInstruction: "Tu es un moteur OCR de pointe spécialisé dans les documents financiers africains (UEMOA, CEMAC, OHADA). Tu sais faire abstraction des tampons 'PAYÉ', des logos et des signatures manuscrites pour extraire les données comptables brutes avec une précision de 100%.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -96,12 +168,24 @@ export const analyzeInvoice = async (
             date: { type: Type.STRING },
             description: { type: Type.STRING },
             third_party: { type: Type.STRING },
+            third_party_id: { type: Type.STRING },
             amount_ht: { type: Type.NUMBER },
             amount_tva: { type: Type.NUMBER },
             amount_ttc: { type: Type.NUMBER },
             vat_rate: { type: Type.NUMBER },
             invoice_number: { type: Type.STRING },
             currency: { type: Type.STRING },
+            compliance_score: { type: Type.NUMBER },
+            tax_details: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  label: { type: Type.STRING },
+                  amount: { type: Type.NUMBER }
+                }
+              }
+            },
             operation_type: { type: Type.STRING },
             entries: {
               type: Type.ARRAY,
@@ -129,6 +213,39 @@ export const analyzeInvoice = async (
   } catch (error) {
     console.error("Error analyzing invoice:", error);
     return null;
+  }
+};
+
+export const logOcrFeedback = async (
+  imageBase64: string,
+  aiPrediction: InvoiceAnalysis,
+  userCorrection: InvoiceAnalysis,
+  region: string = 'UEMOA'
+) => {
+  try {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    // Generate a quick hash of the image to identify duplicates in training data
+    const msgUint8 = new TextEncoder().encode(imageBase64.slice(-2000)); // Use last 2000 chars for speed + uniqueness
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const imageHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+    const path = 'ocr_feedback';
+    await addDoc(collection(db, path), {
+      userId,
+      imageHash,
+      aiPrediction,
+      userCorrection,
+      region,
+      timestamp: new Date().toISOString()
+    });
+
+    console.log("OCR Feedback logged successfully for training improvement.");
+  } catch (error) {
+    console.error("Error logging OCR feedback:", error);
+    // Don't throw here to not block the user flow
   }
 };
 
@@ -276,14 +393,17 @@ export const suggestCorrection = async (
   }
 };
 
-export const getQuickInsight = async (ca: number, charges: number, cash: number) => {
+export const getQuickInsight = async (data: any) => {
   try {
-    const systemPrompt = `Tu es un conseiller financier intelligent.
-    Donne un SEUL conseil financier court (max 15 mots) basé sur ces données :
-    - CA : ${ca} FCFA
-    - Charges : ${charges} FCFA
-    - Trésorerie : ${cash} FCFA
-    Sois direct et professionnel.`;
+    const systemPrompt = `Tu es un conseiller financier stratégique ORY IA.
+    Donne un SEUL conseil financier court, percutant et actionnable (max 18 mots) basé sur ces données actuelles de l'entreprise :
+    ${JSON.stringify(data)}
+    
+    CONSIGNES :
+    - Sois très spécifique. Si tu vois un risque de trésorerie, mentionne-le.
+    - Si la rentabilité est forte, suggère un investissement ou une réserve.
+    - Utilise un ton professionnel et stratégique.
+    - Réponds en Français.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -299,40 +419,37 @@ export const getQuickInsight = async (ca: number, charges: number, cash: number)
 
 export const generateAudit = async (auditData: any) => {
   try {
-    const systemPrompt = `Tu es un Auditeur Financier Senior spécialisé dans le référentiel SYSCOHADA.
-    Ton rôle est d'analyser les données financières d'une entreprise et de fournir un rapport d'audit stratégique.
+    const systemPrompt = `Tu es un Auditeur Financier Senior spécialisé dans le référentiel SYSCOHADA révisé.
+    Ton rôle est d'analyser les données financières d'une entreprise et de fournir un rapport d'audit stratégique et réglementaire rigoureux.
     
-    DONNÉES FINANCIÈRES :
-    - Chiffre d'Affaires : ${auditData.ca} FCFA
+    DONNÉES FINANCIÈRES FOURNIES :
+    - Chiffre d'Affaires (CA) : ${auditData.ca} FCFA
     - Charges Totales : ${auditData.charges} FCFA
     - Trésorerie : ${auditData.cash} FCFA
-    - Ratio de Rentabilité : ${auditData.ca > 0 ? ((auditData.ca - auditData.charges) / auditData.ca * 100).toFixed(2) : 0}%
+    - Résultat Net (estimé) : ${auditData.ca - auditData.charges} FCFA
+    - Rentabilité : ${auditData.ca > 0 ? ((auditData.ca - auditData.charges) / auditData.ca * 100).toFixed(2) : 0}%
     
-    TOP CHARGES :
+    TOP CHARGES (Dépenses majeures) :
     ${auditData.topExpenses.map((e: any) => `- ${e.account_name} (${e.account_code}): ${e.total} FCFA`).join('\n')}
     
-    STRUCTURE DU RAPPORT (Format JSON) :
-    {
-      "summary": "Résumé exécutif de la situation",
-      "healthScore": 0-100,
-      "strengths": ["Force 1", "Force 2"],
-      "weaknesses": ["Faiblesse 1", "Faiblesse 2"],
-      "recommendations": [
-        {"title": "Titre", "description": "Détail", "impact": "Haut/Moyen/Bas"}
-      ],
-      "ratios": [
-        {"name": "Liquidité", "value": 0-100},
-        {"name": "Solvabilité", "value": 0-100},
-        {"name": "Rentabilité", "value": 0-100},
-        {"name": "Efficacité", "value": 0-100},
-        {"name": "Croissance", "value": 0-100}
-      ]
-    }
+    CONSIGNES D'ANALYSE :
+    1. Analyse de la Rentabilité : Évalue la marge nette par rapport aux standards OHADA.
+    2. Structure de Coûts : Identifie les anomalies dans les comptes de classe 6.
+    3. Trésorerie : Évalue le besoin en fonds de roulement si possible.
+    4. Conformité : Précise si la structure des comptes (codes SYSCOHADA) semble respectée.
+    5. Recommandations : Propose des actions concrètes pour optimiser la fiscalité ou la gestion.
     
-    Réponds UNIQUEMENT en JSON.`;
+    RÉPONSES SOUHAITÉES (en Français professionnel) :
+    - summary: Rapport structuré avec Introduction, Analyse des Coûts, Analyse de la Rentabilité et Conclusion.
+    - strengths: Points positifs relevés (ex: gestion efficace des charges 6x).
+    - weaknesses: Risques détectés (ex: charges de personnel trop élevées, manque de liquidités).
+    - recommendations: Actions prioritaires avec impact estimé.
+    - ratios: Scores de 0 à 100 pour 5 indicateurs clés.
+    
+    Format JSON strictement obligatoire.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-pro-preview",
       contents: "Génère l'audit financier complet.",
       config: {
         systemInstruction: systemPrompt,
@@ -377,6 +494,45 @@ export const generateAudit = async (auditData: any) => {
   } catch (error) {
     console.error("Error generating audit:", error);
     return null;
+  }
+};
+
+export const getP2PAdvice = async (p2pData: any) => {
+  try {
+    const systemPrompt = `Tu es un expert en gestion de la chaîne d'approvisionnement (Procure-to-Pay) spécialisé dans le contexte OHADA.
+    Analyse les données suivantes et donne de 1 à 3 conseils stratégiques courts pour optimiser les achats, la trésorerie ou la relation fournisseur.
+    
+    DONNÉES P2P :
+    - Demandes d'Achat : ${p2pData.requisitions.length}
+    - Bons de Commande : ${p2pData.purchaseOrders.length} (Total: ${p2pData.poTotal} FCFA)
+    - Factures en écart : ${p2pData.discrepanciesCount}
+    - Moyenne fiabilité fournisseurs : ${p2pData.avgReliability}%
+    
+    CONSIGNES :
+    - Sois proactif (ex: suggère des achats groupés si tu vois des micro-demandes récurrentes).
+    - Sois vigilant sur la trésorerie (ex: suggère de retarder un paiement non critique).
+    - Réponds en Français sous forme de tableau de strings.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: systemPrompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            advices: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["advices"]
+        }
+      }
+    });
+
+    const data = JSON.parse(response.text);
+    return data.advices as string[];
+  } catch (error) {
+    console.error("Error getting P2P advice:", error);
+    return [];
   }
 };
 
@@ -529,7 +685,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
       contents: {
         parts: [
           { text: prompt },
-          { inlineData: { data: imageBase64, mimeType: "image/jpeg" } }
+          { inlineData: { data: imageBase64.split(',')[1] || imageBase64, mimeType: "image/jpeg" } }
         ]
       },
       config: {
@@ -590,7 +746,7 @@ export const getTaxCompliance = async (message: string, imageBase64?: string | n
   try {
     const parts: any[] = [{ text: message }];
     if (imageBase64) {
-      parts.push({ inlineData: { data: imageBase64, mimeType: "image/jpeg" } });
+      parts.push({ inlineData: { data: imageBase64.split(',')[1] || imageBase64, mimeType: "image/jpeg" } });
     }
 
     const response = await ai.models.generateContent({
@@ -636,7 +792,7 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.1-pro-preview",
       contents: prompt,
       config: {
         systemInstruction: "Tu es un expert en audit bancaire. Ton but est de réconcilier parfaitement les comptes bancaires avec la comptabilité.",
@@ -783,7 +939,7 @@ export const askGemini = async (prompt: string, history: { role: 'user' | 'model
 
 export const findNearbyBusinessResources = async (query: string, location?: { latitude: number, longitude: number }) => {
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-3-flash-preview",
     contents: query,
     config: {
       tools: [{ googleMaps: {} }],

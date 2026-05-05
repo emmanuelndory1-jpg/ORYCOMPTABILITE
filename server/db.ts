@@ -50,6 +50,7 @@ db.exec(`
     creation_mode TEXT DEFAULT 'expert',
     notes TEXT,
     document_url TEXT,
+    deleted_at TEXT,
     FOREIGN KEY(third_party_id) REFERENCES third_parties(id)
   );
 
@@ -68,6 +69,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_journal_entries_transaction_id ON journal_entries(transaction_id);
   CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
   CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
+  CREATE INDEX IF NOT EXISTS idx_transactions_deleted ON transactions(deleted_at);
 
   CREATE TABLE IF NOT EXISTS bank_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +135,8 @@ db.exec(`
     invoice_reminder_days INTEGER DEFAULT 7,
     invoice_reminder_email TEXT, -- Configurable notification email
     invoice_reminder_subject TEXT DEFAULT 'Rappel de facture impayée',
-    invoice_reminder_template TEXT DEFAULT 'Bonjour, votre facture {number} d''un montant de {total} est échue depuis le {due_date}. Merci de régulariser votre situation.'
+    invoice_reminder_template TEXT DEFAULT 'Bonjour, votre facture {number} d''un montant de {total} est échue depuis le {due_date}. Merci de régulariser votre situation.',
+    logo_url TEXT
   );
 
   CREATE TABLE IF NOT EXISTS partners (
@@ -196,10 +199,12 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL,
     user TEXT NOT NULL,
-    action TEXT NOT NULL, -- CREATE, UPDATE, DELETE, LOGIN, EXPORT
+    action TEXT NOT NULL, -- CREATE, UPDATE, DELETE, LOGIN, EXPORT, RESTORE
     entity TEXT NOT NULL, -- Transaction, Company, Settings, Asset, etc.
     entity_id TEXT,
-    details TEXT -- JSON string with changes
+    details TEXT, -- JSON string with changes
+    ip_address TEXT,
+    user_agent TEXT
   );
 
   CREATE TABLE IF NOT EXISTS employees (
@@ -280,8 +285,18 @@ db.exec(`
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT DEFAULT 'user', -- admin, user, accountant
+    permissions TEXT, -- JSON string for module rights
     name TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS journals (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'sales', 'purchase', 'bank', 'cash', 'general'
+    description TEXT,
+    is_active BOOLEAN DEFAULT 1,
+    is_system BOOLEAN DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS salary_advances (
@@ -343,7 +358,33 @@ db.exec(`
     amount REAL NOT NULL,
     period_month INTEGER NOT NULL,
     period_year INTEGER NOT NULL,
+    last_revised_at TEXT,
     UNIQUE(account_code, period_month, period_year),
+    FOREIGN KEY(account_code) REFERENCES accounts(code)
+  );
+
+  CREATE TABLE IF NOT EXISTS budget_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    budget_id INTEGER NOT NULL,
+    old_amount REAL NOT NULL,
+    new_amount REAL NOT NULL,
+    revision_date TEXT DEFAULT CURRENT_TIMESTAMP,
+    reason TEXT,
+    revised_by TEXT,
+    FOREIGN KEY(budget_id) REFERENCES budgets(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS budget_engagements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_code TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT,
+    engagement_date TEXT DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'cancelled', 'actual'
+    reference TEXT,
+    period_month INTEGER NOT NULL,
+    period_year INTEGER NOT NULL,
+    created_by TEXT,
     FOREIGN KEY(account_code) REFERENCES accounts(code)
   );
 
@@ -406,6 +447,17 @@ try {
   // Columns likely already exist
 }
 
+// Migration to add deleted_at to transactions
+try {
+  db.prepare("ALTER TABLE transactions ADD COLUMN deleted_at TEXT").run();
+} catch (e) {}
+
+// Migration to add logging improvements
+try {
+  db.prepare("ALTER TABLE audit_logs ADD COLUMN ip_address TEXT").run();
+  db.prepare("ALTER TABLE audit_logs ADD COLUMN user_agent TEXT").run();
+} catch (e) {}
+
 // Migration to add description to journal_entries
 try {
   db.prepare("ALTER TABLE journal_entries ADD COLUMN description TEXT").run();
@@ -451,7 +503,20 @@ const newCols = [
   ['syscohada_system', 'TEXT DEFAULT "normal"'],
   ['fiscal_year_start', 'TEXT'],
   ['fiscal_year_duration', 'INTEGER DEFAULT 12'],
-  ['vat_rate', 'REAL DEFAULT 18']
+  ['vat_rate', 'REAL DEFAULT 18'],
+  ['bank_name', 'TEXT'],
+  ['bank_account_number', 'TEXT'],
+  ['bank_iban', 'TEXT'],
+  ['bank_swift', 'TEXT'],
+  ['payment_bank_enabled', 'BOOLEAN DEFAULT 0'],
+  ['payment_bank_account', 'TEXT'],
+  ['payment_cash_enabled', 'BOOLEAN DEFAULT 0'],
+  ['payment_cash_account', 'TEXT'],
+  ['payment_mobile_enabled', 'BOOLEAN DEFAULT 0'],
+  ['payment_mobile_account', 'TEXT'],
+  ['cnps_employer_number', 'TEXT'],
+  ['tax_office', 'TEXT'],
+  ['logo_url', 'TEXT']
 ];
 
 for (const [col, type] of newCols) {
@@ -560,6 +625,22 @@ if (checkRules.get().count === 0) {
   insertManyRules(rules);
 }
 
+// Seed Default Exchange Rates
+const checkRates = db.prepare('SELECT COUNT(*) as count FROM exchange_rates');
+if (checkRates.get().count === 0) {
+  const rates = [
+    ['EUR', 'FCFA', 655.957, 1],
+    ['USD', 'FCFA', 600, 0],
+    ['GBP', 'FCFA', 750, 0],
+    ['FCFA', 'EUR', 1/655.957, 0],
+    ['FCFA', 'USD', 1/600, 0]
+  ];
+  const insertRate = db.prepare('INSERT INTO exchange_rates (from_currency, to_currency, rate, is_default) VALUES (?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const r of rates) insertRate.run(r);
+  })();
+}
+
 // Seed Payroll Tax Brackets (Standard Ivory Coast Brackets)
 const checkBrackets = db.prepare('SELECT COUNT(*) as count FROM payroll_tax_brackets');
 if (checkBrackets.get().count === 0) {
@@ -646,12 +727,49 @@ if (checkUsers.get().count === 0) {
     INSERT INTO users (email, password_hash, role, name)
     VALUES (?, ?, 'admin', 'Administrateur')
   `).run('admin@example.com', defaultHash);
+
+  db.prepare(`
+    INSERT INTO users (email, password_hash, role, name)
+    VALUES (?, ?, 'accountant', 'Comptable Expert')
+  `).run('comptable@example.com', defaultHash);
+
+  db.prepare(`
+    INSERT INTO users (email, password_hash, role, name)
+    VALUES (?, ?, 'user', 'Utilisateur Standard')
+  `).run('utilisateur@example.com', defaultHash);
 } else {
   // Force update the admin password hash just in case it was wrong
   db.prepare(`
     UPDATE users SET password_hash = ? WHERE email = 'admin@example.com'
   `).run(defaultHash);
+  
+  db.prepare(`INSERT OR IGNORE INTO users (email, password_hash, role, name) VALUES (?, ?, 'accountant', 'Comptable Expert')`).run('comptable@example.com', defaultHash);
+  db.prepare(`UPDATE users SET password_hash = ? WHERE email = 'comptable@example.com'`).run(defaultHash);
+
+  db.prepare(`INSERT OR IGNORE INTO users (email, password_hash, role, name) VALUES (?, ?, 'user', 'Utilisateur Standard')`).run('utilisateur@example.com', defaultHash);
+  db.prepare(`UPDATE users SET password_hash = ? WHERE email = 'utilisateur@example.com'`).run(defaultHash);
 }
+
+// Seed default journals
+const checkJournals = db.prepare('SELECT COUNT(*) as count FROM journals');
+if (checkJournals.get().count === 0) {
+  const defaultJournals = [
+    ['VEN', 'Journal des Ventes', 'sales', 'Enregistrement des factures clients', 1, 1],
+    ['ACH', 'Journal des Achats', 'purchase', 'Enregistrement des factures fournisseurs', 1, 1],
+    ['BQE', 'Journal de Banque', 'bank', 'Mouvements bancaires', 1, 1],
+    ['CAI', 'Journal de Caisse', 'cash', 'Opérations en espèces', 1, 1],
+    ['OD', 'Journal des Opérations Diverses', 'general', 'Régularisations et autres opérations', 1, 1]
+  ];
+  const insertJournal = db.prepare('INSERT INTO journals (id, name, type, description, is_active, is_system) VALUES (?, ?, ?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const j of defaultJournals) insertJournal.run(j);
+  })();
+}
+
+// Migration to add permissions to users
+try {
+  db.prepare("ALTER TABLE users ADD COLUMN permissions TEXT").run();
+} catch (e) {}
 
 // Seed initial SYSCOHADA accounts (Comprehensive List)
 const seedAccounts = db.prepare('INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES (?, ?, ?, ?)');
@@ -1039,5 +1157,21 @@ for (const [col, type] of payrollCompanyCols) {
     db.prepare(`ALTER TABLE company_settings ADD COLUMN ${col} ${type}`).run();
   } catch (e) {}
 }
+
+// Migration for reconciliation improvements
+try {
+  db.prepare("ALTER TABLE bank_transactions ADD COLUMN reconciled_at TEXT").run();
+  db.prepare("ALTER TABLE bank_transactions ADD COLUMN adjustment_reason TEXT").run();
+  db.prepare("ALTER TABLE bank_transactions ADD COLUMN is_locked BOOLEAN DEFAULT 0").run();
+} catch (e) {}
+
+try {
+  db.prepare("ALTER TABLE journal_entries ADD COLUMN is_reconciled BOOLEAN DEFAULT 0").run();
+  db.prepare("ALTER TABLE journal_entries ADD COLUMN is_locked BOOLEAN DEFAULT 0").run();
+} catch (e) {}
+
+try {
+  db.prepare("ALTER TABLE transactions ADD COLUMN is_locked BOOLEAN DEFAULT 0").run();
+} catch (e) {}
 
 export default db;

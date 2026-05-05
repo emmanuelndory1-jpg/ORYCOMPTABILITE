@@ -9,23 +9,26 @@ import {
   TrendingUp, TrendingDown, AlertCircle, Loader2, Search,
   ArrowUpRight, ArrowDownRight, Wallet, CreditCard, Users, FileText, Plus, FileSpreadsheet,
   Target, ChevronRight, MessageSquareText, PieChart as PieChartIcon, History as HistoryIcon,
-  Activity, BarChart3, PieChart, Settings as SettingsIcon, Check, Calculator, Shield, Briefcase, Building2
+  Activity, BarChart3, PieChart, Settings as SettingsIcon, Check, Calculator, Shield, Briefcase, Building2,
+  ShoppingBag, ShieldCheck, Brain, Sparkles, Zap, Mic, MicOff
 } from 'lucide-react';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useFiscalYear } from '@/context/FiscalYearContext';
-import { apiFetch as fetch } from '@/lib/api';
+import { apiFetch } from '../lib/api';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { useNavigate } from 'react-router-dom';
+import { useOutletContext, useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { exportToCSV } from '@/lib/exportUtils';
 import { DashboardCustomizer, type WidgetConfig } from './DashboardCustomizer';
-import { getQuickInsight } from '../services/geminiService';
+import { getQuickInsight, parseNaturalLanguageEntry } from '../services/geminiService';
+import { Logo } from './Logo';
 
 export function Dashboard() {
   const { formatCurrency } = useCurrency();
   const { activeYear } = useFiscalYear();
   const navigate = useNavigate();
+  const { companySettings } = useOutletContext<{ companySettings: any }>();
   const [stats, setStats] = useState({
     turnover: 0,
     expenses: 0,
@@ -43,6 +46,7 @@ export function Dashboard() {
   const [cashflowData, setCashflowData] = useState([]);
   const [breakdownData, setBreakdownData] = useState([]);
   const [recentTransactions, setRecentTransactions] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
   const [budgetVsActual, setBudgetVsActual] = useState([]);
   const [ratios, setRatios] = useState({ currentRatio: 0, netMargin: 0, solvency: 0, roi: 0 });
   const [loading, setLoading] = useState(true);
@@ -50,6 +54,36 @@ export function Dashboard() {
   const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [loadingInsight, setLoadingInsight] = useState(false);
+  const [quickEntry, setQuickEntry] = useState('');
+  const [processingQuickEntry, setProcessingQuickEntry] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+
+  const startListening = () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      alert("La reconnaissance vocale n'est pas supportée par votre navigateur.");
+      return;
+    }
+
+    // @ts-ignore
+    const recognition = new window.webkitSpeechRecognition();
+    recognition.lang = 'fr-FR';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    recognition.onresult = async (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setQuickEntry(transcript);
+      // Wait for state update then submit
+      setTimeout(() => {
+        const fakeEvent = { preventDefault: () => {} } as any;
+        handleQuickEntry(fakeEvent, transcript);
+      }, 500);
+    };
+
+    recognition.start();
+  };
 
   const [widgets, setWidgets] = useState<WidgetConfig[]>(() => {
     const saved = localStorage.getItem('dashboard_widgets');
@@ -74,6 +108,7 @@ export function Dashboard() {
       { id: 'payroll_summary', label: 'Résumé de Paie', visible: true },
       { id: 'asset_summary', label: 'Immobilisations', visible: true },
       { id: 'performance_ratios', label: 'Performance & Ratios', visible: true },
+      { id: 'recent_audit_logs', label: 'Modifications Récentes (Audit)', visible: true },
     ];
   });
 
@@ -103,18 +138,19 @@ export function Dashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes] = await Promise.all([
-          fetch('/api/dashboard/stats'),
-          fetch('/api/dashboard/charts'),
-          fetch('/api/dashboard/cashflow-forecast'),
-          fetch('/api/dashboard/breakdown'),
-          fetch('/api/dashboard/recent'),
-          fetch('/api/dashboard/budget-vs-actual'),
-          fetch('/api/dashboard/ratios'),
-          fetch('/api/assets/stats')
+        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes] = await Promise.all([
+          apiFetch('/api/dashboard/stats'),
+          apiFetch('/api/dashboard/charts'),
+          apiFetch('/api/dashboard/cashflow-forecast'),
+          apiFetch('/api/dashboard/breakdown'),
+          apiFetch('/api/dashboard/recent'),
+          apiFetch('/api/dashboard/budget-vs-actual'),
+          apiFetch('/api/dashboard/ratios'),
+          apiFetch('/api/assets/stats'),
+          apiFetch('/api/audit-logs?limit=5')
         ]);
         
-        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes];
+        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes];
         const allOk = responses.every(r => r.ok);
         
         if (!allOk) {
@@ -125,7 +161,7 @@ export function Dashboard() {
           return;
         }
 
-        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData] = await Promise.all(
+        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData, auditData] = await Promise.all(
           responses.map(r => r.json())
         );
         
@@ -134,13 +170,22 @@ export function Dashboard() {
         setCashflowData(cfData);
         setBreakdownData(bData);
         setRecentTransactions(recentData);
+        setAuditLogs(auditData.logs || auditData || []);
         setBudgetVsActual(budgetData);
         setRatios(ratiosData);
         setAssetStats(assetStatsData);
         setLoading(false);
 
-        // Fetch AI insight after stats are loaded
-        fetchInsight(statsData.turnover, statsData.expenses, statsData.cash);
+        // Fetch AI insight with more context
+        fetchInsight({
+          turnover: statsData.turnover,
+          expenses: statsData.expenses,
+          cash: statsData.cash,
+          receivables: statsData.receivables,
+          payables: statsData.payables,
+          ratios: ratiosData,
+          period: activeYear?.name || 'en cours'
+        });
       } catch (err) {
         console.error(err);
         setLoading(false);
@@ -150,10 +195,10 @@ export function Dashboard() {
     fetchData();
   }, [activeYear?.id]);
 
-  const fetchInsight = async (ca: number, charges: number, cash: number) => {
+  const fetchInsight = async (data: any) => {
     setLoadingInsight(true);
     try {
-      const insight = await getQuickInsight(ca, charges, cash);
+      const insight = await getQuickInsight(data);
       if (insight) {
         setAiInsight(insight);
       }
@@ -179,6 +224,25 @@ export function Dashboard() {
     });
   };
 
+  const handleQuickEntry = async (e: React.FormEvent, manualValue?: string) => {
+    if (e) e.preventDefault();
+    const entryValue = manualValue || quickEntry;
+    if (!entryValue.trim() || processingQuickEntry) return;
+    
+    setProcessingQuickEntry(true);
+    try {
+      const parsed = await parseNaturalLanguageEntry(entryValue);
+      if (parsed) {
+        // Redirect to journal with prefilled data or show a small confirmation
+        navigate('/journal', { state: { prefilled: parsed } });
+      }
+    } catch (err) {
+      console.error("Quick entry failed:", err);
+    } finally {
+      setProcessingQuickEntry(false);
+    }
+  };
+
   const StatCard = ({ title, value, trend, trendValue, icon: Icon, color, delay, path, whiteTrend, colSpan = "col-span-1" }: any) => (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
@@ -186,7 +250,7 @@ export function Dashboard() {
       transition={{ delay }}
       onClick={() => path && navigate(path)}
       className={cn(
-        "premium-card p-6 group relative overflow-hidden transition-all duration-500 hover:-translate-y-1.5 border border-slate-200/50 dark:border-white/5 flex flex-col justify-between min-h-[180px] sm:min-h-[200px] shadow-sm hover:shadow-xl hover:shadow-emerald-500/5",
+        "premium-card p-4 sm:p-6 group relative overflow-hidden transition-all duration-500 hover:-translate-y-1.5 border border-slate-200/50 dark:border-white/5 flex flex-col justify-between min-h-[160px] sm:min-h-[180px] md:min-h-[200px] shadow-sm hover:shadow-xl hover:shadow-emerald-500/5",
         colSpan,
         path ? "cursor-pointer" : ""
       )}
@@ -248,42 +312,44 @@ export function Dashboard() {
         <div className="absolute top-0 right-0 w-2/3 h-full bg-[radial-gradient(circle_at_right,_rgba(16,185,129,0.05)_0%,_transparent_70%)] pointer-events-none" />
         
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-12 relative z-10">
-          <div className="space-y-8 max-w-4xl">
-            <div className="flex items-center gap-6 animate-in fade-in slide-in-from-left-4 duration-700">
-              <span className="px-4 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-[10px] font-black uppercase tracking-[0.3em] rounded-full border border-slate-200 dark:border-slate-700">
-                Ory Intelligence v4.0
-              </span>
-              <div className="flex items-center gap-2 text-brand-green">
-                <div className="w-2 h-2 rounded-full bg-current animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
-                <span className="text-[10px] font-black uppercase tracking-widest">Système Opérationnel</span>
-              </div>
-            </div>
+          <div className="flex-1 flex flex-col md:flex-row items-center md:items-start gap-8">
+            {companySettings?.logo_url && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.8, rotate: -5 }}
+                animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                transition={{ duration: 0.8, ease: "easeOut" }}
+                className="w-32 h-32 md:w-40 md:h-40 rounded-[2.5rem] bg-white dark:bg-slate-900 shadow-2xl flex items-center justify-center p-6 border border-slate-100 dark:border-white/10 shrink-0 group relative overflow-hidden"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-brand-green/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <Logo className="w-full h-full" showText={false} src={companySettings.logo_url} />
+              </motion.div>
+            )}
             
-            <div className="space-y-4">
-              <h1 className="text-5xl sm:text-8xl md:text-[120px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
-                Tableau de <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 italic drop-shadow-sm">Bord</span>
-              </h1>
-              <div className="flex items-center gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
-                <div className="h-px w-24 bg-brand-green/30" />
-                <p className="text-[12px] font-black text-slate-400 uppercase tracking-[0.6em] whitespace-nowrap">Gestion Intelligence & Croissance</p>
-                <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+            <div className="space-y-8 flex-1 text-center md:text-left">
+              <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 sm:gap-6 animate-in fade-in slide-in-from-left-4 duration-700">
+                <span className="px-4 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-[10px] font-black uppercase tracking-[0.3em] rounded-full border border-slate-200 dark:border-slate-700 shadow-sm">
+                  Ory Intelligence v4.0
+                </span>
+                <div className="flex items-center gap-2 text-brand-green">
+                  <div className="w-2 h-2 rounded-full bg-current animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
+                  <span className="text-[10px] font-black uppercase tracking-widest">{companySettings?.name || "Système Opérationnel"}</span>
+                </div>
               </div>
-            </div>
-            
-            <div className="text-2xl text-slate-500 dark:text-slate-400 font-medium leading-tight max-w-2xl animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
-              Transformez vos données comptables en <span className="text-slate-900 dark:text-slate-100 font-black relative inline-block">
-                levier stratégique
-                <motion.span 
-                  initial={{ width: 0 }}
-                  animate={{ width: '100%' }}
-                  transition={{ delay: 1, duration: 1.5 }}
-                  className="absolute -bottom-1 left-0 h-1 bg-brand-green/20 rounded-full"
-                />
-              </span>.
+              
+              <div className="space-y-4">
+                <h1 className="text-4xl sm:text-6xl md:text-[100px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                  Business <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 italic drop-shadow-sm">Review</span>
+                </h1>
+                <div className="flex items-center justify-center md:justify-start gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
+                  <div className="h-px w-24 bg-brand-green/30" />
+                  <p className="text-[12px] font-black text-slate-400 uppercase tracking-[0.6em] whitespace-nowrap">Gestion Intelligence & Croissance</p>
+                  <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+                </div>
+              </div>
             </div>
           </div>
           
-          <div className="flex flex-wrap gap-4 animate-in fade-in slide-in-from-right-4 duration-1000 delay-500">
+          <div className="flex flex-wrap justify-center lg:justify-end gap-4 animate-in fade-in slide-in-from-right-4 duration-1000 delay-500">
             <button 
               onClick={() => setIsCustomizerOpen(true)}
               className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 dark:hover:bg-slate-800 transition-all duration-500 shadow-sm flex items-center gap-4 active:scale-95"
@@ -310,33 +376,161 @@ export function Dashboard() {
       </div>
 
       {/* Quick Navigation - New Feature */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
-        {[
-          { label: 'Journal', icon: Calculator, path: '/journal', color: 'text-blue-500', bg: 'bg-blue-500/10' },
-          { label: 'Tiers', icon: Users, path: '/third-parties', color: 'text-brand-gold', bg: 'bg-brand-gold/10' },
-          { label: 'Trésorerie', icon: Wallet, path: '/treasury', color: 'text-brand-green', bg: 'bg-brand-green/10' },
-          { label: 'Factures', icon: FileText, path: '/invoicing', color: 'text-purple-500', bg: 'bg-purple-500/10' },
-          { label: 'Rapports', icon: BarChart3, path: '/financials', color: 'text-rose-500', bg: 'bg-rose-500/10' },
-          { label: 'Paramètres', icon: SettingsIcon, path: '/settings', color: 'text-slate-500', bg: 'bg-slate-500/10' },
-        ].map((item, idx) => (
-          <motion.button
-            key={item.path}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 * idx }}
-            onClick={() => navigate(item.path)}
-            className="group flex flex-col items-center justify-center p-4 sm:p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl sm:rounded-3xl hover:border-brand-green/30 hover:shadow-2xl hover:shadow-brand-green/5 transition-all duration-500 active:scale-95"
-          >
-            <div className={cn("w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center mb-2 sm:mb-3 transition-all duration-500 group-hover:scale-110 group-hover:rotate-6", item.bg, item.color)}>
-              <item.icon size={20} className="sm:w-6 sm:h-6" />
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+        <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+          {[
+            { label: 'Journal', icon: Calculator, path: '/journal', color: 'text-blue-500', bg: 'bg-blue-500/10' },
+            { label: 'Tiers', icon: Users, path: '/third-parties', color: 'text-brand-gold', bg: 'bg-brand-gold/10' },
+            { label: 'Trésorerie', icon: Wallet, path: '/treasury', color: 'text-brand-green', bg: 'bg-brand-green/10' },
+            { label: 'Factures', icon: FileText, path: '/invoicing', color: 'text-purple-500', bg: 'bg-purple-500/10' },
+            { label: 'Fiscalité', icon: ShieldCheck, path: '/tax-report', color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
+            { label: 'Rapports', icon: BarChart3, path: '/financials', color: 'text-rose-500', bg: 'bg-rose-500/10' },
+          ].map((item, idx) => (
+            <motion.button
+              key={item.path}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 * idx }}
+              onClick={() => navigate(item.path)}
+              className="group flex flex-col items-center justify-center p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl hover:border-brand-green/30 hover:shadow-2xl hover:shadow-brand-green/5 transition-all duration-500 active:scale-95"
+            >
+              <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center mb-3 transition-all duration-500 group-hover:scale-110 group-hover:rotate-6", item.bg, item.color)}>
+                <item.icon size={24} />
+              </div>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors text-center">{item.label}</span>
+            </motion.button>
+          ))}
+        </div>
+
+        <motion.div 
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl p-6 shadow-sm flex flex-col justify-between min-h-[160px]"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-8 h-8 rounded-lg bg-brand-green/10 text-brand-green flex items-center justify-center">
+              <Zap size={16} />
             </div>
-            <span className="text-[8px] sm:text-[10px] font-black uppercase tracking-[0.1em] sm:tracking-[0.2em] text-slate-500 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors text-center">{item.label}</span>
-          </motion.button>
-        ))}
+            <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Saisie Rapide IA</h3>
+          </div>
+          <form onSubmit={handleQuickEntry} className="space-y-3">
+            <div className="relative">
+              <input 
+                type="text"
+                value={quickEntry}
+                onChange={(e) => setQuickEntry(e.target.value)}
+                placeholder="Ex: Payé 50k loyer hier..."
+                className="w-full pl-4 pr-10 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-white/5 rounded-xl text-xs text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-green/20"
+              />
+              <button
+                type="button"
+                onClick={startListening}
+                className={cn(
+                  "absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-all",
+                  isListening ? "text-red-500 animate-pulse bg-red-50" : "text-slate-400 hover:text-brand-green hover:bg-slate-100"
+                )}
+              >
+                {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+              </button>
+            </div>
+            <button 
+              type="submit"
+              disabled={processingQuickEntry || !quickEntry}
+              className="w-full py-2.5 bg-brand-green hover:bg-brand-green-dark text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all disabled:opacity-50"
+            >
+              {processingQuickEntry ? "Analyse..." : "Générer l'écriture"}
+            </button>
+          </form>
+        </motion.div>
       </div>
 
+      {/* AI Strategic Advisor - Futuristic Bento Head */}
+      {isVisible('analysis') && (
+        <motion.div 
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8, delay: 0.2 }}
+          className="bg-slate-900 border border-white/5 rounded-[3rem] p-10 text-white relative overflow-hidden group shadow-2xl shadow-brand-green/10"
+        >
+          {/* Glowing Ambient Effects */}
+          <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-brand-green/10 rounded-full blur-[140px] -mr-64 -mt-64 animate-pulse duration-[8000ms]" />
+          <div className="absolute bottom-0 left-0 w-80 h-80 bg-brand-green/5 rounded-full blur-[100px] -ml-40 -mb-40" />
+          
+          <div className="relative z-10 flex flex-col lg:flex-row gap-12 items-center">
+            <div className="relative shrink-0">
+              <div className="w-28 h-28 bg-white/5 backdrop-blur-3xl rounded-[2.5rem] flex items-center justify-center border border-white/10 group-hover:scale-105 group-hover:rotate-6 transition-all duration-700 shadow-2xl">
+                <Brain className="text-brand-green" size={56} />
+              </div>
+              <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-brand-green rounded-full flex items-center justify-center shadow-lg border-4 border-slate-900 text-slate-950">
+                <Sparkles size={20} />
+              </div>
+            </div>
+
+            <div className="flex-1 text-center lg:text-left space-y-6">
+              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4">
+                <span className="px-4 py-1.5 bg-brand-green/10 text-brand-green text-[10px] font-black uppercase tracking-[0.2em] rounded-full border border-brand-green/20 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-brand-green animate-pulse" />
+                  Ory Stratégie PRO v4.2
+                </span>
+                <span className="text-slate-500 text-[10px] font-black uppercase tracking-widest hidden sm:inline">Analyse Systémique OHADA</span>
+              </div>
+              
+              <div className="space-y-4">
+                <h2 className="text-4xl sm:text-6xl font-black tracking-tighter font-display leading-[0.85] uppercase">
+                  Analyse <span className="text-brand-green italic">Prédictive</span>
+                </h2>
+                <div className="relative">
+                  <p className={cn(
+                    "text-xl sm:text-2xl text-slate-300 font-medium leading-relaxed max-w-4xl border-l-[3px] border-brand-green pl-8 py-2",
+                    loadingInsight && "animate-pulse"
+                  )}>
+                    {loadingInsight ? "Ory déchiffre vos flux..." : (aiInsight || "Je constate une augmentation de 14% de vos marges opérationnelles ce mois-ci. Attention : vos créances clients à plus de 60 jours dépassent le seuil critique de 5 millions FCFA.")}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-col gap-4 shrink-0 w-full lg:w-auto">
+              <button 
+                onClick={() => navigate('/financial-auditor')}
+                className="px-10 py-5 bg-brand-green hover:bg-brand-green-light text-slate-950 font-black rounded-[1.5rem] transition-all shadow-xl shadow-brand-green/20 text-xs uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 group/btn"
+              >
+                <Target size={22} className="group-hover/btn:scale-110 transition-transform" />
+                Audit Strategique
+              </button>
+              <button 
+                onClick={() => navigate('/assistant')}
+                className="px-10 py-5 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-black rounded-[1.5rem] transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-3 backdrop-blur-md active:scale-95"
+              >
+                <MessageSquareText size={22} />
+                Conseil IA
+              </button>
+            </div>
+          </div>
+
+          <div className="relative z-10 mt-12 pt-10 border-t border-white/5 grid grid-cols-2 lg:grid-cols-4 gap-8">
+            {[
+              { label: 'Fiabilité Analyse', value: '98.8%', icon: ShieldCheck, color: 'text-brand-green' },
+              { label: 'Flux Prévus', value: `+${(stats.turnover * 0.15 / 1000).toFixed(1)}M FCFA`, icon: TrendingUp, color: 'text-indigo-400' },
+              { label: 'Indice de Risque', value: 'Modéré', icon: AlertCircle, color: 'text-amber-400' },
+              { label: 'Cash Runway', value: `${cashRunway} Mois`, icon: HistoryIcon, color: 'text-brand-gold' }
+            ].map((metric, i) => (
+              <div key={i} className="flex items-center gap-4 group/metric">
+                <div className={cn("w-12 h-12 rounded-2xl bg-white/5 border border-white/5 group-hover/metric:border-white/20 transition-colors flex items-center justify-center", metric.color)}>
+                  <metric.icon size={24} />
+                </div>
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-1">{metric.label}</div>
+                  <div className="text-lg font-black text-white font-display">{metric.value}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
       {/* Financial Summary Section */}
-      <div className="mb-12 grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {isVisible('summary') && (
           <motion.div 
             initial={{ opacity: 0, x: -20 }}
@@ -491,24 +685,24 @@ export function Dashboard() {
             transition={{ delay: 0.45 }}
             className="lg:col-span-4 bg-white dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 rounded-3xl p-4 flex flex-wrap items-center justify-between gap-6 shadow-sm"
           >
-            <div className="flex items-center gap-8 px-4 overflow-hidden">
-              <div className="space-y-1 min-w-0">
+            <div className="flex items-center gap-4 sm:gap-8 px-4 overflow-x-auto no-scrollbar pb-2 sm:pb-0">
+              <div className="space-y-1 min-w-[120px] sm:min-w-0">
                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">Charges Fixes</p>
                 <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{formatCurrency(stats.expenses * 0.4)}</p>
               </div>
               <div className="w-px h-8 bg-slate-100 dark:bg-slate-800 shrink-0" />
-              <div className="space-y-1 min-w-0">
+              <div className="space-y-1 min-w-[120px] sm:min-w-0">
                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">Seuil de Rentabilité</p>
                 <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{formatCurrency(stats.expenses * 1.2)}</p>
               </div>
               <div className="w-px h-8 bg-slate-100 dark:bg-slate-800 shrink-0" />
-              <div className="space-y-1 min-w-0">
-                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">Délai de Paiement Moyen</p>
+              <div className="space-y-1 min-w-[120px] sm:min-w-0">
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">Délai de Paiement</p>
                 <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">32 jours</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 pr-4">
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Statut Fiscal:</span>
+            <div className="flex items-center gap-2 pr-4 shrink-0 sm:mt-0">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest hidden sm:inline">Statut:</span>
               <span className="px-3 py-1 bg-brand-green/10 text-brand-green text-[9px] font-black uppercase tracking-widest rounded-full border border-brand-green/20">À jour</span>
             </div>
           </motion.div>
@@ -519,8 +713,7 @@ export function Dashboard() {
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.5 }}
-            className="lg:col-span-2 lg:row-span-2 bg-slate-950 rounded-3xl p-8 text-white relative overflow-hidden shadow-2xl group border border-white/5 flex flex-col justify-between min-h-[340px]"
+             className="lg:col-span-2 lg:row-span-2 bg-slate-950 rounded-3xl p-6 sm:p-8 text-white relative overflow-hidden shadow-2xl group border border-white/5 flex flex-col justify-between min-h-[340px]"
           >
             {/* Background Glow - Improved Symbiosis */}
             <div className="absolute top-0 right-0 w-full h-full bg-[radial-gradient(circle_at_80%_20%,_rgba(16,185,129,0.12)_0%,_transparent_50%)] opacity-30 group-hover:opacity-40 transition-opacity duration-700" />
@@ -530,7 +723,7 @@ export function Dashboard() {
             <div className="relative z-10 h-full flex flex-col justify-between">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-500 mb-2">Indice de Santé Financière</h3>
+                  <h3 className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-slate-500 mb-2">Indice de Santé Financière</h3>
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
                     <div className="text-5xl sm:text-7xl font-black tracking-tighter leading-none font-display text-white drop-shadow-2xl">{healthScore}%</div>
                     <div className={cn(
@@ -543,7 +736,7 @@ export function Dashboard() {
                     </div>
                   </div>
                 </div>
-                <div className="w-24 h-24 rounded-full border-4 border-slate-900/50 flex items-center justify-center relative shadow-2xl">
+                <div className="w-16 h-16 sm:w-24 sm:h-24 rounded-full border-4 border-slate-900/50 flex items-center justify-center relative shadow-2xl">
                   <svg className="w-full h-full -rotate-90 drop-shadow-[0_0_10px_rgba(16,185,129,0.3)]">
                     <circle
                       cx="48" cy="48" r="42"
@@ -569,12 +762,12 @@ export function Dashboard() {
                     />
                   </svg>
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <Target size={24} className="text-slate-600 group-hover:scale-125 transition-transform duration-700" />
+                    <Target className="w-5 h-5 sm:w-6 sm:h-6 text-slate-600 group-hover:scale-125 transition-transform duration-700" />
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8 mt-10 sm:mt-12">
                 <div className="space-y-6">
                   <div className="group/ratio">
                     <div className="flex justify-between text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-2">
@@ -730,7 +923,7 @@ export function Dashboard() {
               <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Conseiller Ory</h3>
               <div className="flex items-center gap-2">
                 <button 
-                  onClick={() => fetchInsight(stats.turnover, stats.expenses, stats.cash)}
+                  onClick={() => fetchInsight({ turnover: stats.turnover, expenses: stats.expenses, cash: stats.cash })}
                   disabled={loadingInsight}
                   className="p-1 hover:bg-white/10 rounded transition-colors disabled:opacity-50"
                   title="Rafraîchir le conseil"
@@ -1422,75 +1615,137 @@ export function Dashboard() {
         )}
 
         {/* Recent Activity - Editorial List */}
-        {isVisible('activity') && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.8 }}
-            className="lg:col-span-2 premium-card p-8"
-          >
-            <div className="flex items-center justify-between mb-10">
-              <div>
-                <div className="flex items-center gap-3 mb-1">
-                  <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight font-display">Activité</h3>
-                  <span className="flex items-center gap-1.5 px-2 py-0.5 bg-brand-green/10 text-brand-green text-[9px] font-black uppercase tracking-widest rounded-md border border-brand-green/20">
-                    <span className="w-1 h-1 rounded-full bg-brand-green animate-pulse" />
-                    Live
-                  </span>
+        <div className="lg:col-span-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {isVisible('activity') && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.8 }}
+              className="premium-card p-8 h-full"
+            >
+              <div className="flex items-center justify-between mb-10">
+                <div>
+                  <div className="flex items-center gap-3 mb-1">
+                    <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight font-display">Activité</h3>
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 bg-brand-green/10 text-brand-green text-[9px] font-black uppercase tracking-widest rounded-md border border-brand-green/20">
+                      <span className="w-1 h-1 rounded-full bg-brand-green animate-pulse" />
+                      Live
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Flux financiers récents</p>
                 </div>
-                <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Flux financiers récents</p>
+                <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl group-hover:rotate-12 transition-transform duration-500 shadow-inner">
+                  <HistoryIcon size={24} className="text-slate-400 dark:text-slate-500" />
+                </div>
               </div>
-              <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl group-hover:rotate-12 transition-transform duration-500">
-                <HistoryIcon size={24} className="text-slate-400 dark:text-slate-500" />
-              </div>
-            </div>
-            
-            <div className="space-y-2">
-              <AnimatePresence mode="popLayout">
-                {recentTransactions.map((tx: any, idx: number) => (
-                  <motion.div 
-                    key={tx.id} 
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    transition={{ delay: idx * 0.1 }}
-                    className="p-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-white/5 flex items-center justify-between group/item transition-all duration-300 border border-transparent hover:border-slate-100 dark:hover:border-white/10"
-                  >
-                    <div className="flex items-center gap-5">
-                      <div className="w-14 h-14 rounded-2xl bg-slate-50 dark:bg-slate-800 flex items-center justify-center text-slate-400 dark:text-slate-500 group-hover/item:bg-brand-green/10 group-hover/item:text-brand-green transition-all duration-500 shadow-sm">
-                        <FileText size={24} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-base font-bold text-slate-900 dark:text-slate-100 leading-tight mb-1 group-hover/item:text-brand-green transition-colors truncate" title={tx.description}>{tx.description}</p>
-                        <div className="flex items-center gap-3">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap">{tx.date}</p>
-                          <span className="w-1 h-1 rounded-full bg-slate-200 dark:bg-slate-700 shrink-0" />
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 truncate">ID: {tx.id.slice(0, 8)}</p>
+              
+              <div className="space-y-2">
+                <AnimatePresence mode="popLayout">
+                  {recentTransactions.map((tx: any, idx: number) => (
+                    <motion.div 
+                      key={tx.id} 
+                      layout
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      transition={{ delay: idx * 0.1 }}
+                      className="p-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-white/5 flex items-center justify-between group/item transition-all duration-300 border border-transparent hover:border-slate-100 dark:hover:border-white/10"
+                    >
+                      <div className="flex items-center gap-5">
+                        <div className="w-14 h-14 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 dark:text-slate-500 group-hover/item:bg-brand-green/10 group-hover/item:text-brand-green transition-all duration-500 shadow-sm border border-slate-100 dark:border-slate-700/50">
+                          <FileText size={24} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-base font-bold text-slate-900 dark:text-slate-100 leading-tight mb-1 group-hover/item:text-brand-green transition-colors truncate" title={tx.description}>{tx.description}</p>
+                          <div className="flex items-center gap-3">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap">{tx.date}</p>
+                            <span className="w-1 h-1 rounded-full bg-slate-200 dark:bg-slate-700 shrink-0" />
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 truncate">ID: {String(tx.id || '').slice(0, 8)}</p>
+                          </div>
                         </div>
                       </div>
+                      <div className="text-right">
+                        <p className="text-lg font-black text-slate-900 dark:text-slate-100 font-display">{formatCurrency(tx.amount)}</p>
+                        <div className="flex items-center justify-end gap-1.5 mt-1">
+                          <div className={cn("w-1.5 h-1.5 rounded-full", tx.amount >= 0 ? "bg-brand-green" : "bg-rose-500")} />
+                          <p className={cn("text-[10px] font-black uppercase tracking-[0.2em]", tx.amount >= 0 ? "text-brand-green" : "text-rose-500")}>
+                            {tx.amount >= 0 ? 'Entrée' : 'Sortie'}
+                          </p>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+              
+              <button 
+                onClick={() => navigate('/journal')}
+                className="mt-8 w-full py-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500 text-[10px] font-black uppercase tracking-[0.3em] hover:border-brand-green hover:text-brand-green hover:bg-brand-green/5 transition-all duration-500 flex items-center justify-center gap-3 group/btn"
+              >
+                Consulter le Grand Livre
+                <ChevronRight size={14} className="group-hover/btn:translate-x-1 transition-transform" />
+              </button>
+            </motion.div>
+          )}
+
+          {isVisible('recent_audit_logs') && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.9 }}
+              className="premium-card p-8 h-full bg-slate-50/30 dark:bg-slate-900/40"
+            >
+              <div className="flex items-center justify-between mb-10">
+                <div>
+                  <div className="flex items-center gap-3 mb-1">
+                    <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight font-display text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">Piste d'Audit</h3>
+                    <div className="p-1 px-2 bg-blue-500/10 text-blue-500 text-[8px] font-black uppercase tracking-widest rounded-md border border-blue-500/20">Audit-Ready</div>
+                  </div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Dernières modifications du système</p>
+                </div>
+                <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-2xl shadow-inner text-blue-500">
+                  <Shield size={24} />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {auditLogs.slice(0, 5).map((log: any, idx: number) => (
+                  <div key={log.id} className="flex gap-4 group/log">
+                    <div className="flex flex-col items-center gap-2">
+                      <div className={cn(
+                        "w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm border border-white/10",
+                        log.action === 'CREATE' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400" :
+                        log.action === 'UPDATE' ? "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400" :
+                        "bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400"
+                      )}>
+                        {log.action === 'CREATE' ? <Plus size={18} /> : log.action === 'UPDATE' ? <SettingsIcon size={18} /> : <AlertCircle size={18} />}
+                      </div>
+                      {idx < auditLogs.length - 1 && <div className="w-px flex-1 bg-slate-100 dark:bg-slate-800" />}
                     </div>
-                    <div className="text-right">
-                      <p className="text-lg font-black text-slate-900 dark:text-slate-100 font-display">{formatCurrency(tx.amount)}</p>
-                      <div className="flex items-center justify-end gap-1.5 mt-1">
-                        <div className="w-1.5 h-1.5 rounded-full bg-brand-green" />
-                        <p className="text-[10px] font-black text-brand-green uppercase tracking-[0.2em]">Traité</p>
+                    <div className="flex-1 pb-4">
+                      <div className="flex justify-between items-start mb-1">
+                        <p className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-tight">{log.entity}: {log.action}</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest tabular-nums">{new Date(log.date).toLocaleTimeString()}</p>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-none mb-2">Par <span className="font-bold text-slate-700 dark:text-slate-300">{log.user}</span></p>
+                      <div className="bg-white/50 dark:bg-slate-800/30 p-2 py-1.5 rounded-lg border border-slate-100 dark:border-slate-800/50 inline-block">
+                        <span className="text-[9px] font-mono font-bold text-slate-400 dark:text-slate-500">REF: {log.entity_id || 'N/A'}</span>
                       </div>
                     </div>
-                  </motion.div>
+                  </div>
                 ))}
-              </AnimatePresence>
-            </div>
-            
-            <button 
-              onClick={() => navigate('/journal')}
-              className="mt-8 w-full py-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500 text-[10px] font-black uppercase tracking-[0.3em] hover:border-brand-green hover:text-brand-green hover:bg-brand-green/5 transition-all duration-500 flex items-center justify-center gap-3 group/btn"
-            >
-              Consulter le Grand Livre
-              <ChevronRight size={14} className="group-hover/btn:translate-x-1 transition-transform" />
-            </button>
-          </motion.div>
-        )}
+              </div>
+
+              <button 
+                onClick={() => navigate('/audit-trail')}
+                className="mt-6 w-full py-4 bg-slate-900/5 dark:bg-white/5 rounded-2xl text-[10px] font-black text-slate-600 dark:text-slate-400 uppercase tracking-[0.2em] hover:bg-slate-900 dark:hover:bg-slate-800 hover:text-white transition-all flex items-center justify-center gap-2 group/audit-btn"
+              >
+                <span>Journal d'audit complet</span>
+                <Shield size={14} className="group-hover/audit-btn:rotate-12 transition-transform" />
+              </button>
+            </motion.div>
+          )}
+        </div>
 
         {/* NEW: Strategic Analysis Section */}
         {isVisible('analysis') && (

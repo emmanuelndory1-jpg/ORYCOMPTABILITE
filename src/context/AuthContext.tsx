@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
@@ -59,7 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(true);
         try {
           const idToken = await firebaseUser.getIdToken();
-          const response = await fetch('/api/auth/google', {
+          const response = await apiFetch('/api/auth/google', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

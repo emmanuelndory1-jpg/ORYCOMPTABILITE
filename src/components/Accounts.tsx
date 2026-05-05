@@ -1,7 +1,11 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, Filter, Pencil, Trash2, X, Check, Copy } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useDialog } from './DialogProvider';
+
+import { PageHeader } from './ui/PageHeader';
+import { Calculator } from 'lucide-react';
 
 interface Account {
   code: string;
@@ -11,6 +15,7 @@ interface Account {
 }
 
 export function Accounts() {
+  const { alert: dialogAlert } = useDialog();
   const { confirm, alert } = useDialog();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -29,7 +34,7 @@ export function Accounts() {
 
   const fetchAccounts = () => {
     setLoading(true);
-    fetch('/api/accounts')
+    apiFetch('/api/accounts')
       .then(res => res.json())
       .then(data => {
         setAccounts(data);
@@ -86,11 +91,11 @@ export function Accounts() {
         fetchAccounts();
       } else {
         const data = await res.json();
-        alert(data.error || "Une erreur est survenue");
+        dialogAlert(data.error || "Une erreur est survenue");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur de connexion");
+      dialogAlert("Erreur de connexion");
     }
   };
 
@@ -99,34 +104,36 @@ export function Accounts() {
     if (!confirmed) return;
 
     try {
-      const res = await fetch(`/api/accounts/${code}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/accounts/${code}`, { method: 'DELETE' });
       if (res.ok) {
         fetchAccounts();
       } else {
         const data = await res.json();
-        alert(data.error || "Impossible de supprimer ce compte");
+        dialogAlert(data.error || "Impossible de supprimer ce compte");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur de connexion");
+      dialogAlert("Erreur de connexion");
     }
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Plan Comptable</h1>
-          <p className="text-slate-500 dark:text-slate-400">SYSCOHADA Révisé</p>
-        </div>
-        <button 
-          onClick={() => handleOpenModal()}
-          className="bg-brand-green hover:bg-brand-green-light text-white px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-lg shadow-brand-green/20"
-        >
-          <Plus size={18} />
-          Nouveau Compte
-        </button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Plan Comptable"
+        subtitle="SYSCOHADA Révisé"
+        icon={<Calculator size={24} />}
+        actions={
+          <button 
+            onClick={() => handleOpenModal()}
+            className="bg-brand-green hover:bg-brand-green-light text-white px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-brand-green/20 active:scale-95 whitespace-nowrap"
+          >
+            <Plus size={18} />
+            <span className="hidden sm:inline">Nouveau Compte</span>
+            <span className="sm:hidden">Nouveau</span>
+          </button>
+        }
+      />
 
       <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 dark:border-slate-800 overflow-hidden transition-colors duration-300">
         <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex gap-4 bg-slate-50/30 dark:bg-slate-900/50">

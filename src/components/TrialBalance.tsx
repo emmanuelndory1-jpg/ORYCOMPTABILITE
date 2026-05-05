@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Download, Filter, Search, FileText, Printer, FileSpreadsheet } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -57,7 +58,7 @@ export function TrialBalance() {
 
   const fetchCompanySettings = async () => {
     try {
-      const res = await fetch('/api/company/settings');
+      const res = await apiFetch('/api/company/settings');
       const data = await res.json();
       setCompanySettings(data);
     } catch (err) {
@@ -72,7 +73,7 @@ export function TrialBalance() {
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
       
-      const res = await fetch(`/api/reports/trial-balance?${params.toString()}`);
+      const res = await apiFetch(`/api/reports/trial-balance?${params.toString()}`);
       const json = await res.json();
       setData(json);
     } catch (err) {

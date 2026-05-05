@@ -1,3 +1,5 @@
+import { useDialog } from './DialogProvider';
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   X, 
@@ -27,6 +29,7 @@ import { PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings, formatCurrency
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
 import autoTable from 'jspdf-autotable';
+import { Logo } from './Logo';
 
 interface InvoiceItem {
   id: number;
@@ -67,6 +70,7 @@ interface InvoiceViewerProps {
 }
 
 export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
+  const { alert: dialogAlert } = useDialog();
   const { formatCurrency, currency: baseCurrency } = useCurrency();
   const [loading, setLoading] = useState(true);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
@@ -129,7 +133,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
   const fetchInvoice = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/invoices/${id}`);
+      const res = await apiFetch(`/api/invoices/${id}`);
       if (res.ok) {
         const data = await res.json();
         setInvoice(data);
@@ -143,7 +147,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
 
   const fetchCompanySettings = async () => {
     try {
-      const res = await fetch('/api/company/settings');
+      const res = await apiFetch('/api/company/settings');
       if (res.ok) {
         const data = await res.json();
         setCompanySettings(data);
@@ -157,14 +161,14 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     if (!invoice || invoice.type !== 'quote') return;
     setConverting(true);
     try {
-      const res = await fetch(`/api/invoices/${id}/convert`, { method: 'POST' });
+      const res = await apiFetch(`/api/invoices/${id}/convert`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        alert(`Devis converti avec succès ! Nouvelle facture : ${data.number}`);
+        dialogAlert(`Devis converti avec succès ! Nouvelle facture : ${data.number}`);
         fetchInvoice();
       } else {
         const err = await res.json();
-        alert(err.error || "Erreur lors de la conversion");
+        dialogAlert(err.error || "Erreur lors de la conversion");
       }
     } catch (err) {
       console.error(err);
@@ -181,18 +185,18 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     if (!invoice) return;
     setSendingEmail(true);
     try {
-      const res = await fetch(`/api/invoices/${id}/send`, {
+      const res = await apiFetch(`/api/invoices/${id}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(emailData)
       });
       if (res.ok) {
-        alert("Email envoyé avec succès !");
+        dialogAlert("Email envoyé avec succès !");
         setShowEmailModal(false);
         fetchInvoice();
       } else {
         const err = await res.json();
-        alert(err.error || "Erreur lors de l'envoi de l'email");
+        dialogAlert(err.error || "Erreur lors de l'envoi de l'email");
       }
     } catch (err) {
       console.error(err);
@@ -206,12 +210,12 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     if (!confirm("Êtes-vous sûr de vouloir supprimer ce document ?")) return;
     
     try {
-      const res = await fetch(`/api/invoices/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/invoices/${id}`, { method: 'DELETE' });
       if (res.ok) {
         onClose();
       } else {
         const err = await res.json();
-        alert(err.error || "Erreur lors de la suppression");
+        dialogAlert(err.error || "Erreur lors de la suppression");
       }
     } catch (err) {
       console.error(err);
@@ -222,12 +226,12 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     if (!invoice) return;
     setValidating(true);
     try {
-      const res = await fetch(`/api/invoices/${id}/validate`, { method: 'POST' });
+      const res = await apiFetch(`/api/invoices/${id}/validate`, { method: 'POST' });
       if (res.ok) {
         fetchInvoice();
       } else {
         const err = await res.json();
-        alert(err.error || "Erreur lors de la validation");
+        dialogAlert(err.error || "Erreur lors de la validation");
       }
     } catch (err) {
       console.error(err);
@@ -251,7 +255,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
         paymentAccount,
         amount: invoice.total_amount
       };
-      const res = await fetch(`/api/invoices/${id}/pay`, {
+      const res = await apiFetch(`/api/invoices/${id}/pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -261,7 +265,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
         fetchInvoice();
       } else {
         const err = await res.json();
-        alert(err.error || "Erreur lors du paiement");
+        dialogAlert(err.error || "Erreur lors du paiement");
       }
     } catch (err) {
       console.error(err);
@@ -476,8 +480,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
           {/* Paper Header */}
           <div className="p-16 border-b border-slate-50 dark:border-slate-800 flex flex-col md:flex-row justify-between items-start gap-12">
             <div className="space-y-8">
-              <div className="w-24 h-24 bg-brand-green rounded-[2rem] flex items-center justify-center text-white font-black text-4xl shadow-2xl shadow-brand-green/30">
-                {companySettings?.name?.charAt(0) || 'C'}
+              <div className="w-32 h-32 bg-white dark:bg-slate-900 rounded-[2rem] flex items-center justify-center border border-slate-100 dark:border-slate-800 shadow-2xl shadow-slate-200/50 dark:shadow-none overflow-hidden p-4">
+                <Logo className="w-full h-full" src={companySettings?.logo_url} showText={false} />
               </div>
               <div className="space-y-2">
                 <h3 className="text-2xl font-black text-slate-900 dark:text-white uppercase tracking-tighter">{companySettings?.name || 'Ma Société'}</h3>

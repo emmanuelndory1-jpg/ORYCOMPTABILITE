@@ -12,6 +12,7 @@ import { FinancialStatements } from './components/FinancialStatements';
 import { CustomReports } from './components/CustomReports';
 import { ComplianceAudit } from './components/ComplianceAudit';
 import { AssetsManager } from './components/AssetsManager';
+import { ProcureToPay } from './components/ProcureToPay';
 import { RecurringTransactions } from './components/RecurringTransactions';
 import { AuditLogViewer } from './components/AuditLogViewer';
 import { CompanyCreation } from './components/CompanyCreation';
@@ -20,12 +21,12 @@ import { Breadcrumbs } from './components/Breadcrumbs';
 import { GeneralLedger } from './components/GeneralLedger';
 import { TrialBalance } from './components/TrialBalance';
 import { TaxManager } from './components/TaxManager';
+import { TaxSummaryReport } from './components/TaxSummaryReport';
 import { PayrollManager } from './components/PayrollManager';
 import { ThirdPartyManager } from './components/ThirdPartyManager';
 import { BudgetManager } from './components/BudgetManager';
 import { InvoicingManager } from './components/InvoicingManager';
 import { MobileNav } from './components/MobileNav';
-import { QuickActionFAB } from './components/QuickActionFAB';
 import { PricingPage } from './components/PricingPage';
 import { MockPaymentPage } from './components/MockPaymentPage';
 import { LoginPage } from './components/LoginPage';
@@ -34,7 +35,9 @@ import { TaxAssistant } from './components/TaxAssistant';
 import { BankReconciliation } from './components/BankReconciliation';
 import { TeamManager } from './components/TeamManager';
 import { FinancialAuditor } from './components/FinancialAuditor';
+import { AiTrainingDashboard } from './components/AiTrainingDashboard';
 import { Header } from './components/Header';
+import { CommandPalette } from './components/CommandPalette';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { LanguageProvider } from './context/LanguageContext';
@@ -42,6 +45,7 @@ import { FiscalYearProvider } from './context/FiscalYearContext';
 import { ModuleProvider } from './context/ModuleContext';
 import { DialogProvider } from './components/DialogProvider';
 import { apiFetch } from './lib/api';
+import { cn } from './lib/utils';
 import { Loader2, Menu, Moon, Sun } from 'lucide-react';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
@@ -132,11 +136,37 @@ function DashboardLayout() {
   }, [user]);
 
   const handleQuickAction = (action: string) => {
+    if (action === 'voice') {
+      navigate('/journal', { state: { triggerVoice: true } });
+      return;
+    }
     if (action === 'new' || action === 'scan') {
       navigate('/journal');
       setOpenJournalModal(true);
     }
   };
+
+  useEffect(() => {
+    const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key.toLowerCase()) {
+          case 'j': e.preventDefault(); navigate('/journal'); break;
+          case 'g': e.preventDefault(); navigate('/ledger'); break;
+          case 'b': e.preventDefault(); navigate('/trial-balance'); break;
+          case 'i': e.preventDefault(); navigate('/'); break;
+          case 'f': e.preventDefault(); navigate('/invoicing'); break;
+          case 'p': e.preventDefault(); navigate('/payroll'); break;
+          case 's': e.preventDefault(); navigate('/settings'); break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => window.removeEventListener('keydown', handleGlobalShortcuts);
+  }, [navigate]);
 
   if (isCompanyCreated === null) {
     return (
@@ -162,19 +192,20 @@ function DashboardLayout() {
         isMobileOpen={isMobileOpen}
         setIsMobileOpen={setIsMobileOpen}
         companyName={companySettings?.name || 'Ma PME'}
+        logoUrl={companySettings?.logo_url}
         user={user}
       />
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden pb-20 md:pb-0 relative">
         <div className="hidden md:block">
-          <Header />
+          <Header logoUrl={companySettings?.logo_url} companyName={companySettings?.name} />
         </div>
         
         {/* Mobile Header */}
         <div className="md:hidden bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-slate-200 dark:border-white/5 px-4 h-16 flex items-center justify-between sticky top-0 z-40 transition-colors duration-300 shadow-sm">
           <Link to="/" className="flex items-center gap-2 group">
-            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 flex items-center justify-center shadow-lg shadow-brand-green/20 border border-slate-100 dark:border-white/5 transition-transform active:scale-95">
-              <Logo className="w-5 h-5 text-brand-green" showText={false} />
+            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 flex items-center justify-center shadow-lg shadow-brand-green/20 border border-slate-100 dark:border-white/5 transition-transform active:scale-95 overflow-hidden">
+              <Logo className="w-5 h-5 text-brand-green" showText={false} src={companySettings?.logo_url} />
             </div>
             <div className="flex flex-col">
               <span className="font-black text-xs tracking-tight text-slate-900 dark:text-white uppercase">ORYCOMPTA</span>
@@ -195,15 +226,18 @@ function DashboardLayout() {
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-y-auto scroll-smooth">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 py-6 md:py-8">
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <Outlet context={{ openJournalModal, setOpenJournalModal, companySettings }} />
+          <div className={cn(
+            "mx-auto px-4 sm:px-6 md:px-8 py-6 md:py-8",
+            location.pathname === '/assistant' ? "max-w-full" : "max-w-7xl"
+          )}>
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 h-full">
+              <Outlet context={{ openJournalModal, setOpenJournalModal, companySettings, refreshCompanySettings: fetchCompanyStatus }} />
             </div>
           </div>
         </div>
 
         <FloatingAssistant />
-        <QuickActionFAB onAction={handleQuickAction} />
+        <CommandPalette />
         <MobileNav onMenuClick={() => setIsMobileOpen(true)} />
       </main>
     </div>
@@ -273,10 +307,12 @@ export default function App() {
                   <Route path="compliance" element={<ComplianceAudit />} />
                   <Route path="recurring" element={<RecurringTransactions />} />
                   <Route path="assets" element={<AssetsManager />} />
+                  <Route path="p2p" element={<ProcureToPay />} />
                   <Route path="company" element={<CompanyCreation />} />
                   <Route path="treasury" element={<Treasury />} />
                   <Route path="reconciliation" element={<BankReconciliation />} />
                   <Route path="vat" element={<TaxManager />} />
+                  <Route path="tax-report" element={<TaxSummaryReport />} />
                   <Route path="payroll" element={<PayrollManager />} />
                   <Route path="third-parties" element={<ThirdPartyManager />} />
                   <Route path="budgets" element={<BudgetManager />} />
@@ -286,6 +322,7 @@ export default function App() {
                   <Route path="tax-assistant" element={<TaxAssistant />} />
                   <Route path="financial-auditor" element={<FinancialAuditor />} />
                   <Route path="team" element={<TeamManager />} />
+                  <Route path="ai-training" element={<AiTrainingDashboard />} />
                   <Route path="settings" element={<Settings />} />
                   <Route path="*" element={<div className="p-8 text-center text-slate-500 dark:text-slate-400">Module en cours de développement...</div>} />
                 </Route>

@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   Building, Check, Loader2, FileText, ArrowRight, 
@@ -169,7 +170,7 @@ const getTaxRegimes = (currency: string) => [
 ];
 
 export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
-  const { confirm, alert } = useDialog();
+  const { confirm, alert: dialogAlert } = useDialog();
   const { getCurrencyIcon } = useCurrency();
   const { t } = useLanguage();
   const [step, setStep] = useState(0);
@@ -358,7 +359,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
       setStep(prev => Math.min(prev + 1, 7));
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
-      alert(t('onboarding.error_generic'), 'error');
+      dialogAlert(t('onboarding.error_generic'), 'error');
     }
   };
 
@@ -387,7 +388,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
     }, 1200);
 
     try {
-      const res = await fetch('/api/company/create', {
+      const res = await apiFetch('/api/company/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
@@ -409,13 +410,13 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
         clearInterval(progressInterval);
         setLoading(false);
         const err = await res.json();
-        alert(err.error || t('onboarding.error_generic'), 'error');
+        dialogAlert(err.error || t('onboarding.error_generic'), 'error');
       }
     } catch (err: any) {
       clearInterval(progressInterval);
       setLoading(false);
       console.error(err);
-      alert(t('onboarding.error_generic'), 'error');
+      dialogAlert(t('onboarding.error_generic'), 'error');
     }
   };
 
@@ -675,6 +676,50 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="md:col-span-2 flex flex-col md:flex-row items-center gap-6 p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-800">
+                    <div className="w-24 h-24 rounded-2xl bg-white dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
+                      {formData.logoUrl ? (
+                        <img src={formData.logoUrl} alt="Logo preview" className="w-full h-full object-contain" />
+                      ) : (
+                        <Building className="text-slate-300" size={32} />
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-2 text-center md:text-left">
+                      <h3 className="font-bold text-slate-900 dark:text-white">Logo de l'entreprise</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Format recommandé: carré, max 1 Mo. Ce logo apparaîtra sur vos devis et factures.</p>
+                      <div className="flex items-center justify-center md:justify-start gap-3">
+                        <label className="cursor-pointer bg-brand-green text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-brand-green-light transition-all shadow-lg shadow-brand-green/20">
+                          {formData.logoUrl ? "Modifier le logo" : "Importer le logo"}
+                          <input 
+                            type="file" 
+                            className="hidden" 
+                            accept="image/*" 
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                if (file.size > 1024 * 1024) {
+                                  dialogAlert("Le logo ne doit pas dépasser 1 Mo.", "error");
+                                  return;
+                                }
+                                const reader = new FileReader();
+                                reader.onloadend = () => updateFormData({ logoUrl: reader.result as string });
+                                reader.readAsDataURL(file);
+                              }
+                            }} 
+                          />
+                        </label>
+                        {formData.logoUrl && (
+                          <button 
+                            onClick={() => updateFormData({ logoUrl: '' })}
+                            className="text-rose-500 text-xs font-bold hover:underline"
+                          >
+                            Supprimer
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                 <div className="col-span-2">
                   <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">{t('onboarding.company_name')}</label>
                   <input 

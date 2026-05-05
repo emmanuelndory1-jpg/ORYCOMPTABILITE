@@ -35,6 +35,7 @@ export interface OnboardingData {
   email: string;
   phone: string;
   managerName: string;
+  logoUrl?: string;
 
   // Banking (Main)
   bankName?: string;

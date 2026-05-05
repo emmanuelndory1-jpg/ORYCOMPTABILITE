@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Sparkles, TrendingUp, TrendingDown, AlertCircle, CheckCircle2, ShieldCheck, PieChart, BarChart3, ArrowRight, Loader2, Zap, Target, Activity, Info, Download } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -6,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import ReactMarkdown from 'react-markdown';
 import { generateAudit as aiGenerateAudit } from '../services/geminiService';
+import { generateAuditPDF, CompanySettings } from '../lib/exportUtils';
 
 interface AuditReport {
   summary: string;
@@ -27,13 +29,32 @@ export function FinancialAuditor() {
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<CompanySettings | null>(null);
+
+  useEffect(() => {
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const res = await apiFetch('/api/company/settings');
+      if (res.ok) setSettings(await res.json());
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleExportPDF = () => {
+    if (!report || !settings) return;
+    generateAuditPDF(report, settings);
+  };
 
   const generateAudit = async () => {
     setLoading(true);
     setError(null);
     try {
       // 1. Fetch audit data from backend
-      const dataRes = await fetch('/api/ai/audit-data');
+      const dataRes = await apiFetch('/api/ai/audit-data');
       if (!dataRes.ok) throw new Error("Erreur lors de la récupération des données d'audit");
       const auditData = await dataRes.json();
 
@@ -83,10 +104,15 @@ export function FinancialAuditor() {
           </div>
         </div>
         <div className="flex gap-3">
-          <button className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all shadow-sm">
-            <Download size={18} />
-            Exporter PDF
-          </button>
+          {report && (
+            <button 
+              onClick={handleExportPDF}
+              className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all shadow-sm"
+            >
+              <Download size={18} />
+              Exporter PDF
+            </button>
+          )}
           <button 
             onClick={generateAudit}
             disabled={loading}

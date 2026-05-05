@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Percent, Plus, Save, Trash2, Edit2, X } from 'lucide-react';
 import { useDialog } from './DialogProvider';
@@ -25,7 +26,7 @@ export function VATSettingsManager() {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('/api/vat-settings');
+      const res = await apiFetch('/api/vat-settings');
       const data = await res.json();
       setSettings(data);
     } catch (err) {
@@ -61,7 +62,7 @@ export function VATSettingsManager() {
     const confirmed = await confirm('Êtes-vous sûr de vouloir supprimer ce taux de TVA ?');
     if (!confirmed) return;
     try {
-      const res = await fetch(`/api/vat-settings/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/vat-settings/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchSettings();
       }
@@ -80,8 +81,8 @@ export function VATSettingsManager() {
     setFormData({
       rate: 0,
       label: '',
-      account_collected: '4431',
-      account_deductible: '4452',
+      account_collected: '443',
+      account_deductible: '445',
       is_active: true
     });
   };

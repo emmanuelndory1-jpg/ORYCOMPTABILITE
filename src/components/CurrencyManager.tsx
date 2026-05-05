@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Banknote, Plus, Trash2, Save, Loader2, RefreshCw } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -38,7 +39,7 @@ export function CurrencyManager() {
 
   const fetchRates = async () => {
     try {
-      const res = await fetch('/api/exchange-rates');
+      const res = await apiFetch('/api/exchange-rates');
       if (res.ok) {
         const data = await res.json();
         setRates(data);
@@ -58,7 +59,7 @@ export function CurrencyManager() {
     setSuccess(null);
 
     try {
-      const res = await fetch('/api/exchange-rates', {
+      const res = await apiFetch('/api/exchange-rates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newRate)
@@ -82,7 +83,7 @@ export function CurrencyManager() {
     if (!confirm("Supprimer ce taux de change ?")) return;
     
     try {
-      const res = await fetch(`/api/exchange-rates/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/exchange-rates/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setRates(rates.filter(r => r.id !== id));
       }

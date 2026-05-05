@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   FileText, Download, Loader2, Calendar, Filter, 
@@ -52,7 +53,7 @@ export function CustomReports() {
   useEffect(() => {
     const fetchAccounts = async () => {
       try {
-        const res = await fetch('/api/accounts');
+        const res = await apiFetch('/api/accounts');
         const data = await res.json();
         setAccounts(data);
       } catch (err) {
@@ -76,7 +77,7 @@ export function CustomReports() {
         params.append('accountCodes', selectedAccounts.join(','));
       }
 
-      const res = await fetch(`/api/reports/custom?${params.toString()}`);
+      const res = await apiFetch(`/api/reports/custom?${params.toString()}`);
       const data = await res.json();
       setReportData(data);
       setShowFilters(false);

@@ -1,10 +1,13 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Upload, FileText, CheckCircle2, AlertCircle, RefreshCw, 
   Plus, Calculator, ArrowRight, Check, Landmark, 
   Link as LinkIcon, ExternalLink, Search, Filter,
-  History, Settings as SettingsIcon, X, ChevronRight
+  History, Settings as SettingsIcon, X, ChevronRight,
+  Download, Sparkles, ShieldCheck, Lock, Unlock, MessageSquare,
+  AlertTriangle
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
@@ -33,6 +36,7 @@ interface BankTransaction {
   matched_gl_id?: number;
   matched_description?: string;
   matched_account?: string;
+  is_locked?: boolean | number;
 }
 
 interface ReconciliationResult {
@@ -54,6 +58,7 @@ interface GLEntry {
 }
 
 export function BankReconciliation() {
+  const { alert: dialogAlert } = useDialog();
   const { companySettings } = useOutletContext<{ companySettings: any }>();
   const { confirm, alert } = useDialog();
 
@@ -69,12 +74,16 @@ export function BankReconciliation() {
   const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
   const [isCreateEntryModalOpen, setIsCreateEntryModalOpen] = useState(false);
   const [isManualMatchModalOpen, setIsManualMatchModalOpen] = useState(false);
+  const [isForcedMatchModalOpen, setIsForcedMatchModalOpen] = useState(false);
+  const [adjustmentReason, setAdjustmentReason] = useState('');
+  const [activeTab, setActiveTab] = useState<'compare' | 'history'>('compare');
   const [selectedTxForEntry, setSelectedTxForEntry] = useState<BankTransaction | null>(null);
   const [selectedTxForMatch, setSelectedTxForMatch] = useState<BankTransaction | null>(null);
   const [manualMatchSearch, setManualMatchSearch] = useState('');
   const [availableGLEntries, setAvailableGLEntries] = useState<GLEntry[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [glSearchTerm, setGlSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'matched' | 'pending'>('all');
   const [createEntryForm, setCreateEntryForm] = useState({
     accountCode: '',
@@ -102,7 +111,7 @@ export function BankReconciliation() {
 
   const fetchAccounts = async () => {
     try {
-      const res = await fetch('/api/accounts');
+      const res = await apiFetch('/api/accounts');
       const data = await res.json();
       setAccounts(data);
     } catch (err) {
@@ -113,12 +122,26 @@ export function BankReconciliation() {
   useEffect(() => {
     if (selectedAccountId) {
       fetchTransactions(selectedAccountId);
+      fetchAvailableGLEntries();
     }
   }, [selectedAccountId]);
 
+  const fetchAvailableGLEntries = async () => {
+    if (!selectedAccountId) return;
+    try {
+      const account = bankAccounts.find(a => a.id === selectedAccountId);
+      const glCode = account?.gl_account_code || companySettings?.payment_bank_account || '521';
+      const res = await apiFetch(`/api/journal-entries?account_code=${glCode}&unreconciled=true`);
+      const data = await res.json();
+      setAvailableGLEntries(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const fetchBankAccounts = async () => {
     try {
-      const res = await fetch('/api/bank-accounts');
+      const res = await apiFetch('/api/bank-accounts');
       const data = await res.json();
       setBankAccounts(data);
       if (data.length > 0 && !selectedAccountId) {
@@ -131,7 +154,7 @@ export function BankReconciliation() {
 
   const fetchTransactions = async (accountId: number) => {
     try {
-      const res = await fetch(`/api/bank-transactions/${accountId}`);
+      const res = await apiFetch(`/api/bank-transactions/${accountId}`);
       const data = await res.json();
       setBankTransactions(data);
     } catch (err) {
@@ -143,15 +166,15 @@ export function BankReconciliation() {
     if (!selectedAccountId) return;
     setIsSyncing(true);
     try {
-      const res = await fetch(`/api/bank-accounts/${selectedAccountId}/sync`, { method: 'POST' });
+      const res = await apiFetch(`/api/bank-accounts/${selectedAccountId}/sync`, { method: 'POST' });
       if (res.ok) {
         await fetchTransactions(selectedAccountId);
         await fetchBankAccounts();
-        alert("Synchronisation terminée.", "success");
+        dialogAlert("Synchronisation terminée.", "success");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de la synchronisation.", "error");
+      dialogAlert("Erreur lors de la synchronisation.", "error");
     } finally {
       setIsSyncing(false);
     }
@@ -160,7 +183,7 @@ export function BankReconciliation() {
   const handleAddAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/bank-accounts', {
+      const res = await apiFetch('/api/bank-accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newAccount)
@@ -178,29 +201,85 @@ export function BankReconciliation() {
           currency: companySettings?.currency || 'XOF',
           gl_account_code: ''
         });
-        alert("Compte bancaire ajouté.", "success");
+        dialogAlert("Compte bancaire ajouté.", "success");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de l'ajout du compte.", "error");
+      dialogAlert("Erreur lors de l'ajout du compte.", "error");
     }
   };
 
-  const handleMatch = async (bankTransactionId: string | number, glId: number) => {
+  const handleMagicMatch = async () => {
+    if (bankTransactions.length === 0) return;
+    
+    setIsProcessing(true);
     try {
-      const res = await fetch('/api/bank-reconciliation/match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bankTransactionId, glId })
-      });
-      if (res.ok) {
-        if (selectedAccountId) fetchTransactions(selectedAccountId);
-        setReconciliationResults(prev => prev.filter(r => r.bankTransactionId !== bankTransactionId));
-        alert("Transaction rapprochée avec succès.", "success");
+      const account = bankAccounts.find(a => a.id === selectedAccountId);
+      const glCode = account?.gl_account_code || companySettings?.payment_bank_account || '521';
+      
+      const dataRes = await apiFetch(`/api/bank-reconciliation/available-gl?account_code=${glCode}`);
+      const { glEntries: availableGl } = await dataRes.json();
+      
+      const pendingTxs = bankTransactions.filter(tx => tx.status !== 'matched');
+      let matchCount = 0;
+      
+      for (const tx of pendingTxs) {
+        // Look for exact match: same date (ignoring time) and same amount
+        const txDate = tx.date.split('T')[0];
+        const exactMatch = availableGl.find((gl: any) => {
+          const glDate = gl.date.split('T')[0];
+          const glAmount = gl.debit > 0 ? gl.debit : -gl.credit;
+          return glDate === txDate && Math.abs(glAmount - tx.amount) < 0.01;
+        });
+        
+        if (exactMatch) {
+          await apiFetch('/api/bank-reconciliation/match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bankTransactionId: tx.id, glId: exactMatch.gl_id })
+          });
+          matchCount++;
+        }
+      }
+      
+      if (matchCount > 0) {
+        if (selectedAccountId) {
+          fetchTransactions(selectedAccountId);
+          fetchAvailableGLEntries();
+        }
+        dialogAlert(`${matchCount} transactions ont été rapprochées via Magic Match !`, "success");
+      } else {
+        dialogAlert("Aucune correspondance exacte trouvée.", "info");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur lors du rapprochement.", "error");
+      dialogAlert("Erreur lors du Magic Match.", "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const [selectedGLEntryId, setSelectedGLEntryId] = useState<number | null>(null);
+
+  const handleMatch = async (bankTransactionId: string | number, glId: number, reason?: string) => {
+    try {
+      const res = await apiFetch('/api/bank-reconciliation/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bankTransactionId, glId, reason })
+      });
+      if (res.ok) {
+        if (selectedAccountId) {
+          fetchTransactions(selectedAccountId);
+          fetchAvailableGLEntries();
+        }
+        setReconciliationResults(prev => prev.filter(r => r.bankTransactionId !== bankTransactionId));
+        if (isForcedMatchModalOpen) setIsForcedMatchModalOpen(false);
+        dialogAlert("Transaction rapprochée avec succès.", "success");
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert("Erreur lors du rapprochement.", "error");
     }
   };
 
@@ -209,18 +288,18 @@ export function BankReconciliation() {
     if (!confirmed) return;
 
     try {
-      const res = await fetch('/api/bank-reconciliation/unmatch', {
+      const res = await apiFetch('/api/bank-reconciliation/unmatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ bankTransactionId })
       });
       if (res.ok) {
         if (selectedAccountId) fetchTransactions(selectedAccountId);
-        alert("Transaction détachée avec succès.", "success");
+        dialogAlert("Transaction détachée avec succès.", "success");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de l'opération.", "error");
+      dialogAlert("Erreur lors de l'opération.", "error");
     }
   };
 
@@ -229,7 +308,7 @@ export function BankReconciliation() {
     if (!selectedTxForEntry) return;
 
     try {
-      const res = await fetch('/api/bank-reconciliation/create-entry', {
+      const res = await apiFetch('/api/bank-reconciliation/create-entry', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -245,11 +324,11 @@ export function BankReconciliation() {
         }
         setIsCreateEntryModalOpen(false);
         setSelectedTxForEntry(null);
-        alert("Écriture créée et rapprochée.", "success");
+        dialogAlert("Écriture créée et rapprochée.", "success");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de la création de l'écriture.", "error");
+      dialogAlert("Erreur lors de la création de l'écriture.", "error");
     }
   };
 
@@ -269,18 +348,8 @@ export function BankReconciliation() {
     setIsManualMatchModalOpen(true);
     setManualMatchSearch('');
     
-    // Fetch potential GL entries for this account
-    if (selectedAccountId) {
-      try {
-        const account = bankAccounts.find(a => a.id === selectedAccountId);
-        const glCode = account?.gl_account_code || companySettings?.payment_bank_account || '521';
-        const res = await fetch(`/api/journal-entries?account_code=${glCode}&unreconciled=true`);
-        const data = await res.json();
-        setAvailableGLEntries(data);
-      } catch (err) {
-        console.error(err);
-      }
-    }
+    // Refresh available entries
+    fetchAvailableGLEntries();
   };
 
   const formatCurrency = (amount: number) => {
@@ -288,6 +357,11 @@ export function BankReconciliation() {
       style: 'currency', 
       currency: companySettings?.currency || 'XOF' 
     }).format(amount);
+  };
+
+  const handleExportOFX = async () => {
+    if (!selectedAccountId) return;
+    window.location.href = `/api/export/ofx/${selectedAccountId}`;
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -317,23 +391,23 @@ export function BankReconciliation() {
           });
 
           if (selectedAccountId) {
-            fetch(`/api/bank-accounts/${selectedAccountId}/import`, {
+            apiFetch(`/api/bank-accounts/${selectedAccountId}/import`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ transactions: parsed })
             }).then(res => {
               if (res.ok) {
                 fetchTransactions(selectedAccountId);
-                alert(`${parsed.length} transactions importées.`, "success");
+                dialogAlert(`${parsed.length} transactions importées.`, "success");
               }
             }).catch(err => {
               console.error(err);
-              alert("Erreur lors de l'importation.", "error");
+              dialogAlert("Erreur lors de l'importation.", "error");
             });
           }
         } catch (error) {
           console.error("Erreur de parsing CSV:", error);
-          alert("Erreur lors de la lecture du fichier CSV.", "error");
+          dialogAlert("Erreur lors de la lecture du fichier CSV.", "error");
         } finally {
           setIsUploading(false);
           if (fileInputRef.current) fileInputRef.current.value = '';
@@ -341,7 +415,7 @@ export function BankReconciliation() {
       },
       error: (error) => {
         console.error("Erreur PapaParse:", error);
-        alert("Erreur lors de l'importation.", "error");
+        dialogAlert("Erreur lors de l'importation.", "error");
         setIsUploading(false);
       }
     });
@@ -349,7 +423,7 @@ export function BankReconciliation() {
 
   const handleReconcile = async () => {
     if (bankTransactions.length === 0) {
-      alert("Veuillez d'abord importer ou synchroniser des transactions.", "info");
+      dialogAlert("Veuillez d'abord importer ou synchroniser des transactions.", "info");
       return;
     }
 
@@ -359,7 +433,7 @@ export function BankReconciliation() {
       const account = bankAccounts.find(a => a.id === selectedAccountId);
       const glCode = account?.gl_account_code || companySettings?.payment_bank_account || '521';
       
-      const dataRes = await fetch(`/api/ai/reconcile-data?account_code=${glCode}`);
+      const dataRes = await apiFetch(`/api/ai/reconcile-data?account_code=${glCode}`);
       if (!dataRes.ok) throw new Error("Erreur lors de la récupération des données de rapprochement");
       const { glEntries: fetchedGlEntries } = await dataRes.json();
 
@@ -373,7 +447,7 @@ export function BankReconciliation() {
       setGlEntries(fetchedGlEntries);
     } catch (error) {
       console.error(error);
-      alert("Une erreur est survenue lors du rapprochement.", "error");
+      dialogAlert("Une erreur est survenue lors du rapprochement.", "error");
     } finally {
       setIsProcessing(false);
     }
@@ -389,7 +463,9 @@ export function BankReconciliation() {
 
   const filteredTransactions = bankTransactions.filter(tx => {
     const matchesSearch = tx.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                         tx.reference?.toLowerCase().includes(searchTerm.toLowerCase());
+                         tx.reference?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         tx.matched_description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         tx.amount.toString().includes(searchTerm);
     const matchesStatus = statusFilter === 'all' || 
                          (statusFilter === 'matched' && tx.status === 'matched') ||
                          (statusFilter === 'pending' && tx.status !== 'matched');
@@ -413,7 +489,45 @@ export function BankReconciliation() {
             className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-xl font-medium shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2"
           >
             <Plus size={18} />
-            Connecter une Banque
+            Banque
+          </button>
+          <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-xl">
+            <button
+              onClick={() => setActiveTab('compare')}
+              className={cn(
+                "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                activeTab === 'compare' ? "bg-white dark:bg-slate-800 text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              <RefreshCw size={14} />
+              Rapprochement
+            </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={cn(
+                "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                activeTab === 'history' ? "bg-white dark:bg-slate-800 text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              <History size={14} />
+              Historique
+            </button>
+          </div>
+          <button
+            onClick={handleMagicMatch}
+            disabled={bankTransactions.length === 0 || isProcessing}
+            className="bg-brand-gold hover:bg-amber-500 text-white px-4 py-2 rounded-xl font-medium shadow-sm transition-all flex items-center gap-2 disabled:opacity-50"
+          >
+            <Sparkles size={18} />
+            Magic Match
+          </button>
+          <button
+            onClick={handleExportOFX}
+            disabled={bankTransactions.length === 0}
+            className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-xl font-medium shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2 disabled:opacity-50"
+          >
+            <Download size={18} />
+            Exporter OFX
           </button>
           <input
             type="file"
@@ -529,157 +643,289 @@ export function BankReconciliation() {
                 </div>
               </div>
 
-              {/* Transactions Table */}
-              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-                <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
-                  <h2 className="font-bold text-slate-800 dark:text-white">Transactions Bancaires</h2>
-                  <div className="flex gap-2">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                      <input 
-                        type="text" 
-                        placeholder="Rechercher..." 
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                        className="pl-9 pr-4 py-1.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                      />
+              {/* Comparative View */}
+              {activeTab === 'compare' ? (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                  {/* Left: Saisi dans OryEmm (GL Entries) */}
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                        <FileText size={16} />
+                        Saisi dans OryEmm
+                      </h3>
+                      <span className="text-[10px] bg-slate-100 dark:bg-slate-900 px-2 py-0.5 rounded-full font-bold">Local</span>
                     </div>
-                    <select
-                      value={statusFilter}
-                      onChange={e => setStatusFilter(e.target.value as any)}
-                      className="px-3 py-1.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="all">Tous</option>
-                      <option value="matched">Rapprochés</option>
-                      <option value="pending">En attente</option>
-                    </select>
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden h-[600px] flex flex-col">
+                      <div className="p-3 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/20">
+                        <div className="relative">
+                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
+                          <input 
+                            type="text" 
+                            placeholder="Filtrer les écritures..." 
+                            value={glSearchTerm}
+                            onChange={e => setGlSearchTerm(e.target.value)}
+                            className="w-full pl-8 pr-3 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                        {availableGLEntries
+                          .filter(entry => 
+                            entry.description.toLowerCase().includes(glSearchTerm.toLowerCase()) ||
+                            (entry.reference || '').toLowerCase().includes(glSearchTerm.toLowerCase()) ||
+                            (entry.debit > 0 ? entry.debit : -entry.credit).toString().includes(glSearchTerm)
+                          )
+                          .length === 0 ? (
+                          <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-2 opacity-50">
+                            <FileText size={32} />
+                            <p className="text-xs">Aucune écriture trouvée</p>
+                          </div>
+                        ) : availableGLEntries
+                          .filter(entry => 
+                            entry.description.toLowerCase().includes(glSearchTerm.toLowerCase()) ||
+                            (entry.reference || '').toLowerCase().includes(glSearchTerm.toLowerCase()) ||
+                            (entry.debit > 0 ? entry.debit : -entry.credit).toString().includes(glSearchTerm)
+                          )
+                          .map(entry => (
+                          <div key={entry.gl_id} className="p-3 rounded-xl border border-slate-100 dark:border-slate-700 hover:border-indigo-200 transition-all bg-slate-50/30 dark:bg-slate-900/10 group">
+                            <div className="flex justify-between items-start">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-bold text-slate-900 dark:text-white truncate">{entry.description}</div>
+                                <div className="text-[10px] text-slate-500 mt-1 flex gap-2">
+                                  <span>{new Date(entry.date).toLocaleDateString('fr-FR')}</span>
+                                  <span>Réf: {entry.reference || 'N/A'}</span>
+                                </div>
+                              </div>
+                              <div className="text-right ml-2">
+                                <div className="text-xs font-mono font-bold text-slate-900 dark:text-white">
+                                  {formatCurrency(entry.debit > 0 ? entry.debit : -entry.credit)}
+                                </div>
+                                <div className="text-[10px] text-indigo-600 font-bold opacity-0 group-hover:opacity-100 transition-opacity">
+                                  {entry.account_code}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Relevé Réel (Bank Transactions) */}
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                        <Landmark size={16} />
+                        Relevé Réel
+                      </h3>
+                      <button 
+                        onClick={() => {
+                          const lastDate = [...bankTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.date || new Date().toISOString();
+                          confirm(`Voulez-vous verrouiller toutes les transactions rapprochées jusqu'au ${new Date(lastDate).toLocaleDateString()} ?`).then(res => {
+                            if (res) {
+                              // Call locking API
+                              const startDate = '2000-01-01'; // Beginning of time
+                              const endDate = lastDate.split('T')[0];
+                              apiFetch('/api/bank-reconciliation/lock-period', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ bankAccountId: selectedAccountId, startDate, endDate })
+                              }).then(lockRes => {
+                                if (lockRes.ok) dialogAlert("Période verrouillée avec succès.", "success");
+                              });
+                            }
+                          });
+                        }}
+                        className="text-[10px] text-indigo-600 font-bold flex items-center gap-1 hover:underline"
+                      >
+                        <Lock size={10} />
+                        Verrouiller la période
+                      </button>
+                    </div>
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden h-[600px] flex flex-col">
+                      <div className="p-3 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/20">
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
+                            <input 
+                              type="text" 
+                              placeholder="Filtrer le relevé..." 
+                              value={searchTerm}
+                              onChange={e => setSearchTerm(e.target.value)}
+                              className="w-full pl-8 pr-3 py-1 text-xs rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <select
+                            value={statusFilter}
+                            onChange={e => setStatusFilter(e.target.value as any)}
+                            className="px-2 py-1 text-[10px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 dark:text-white outline-none"
+                          >
+                            <option value="all">Tous</option>
+                            <option value="pending">À traiter</option>
+                            <option value="matched">Rapprochés</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                        {filteredTransactions.map(tx => {
+                          const aiResult = reconciliationResults.find(r => r.bankTransactionId === tx.id);
+                          const isMatched = tx.status === 'matched';
+                          
+                          // Badges logic
+                          let badgeStyle = "bg-slate-100 text-slate-500";
+                          let badgeText = "En attente";
+                          let badgeIcon = <Landmark size={10} />;
+                          
+                          if (isMatched) {
+                            badgeStyle = "bg-emerald-100 text-emerald-700";
+                            badgeText = "Identique";
+                            badgeIcon = <Check size={10} />;
+                          } else if (aiResult?.status === 'matched') {
+                            if (aiResult.confidenceScore && aiResult.confidenceScore < 80) {
+                              badgeStyle = "bg-amber-100 text-amber-700";
+                              badgeText = "Écart Montant";
+                              badgeIcon = <AlertTriangle size={10} />;
+                            } else {
+                              badgeStyle = "bg-indigo-100 text-indigo-700";
+                              badgeText = "Suggéré";
+                              badgeIcon = <Sparkles size={10} />;
+                            }
+                          } else if (!isMatched && !aiResult) {
+                            badgeStyle = "bg-rose-100 text-rose-700";
+                            badgeText = "Oubli / Non saisi";
+                            badgeIcon = <AlertCircle size={10} />;
+                          }
+
+                          return (
+                            <div key={tx.id} className={cn(
+                              "p-3 rounded-xl border transition-all",
+                              isMatched ? "border-emerald-100 bg-emerald-50/20" : "border-slate-100 bg-white dark:bg-slate-800 dark:border-slate-700"
+                            )}>
+                              <div className="flex justify-between items-start mb-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-xs font-bold text-slate-900 dark:text-white truncate">{tx.description}</div>
+                                  <div className="text-[10px] text-slate-500 mt-0.5">{new Date(tx.date).toLocaleDateString('fr-FR')}</div>
+                                </div>
+                                <div className="text-right ml-2">
+                                  <div className="text-xs font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(tx.amount)}</div>
+                                </div>
+                              </div>
+                              
+                              <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-50 dark:border-slate-700">
+                                <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase", badgeStyle)}>
+                                  {badgeIcon}
+                                  {badgeText}
+                                </span>
+                                
+                                <div className="flex gap-1">
+                                  {!isMatched && !tx.is_locked && (
+                                    <>
+                                      <button 
+                                        onClick={() => openManualMatchModal(tx)}
+                                        className="p-1 px-2 text-[10px] bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition-colors"
+                                      >
+                                        Rapprochement
+                                      </button>
+                                      <button 
+                                        onClick={() => openCreateEntryModal(tx)}
+                                        className="p-1 px-2 text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg font-bold hover:bg-slate-200 transition-colors"
+                                      >
+                                        Saisir
+                                      </button>
+                                    </>
+                                  )}
+                                  {isMatched && !tx.is_locked && (
+                                    <button 
+                                      onClick={() => handleUnmatch(tx.id)}
+                                      className="p-1 px-2 text-[10px] bg-slate-100 text-slate-500 rounded-lg font-bold hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                                    >
+                                      Annuler
+                                    </button>
+                                  )}
+                                  {tx.is_locked && (
+                                    <span className="flex items-center gap-1 text-[10px] text-slate-400 font-bold">
+                                      <Lock size={10} />
+                                      Verrouillé
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {isMatched && (
+                                <div className="mt-2 p-2 bg-slate-50 dark:bg-slate-900/50 rounded-lg text-[9px] text-slate-500 flex items-center gap-2">
+                                  <ShieldCheck size={12} className="text-emerald-600" />
+                                  <span>Rapproché avec {tx.matched_description}</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
-                        <th className="p-4">Date</th>
-                        <th className="p-4">Description</th>
-                        <th className="p-4 text-right">Montant</th>
-                        <th className="p-4 text-center">Statut</th>
-                        <th className="p-4">Correspondance GL</th>
-                        <th className="p-4 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-sm divide-y divide-slate-100 dark:divide-slate-700">
-                      {filteredTransactions.map(tx => {
-                        const result = reconciliationResults.find(r => r.bankTransactionId === tx.id);
-                        const isMatched = tx.status === 'matched';
-                        const aiMatched = result?.status === 'matched';
-                        
-                        return (
+              ) : (
+                /* History Tab: Standard Table */
+                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                  <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
+                    <h2 className="font-bold text-slate-800 dark:text-white">Opérations Rapprochées</h2>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+                          <th className="p-4">Date</th>
+                          <th className="p-4">Transaction Bancaire</th>
+                          <th className="p-4">Montant</th>
+                          <th className="p-4">Correspondance GL</th>
+                          <th className="p-4 text-center">Verrouillé</th>
+                          <th className="p-4 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-sm divide-y divide-slate-100 dark:divide-slate-700">
+                        {bankTransactions.filter(tx => tx.status === 'matched').map(tx => (
                           <tr key={tx.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                             <td className="p-4 text-slate-500 whitespace-nowrap">
                               {new Date(tx.date).toLocaleDateString('fr-FR')}
                             </td>
                             <td className="p-4">
                               <div className="font-medium text-slate-900 dark:text-white">{tx.description}</div>
-                              {tx.reference && <div className="text-[10px] text-slate-400">Réf: {tx.reference}</div>}
                             </td>
-                            <td className={cn(
-                              "p-4 text-right font-mono font-bold",
-                              tx.amount > 0 ? "text-emerald-600" : "text-slate-900 dark:text-white"
-                            )}>
+                            <td className="p-4 font-mono font-bold">
                               {formatCurrency(tx.amount)}
                             </td>
-                            <td className="p-4 text-center">
-                              {isMatched ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                                  <Check size={10} /> Rapproché
-                                </span>
-                              ) : aiMatched ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 text-[10px] font-bold uppercase">
-                                  <Calculator size={10} /> IA: {result.confidenceScore}%
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-900 dark:text-slate-500 text-[10px] font-bold uppercase">
-                                  En attente
-                                </span>
-                              )}
-                            </td>
                             <td className="p-4">
-                              {isMatched ? (
-                                <div className="text-xs">
-                                  <div className="font-medium text-slate-700 dark:text-slate-300">{tx.matched_description}</div>
-                                  <div className="text-slate-400">Compte: {tx.matched_account}</div>
-                                </div>
-                              ) : aiMatched ? (
-                                <div className="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded-lg border border-indigo-100 dark:border-indigo-900/30 text-xs">
-                                  <div className="font-medium text-indigo-900 dark:text-indigo-300">{getGLEntry(result.gl_id)?.description}</div>
-                                  <div className="text-indigo-600 dark:text-indigo-400 mt-1 flex justify-between">
-                                    <span>Cpte: {getGLEntry(result.gl_id)?.account_code}</span>
-                                    <span className="font-bold">Match</span>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="text-[10px] text-slate-400 italic">
-                                  {result?.reason || "Aucune correspondance"}
-                                </div>
-                              )}
+                              <div className="text-xs">
+                                <div className="font-medium text-slate-700 dark:text-slate-300">{tx.matched_description}</div>
+                                <div className="text-slate-400">Compte: {tx.matched_account}</div>
+                              </div>
                             </td>
-                            <td className="p-4 text-right">
-                              <div className="flex justify-end gap-1">
-                                {isMatched ? (
-                                  <button 
-                                    onClick={() => handleUnmatch(tx.id)}
-                                    className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors"
-                                    title="Détacher le rapprochement"
-                                  >
-                                    <X size={16} />
-                                  </button>
+                            <td className="p-4 text-center">
+                              <div className="flex justify-center">
+                                {tx.is_locked ? (
+                                  <Lock size={14} className="text-emerald-500" />
                                 ) : (
-                                  <>
-                                    {aiMatched && (
-                                      <button 
-                                        onClick={() => handleMatch(tx.id, result.gl_id!)}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white p-1.5 rounded-lg transition-colors shadow-sm"
-                                        title="Valider le rapprochement suggéré"
-                                      >
-                                        <Check size={16} />
-                                      </button>
-                                    )}
-                                    <button 
-                                      onClick={() => openManualMatchModal(tx)}
-                                      className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-                                      title="Rapprochement manuel"
-                                    >
-                                      <LinkIcon size={16} />
-                                    </button>
-                                    <button 
-                                      onClick={() => openCreateEntryModal(tx)}
-                                      className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-                                      title="Créer une écriture"
-                                    >
-                                      <Plus size={16} />
-                                    </button>
-                                  </>
+                                  <Unlock size={14} className="text-slate-300" />
                                 )}
                               </div>
                             </td>
+                            <td className="p-4 text-right">
+                              {!tx.is_locked && (
+                                <button 
+                                  onClick={() => handleUnmatch(tx.id)}
+                                  className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors"
+                                >
+                                  <X size={16} />
+                                </button>
+                              )}
+                            </td>
                           </tr>
-                        );
-                      })}
-                      {bankTransactions.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="p-12 text-center">
-                            <div className="flex flex-col items-center gap-2 text-slate-400">
-                              <RefreshCw size={32} className="opacity-20" />
-                              <p>Aucune transaction à afficher.</p>
-                              <button onClick={handleSync} className="text-indigo-600 font-bold text-sm hover:underline">Synchroniser maintenant</button>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           ) : (
             <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center">
@@ -914,6 +1160,76 @@ export function BankReconciliation() {
         </div>
       )}
 
+      {/* Forced Adjustment Modal */}
+      {isForcedMatchModalOpen && selectedTxForMatch && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-700"
+          >
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center">
+              <div>
+                <h3 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <AlertTriangle className="text-amber-500" />
+                  Ajustement Forcé
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">Un motif est requis pour enregistrer cet écart.</p>
+              </div>
+              <button 
+                onClick={() => setIsForcedMatchModalOpen(false)}
+                className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-xl border border-amber-100 dark:border-amber-900/30 text-xs text-amber-800 dark:text-amber-300">
+                L'écart sera enregistré dans l'historique d'audit avec votre motif.
+              </div>
+              
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Motif de l'écart
+                </label>
+                <textarea
+                  value={adjustmentReason}
+                  onChange={(e) => setAdjustmentReason(e.target.value)}
+                  placeholder="Ex: Frais bancaires, erreur de saisie, arrondi..."
+                  className="w-full h-32 px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                />
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setIsForcedMatchModalOpen(false)}
+                  className="flex-1 px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 font-bold text-slate-600 hover:bg-slate-50 transition-all"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={() => {
+                    if (!adjustmentReason.trim()) {
+                      dialogAlert("Veuillez saisir un motif.", "error");
+                      return;
+                    }
+                    const selectedEntry = availableGLEntries.find(e => e.gl_id === selectedGLEntryId);
+                    if (selectedEntry) {
+                      handleMatch(selectedTxForMatch.id, selectedEntry.gl_id, adjustmentReason);
+                    }
+                  }}
+                  disabled={!adjustmentReason.trim()}
+                  className="flex-1 bg-amber-600 text-white px-4 py-3 rounded-xl font-bold shadow-lg shadow-amber-200 dark:shadow-none hover:bg-amber-700 transition-all disabled:opacity-50"
+                >
+                  Forcer
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
       {/* Manual Match Modal */}
       {isManualMatchModalOpen && selectedTxForMatch && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -963,7 +1279,9 @@ export function BankReconciliation() {
                 <div className="max-h-[300px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                   {availableGLEntries.filter(entry => 
                     entry.description.toLowerCase().includes(manualMatchSearch.toLowerCase()) ||
-                    entry.reference?.toLowerCase().includes(manualMatchSearch.toLowerCase())
+                    (entry.reference?.toLowerCase() || '').includes(manualMatchSearch.toLowerCase()) ||
+                    entry.account_code.toLowerCase().includes(manualMatchSearch.toLowerCase()) ||
+                    (entry.debit > 0 ? entry.debit : -entry.credit).toString().includes(manualMatchSearch)
                   ).length === 0 ? (
                     <div className="p-8 text-center text-slate-400">
                       <Search size={24} className="mx-auto mb-2 opacity-20" />
@@ -972,7 +1290,9 @@ export function BankReconciliation() {
                   ) : availableGLEntries
                     .filter(entry => 
                       entry.description.toLowerCase().includes(manualMatchSearch.toLowerCase()) ||
-                      entry.reference?.toLowerCase().includes(manualMatchSearch.toLowerCase())
+                      (entry.reference?.toLowerCase() || '').includes(manualMatchSearch.toLowerCase()) ||
+                      entry.account_code.toLowerCase().includes(manualMatchSearch.toLowerCase()) ||
+                      (entry.debit > 0 ? entry.debit : -entry.credit).toString().includes(manualMatchSearch)
                     )
                     .map(entry => {
                       const entryAmount = entry.debit > 0 ? entry.debit : -entry.credit;
@@ -988,8 +1308,15 @@ export function BankReconciliation() {
                               : "border-slate-100 bg-white hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700"
                           )}
                           onClick={() => {
-                            handleMatch(selectedTxForMatch.id, entry.gl_id);
-                            setIsManualMatchModalOpen(false);
+                            if (!isAmountMatch) {
+                              setSelectedGLEntryId(entry.gl_id);
+                              setAdjustmentReason('');
+                              setIsForcedMatchModalOpen(true);
+                              setIsManualMatchModalOpen(false);
+                            } else {
+                              handleMatch(selectedTxForMatch.id, entry.gl_id);
+                              setIsManualMatchModalOpen(false);
+                            }
                           }}
                         >
                           <div className="flex justify-between items-start">

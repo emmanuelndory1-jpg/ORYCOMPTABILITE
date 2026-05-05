@@ -1,9 +1,12 @@
+import { useDialog } from './DialogProvider';
+import { apiFetch } from '../lib/api';
 import React, { useState } from 'react';
 import { Check, CreditCard, Shield, Zap, Users, Loader2 } from 'lucide-react';
 import { useCurrency } from '@/hooks/useCurrency';
 import { apiFetch as fetch } from '@/lib/api';
 
 export function PricingPage() {
+  const { alert: dialogAlert } = useDialog();
   const { formatCurrency } = useCurrency();
   const [loading, setLoading] = useState<string | null>(null);
 
@@ -46,7 +49,7 @@ export function PricingPage() {
   const handleSubscribe = async (planId: string) => {
     setLoading(planId);
     try {
-      const res = await fetch('/api/payment/init', {
+      const res = await apiFetch('/api/payment/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan: planId, payment_method: 'cinetpay' })
@@ -58,11 +61,11 @@ export function PricingPage() {
         // Redirect to Payment Gateway (or Mock Page)
         window.location.href = data.payment_url;
       } else {
-        alert('Erreur lors de l\'initialisation du paiement');
+        dialogAlert('Erreur lors de l\'initialisation du paiement');
       }
     } catch (err) {
       console.error(err);
-      alert('Erreur de connexion');
+      dialogAlert('Erreur de connexion');
     } finally {
       setLoading(null);
     }

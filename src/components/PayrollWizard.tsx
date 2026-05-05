@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   Calculator, Users, FileText, CheckCircle, 
@@ -46,6 +47,7 @@ interface PayrollWizardProps {
 }
 
 export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
+  const { alert: dialogAlert } = useDialog();
   const { formatCurrency, currency } = useCurrency();
   const { alert, confirm } = useDialog();
   const [step, setStep] = useState(1);
@@ -75,7 +77,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
 
   const fetchCompanySettings = async () => {
     try {
-      const res = await fetch('/api/company/settings');
+      const res = await apiFetch('/api/company/settings');
       if (res.ok) {
         const data = await res.json();
         setCompanySettings(data);
@@ -90,7 +92,8 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
 
   const fetchEmployees = async () => {
     try {
-      const res = await fetch('/api/employees');
+      const res = await apiFetch('/api/employees');
+      if (!res.ok) return;
       const data = await res.json();
       setEmployees(data.filter((e: any) => e.status === 'active'));
     } catch (err) {
@@ -101,9 +104,11 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
   const fetchPayslips = async (periodId: number) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/payroll/periods/${periodId}/payslips`);
-      const data = await res.json();
-      setPayslips(data);
+      const res = await apiFetch(`/api/payroll/periods/${periodId}/payslips`);
+      if (res.ok) {
+        const data = await res.json();
+        setPayslips(data);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -114,24 +119,25 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
   const handleCreatePeriod = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/payroll/periods', {
+      const res = await apiFetch('/api/payroll/periods', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(period)
       });
-      const data = await res.json();
       if (res.ok) {
+        const data = await res.json();
         setCreatedPeriod(data);
         // Automatically generate initial payslips
-        await fetch(`/api/payroll/periods/${data.id}/generate`, { method: 'POST' });
+        await apiFetch(`/api/payroll/periods/${data.id}/generate`, { method: 'POST' });
         await fetchPayslips(data.id);
         setStep(2);
       } else {
-        alert(data.error || "Erreur lors de la création de la période", 'error');
+        const errorData = await res.json().catch(() => ({}));
+        dialogAlert(errorData.error || "Erreur lors de la création de la période", 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Une erreur est survenue", 'error');
+      dialogAlert("Une erreur est survenue", 'error');
     } finally {
       setLoading(false);
     }
@@ -140,7 +146,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
   const handleUpdatePayslip = async (payslipId: number, bonuses: number, deductions: number, bonusDetails: any[], deductionDetails: any[]) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/payslips/${payslipId}`, {
+      const res = await apiFetch(`/api/payslips/${payslipId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ bonuses, deductions, bonusDetails, deductionDetails })
@@ -150,7 +156,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
         setEditingPayslip(null);
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
@@ -163,13 +169,13 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
     if (!createdPeriod) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/payroll/periods/${createdPeriod.id}/validate`, { method: 'POST' });
+      const res = await apiFetch(`/api/payroll/periods/${createdPeriod.id}/validate`, { method: 'POST' });
       if (res.ok) {
         setCreatedPeriod({ ...createdPeriod, status: 'validated' });
         setStep(4);
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
@@ -182,17 +188,17 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
     if (!createdPeriod) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/payroll/periods/${createdPeriod.id}/pay`, {
+      const res = await apiFetch(`/api/payroll/periods/${createdPeriod.id}/pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ paymentAccount })
       });
       if (res.ok) {
-        alert("Paie traitée avec succès !", 'success');
+        dialogAlert("Paie traitée avec succès !", 'success');
         onComplete();
       } else {
         const data = await res.json();
-        alert(data.error, 'error');
+        dialogAlert(data.error, 'error');
       }
     } catch (err) {
       console.error(err);
@@ -380,7 +386,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                           <td className="px-6 py-4 text-center">
                             <button 
                               onClick={async () => {
-                                const details = JSON.parse(slip.details);
+                                const details = JSON.parse(slip.details || '{}') || {};
                                 setEditingPayslip({
                                   id: slip.id,
                                   employee_id: slip.employee_id,
@@ -393,7 +399,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                                 
                                 // Fetch pending advances
                                 try {
-                                  const res = await fetch(`/api/employees/${slip.employee_id}/advances/pending`);
+                                  const res = await apiFetch(`/api/employees/${slip.employee_id}/advances/pending`);
                                   const data = await res.json();
                                   setPendingAdvances(data);
                                 } catch (err) {
@@ -439,7 +445,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                   <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
                     <p className="text-xs font-bold text-slate-400 uppercase mb-2">Charges Patronales</p>
                     <p className="text-2xl font-bold text-slate-900 dark:text-white">
-                      {formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details).employerCharges || 0), 0))}
+                      {formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details || '{}')?.employerCharges || 0), 0))}
                     </p>
                   </div>
                   <div className="bg-brand-green/5 p-6 rounded-2xl border border-brand-green/20">
@@ -463,7 +469,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                       </div>
                       <div className="flex justify-between text-slate-500">
                         <span>Débit 664 (Charges Soc.)</span>
-                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details).employerCharges || 0), 0))}</span>
+                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details || '{}')?.employerCharges || 0), 0))}</span>
                       </div>
                     </div>
                     <div className="space-y-2">
@@ -473,7 +479,7 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                       </div>
                       <div className="flex justify-between text-slate-500">
                         <span>Crédit 431/447 (Org. Soc/Etat)</span>
-                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details).employerCharges || 0) + (payslips.reduce((sum, p) => sum + p.deductions, 0)), 0))}</span>
+                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details || '{}')?.employerCharges || 0) + (payslips.reduce((sum, p) => sum + p.deductions, 0)), 0))}</span>
                       </div>
                     </div>
                   </div>

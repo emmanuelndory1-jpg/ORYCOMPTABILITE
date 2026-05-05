@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { History, Search, Filter, User, Calendar, FileText, ArrowRight, Loader2 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -25,7 +26,7 @@ export function AuditTrail() {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch('/api/audit-logs');
+      const res = await apiFetch('/api/audit-logs');
       const data = await res.json();
       setLogs(Array.isArray(data) ? data : (data.logs || []));
     } catch (err) {

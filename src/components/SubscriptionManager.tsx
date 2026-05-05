@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Shield, Check, AlertTriangle, CreditCard, Clock } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -18,7 +19,7 @@ export function SubscriptionManager() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/subscription/status')
+    apiFetch('/api/subscription/status')
       .then(res => res.json())
       .then(data => {
         setSubscription(data);

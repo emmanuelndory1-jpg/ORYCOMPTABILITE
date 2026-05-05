@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Bell, Settings, HelpCircle, User, LogOut, X, Loader2, ChevronRight, BookOpen, Users, Building2, Calculator, Moon, Sun, FileText, Wallet, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -31,7 +32,7 @@ interface Notification {
   created_at: string;
 }
 
-export function Header() {
+export function Header({ logoUrl, companyName }: { logoUrl?: string | null, companyName?: string | null }) {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -56,7 +57,7 @@ export function Header() {
 
   const fetchFiscalYears = async () => {
     try {
-      const res = await fetch('/api/fiscal-years');
+      const res = await apiFetch('/api/fiscal-years');
       if (res.ok) {
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
@@ -77,7 +78,7 @@ export function Header() {
 
   const handleActivateYear = async (id: number) => {
     try {
-      const res = await fetch(`/api/fiscal-years/${id}/activate`, { method: 'PUT' });
+      const res = await apiFetch(`/api/fiscal-years/${id}/activate`, { method: 'PUT' });
       if (res.ok) {
         await refreshActiveYear();
         setShowYearSelector(false);
@@ -89,11 +90,6 @@ export function Header() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        setIsSearchOpen(true);
-        searchRef.current?.querySelector('input')?.focus();
-      }
       if (e.key === 'Escape') {
         setIsSearchOpen(false);
       }
@@ -130,7 +126,7 @@ export function Header() {
     const delayDebounceFn = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const response = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
+        const response = await apiFetch(`/api/search?q=${encodeURIComponent(searchQuery)}`);
         if (!response.ok) throw new Error('Search failed');
         
         const contentType = response.headers.get("content-type");
@@ -185,7 +181,7 @@ export function Header() {
   const fetchNotifications = async () => {
     if (!user || document.visibilityState === 'hidden') return;
     try {
-      const response = await fetch('/api/notifications');
+      const response = await apiFetch('/api/notifications');
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) return; // Auth context will handle this
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -218,7 +214,7 @@ export function Header() {
 
   const markAsRead = async (id: number) => {
     try {
-      await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
+      await apiFetch(`/api/notifications/${id}/read`, { method: 'POST' });
       fetchNotifications();
     } catch (error) {
       console.error('Error marking notification as read:', error);
@@ -227,7 +223,7 @@ export function Header() {
 
   const markAllAsRead = async () => {
     try {
-      await fetch('/api/notifications/read-all', { method: 'POST' });
+      await apiFetch('/api/notifications/read-all', { method: 'POST' });
       fetchNotifications();
     } catch (error) {
       console.error('Error marking all as read:', error);
@@ -237,7 +233,7 @@ export function Header() {
   const deleteNotification = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
     try {
-      await fetch(`/api/notifications/${id}`, { method: 'DELETE' });
+      await apiFetch(`/api/notifications/${id}`, { method: 'DELETE' });
       fetchNotifications();
     } catch (error) {
       console.error('Error deleting notification:', error);
@@ -261,11 +257,11 @@ export function Header() {
       {/* Left: Brand & Status */}
       <div className="hidden lg:flex flex-1 items-center gap-6">
         <Link to="/" className="flex items-center gap-3 group">
-          <div className="w-10 h-10 rounded-2xl bg-white dark:bg-slate-900 flex items-center justify-center shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform duration-300 border border-slate-100 dark:border-white/5">
-            <Logo className="w-6 h-6 text-emerald-600" showText={false} />
+          <div className="w-10 h-10 rounded-2xl bg-white dark:bg-slate-900 flex items-center justify-center shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform duration-300 border border-slate-100 dark:border-white/5 overflow-hidden">
+            <Logo className="w-6 h-6 text-emerald-600" showText={false} src={logoUrl} />
           </div>
           <div className="flex flex-col">
-            <span className="font-black text-sm tracking-tight text-slate-900 dark:text-slate-100">ORYCOMPTA</span>
+            <span className="font-black text-sm tracking-tight text-slate-900 dark:text-slate-100 uppercase truncate max-w-[150px]">{companyName || "ORYCOMPTA"}</span>
             <div className="flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse" />
               <span className="text-[8px] font-black text-brand-green uppercase tracking-widest">Connecté</span>
@@ -296,12 +292,6 @@ export function Header() {
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => setIsSearchOpen(true)}
           />
-          {!isSearchOpen && searchQuery.length === 0 && (
-            <div className="absolute right-4 top-1/2 -translate-y-1/2 hidden md:flex items-center gap-1.5 pointer-events-none opacity-50">
-              <kbd className="px-1.5 py-0.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] font-bold text-slate-400 dark:text-slate-500 shadow-sm">⌘</kbd>
-              <kbd className="px-1.5 py-0.5 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded text-[10px] font-bold text-slate-400 dark:text-slate-500 shadow-sm">K</kbd>
-            </div>
-          )}
           
           <AnimatePresence>
             {isSearchOpen && (searchQuery.length > 0 || isSearching) && (

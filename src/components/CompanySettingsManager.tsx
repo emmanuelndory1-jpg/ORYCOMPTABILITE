@@ -1,5 +1,6 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { Building, Save, Loader2 } from 'lucide-react';
+import { Building, Save, Loader2, CreditCard, ShieldCheck, Users, Briefcase } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 
 interface CompanySettings {
@@ -30,15 +31,22 @@ interface CompanySettings {
   payment_mobile_account?: string;
   cnps_employer_number?: string;
   tax_office?: string;
+  rccm?: string;
+  syscohada_system?: string;
+  vat_rate?: number;
+  logo_url?: string | null;
 }
 
 import { useModules } from '@/context/ModuleContext';
+import { useOutletContext } from 'react-router-dom';
 
 export function CompanySettingsManager() {
-  const { isActive } = useModules();
+  const { isActive, refreshModules } = useModules();
+  const { refreshCompanySettings } = useOutletContext<{ refreshCompanySettings: () => Promise<void> }>();
   const [settings, setSettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [activatingPayroll, setActivatingPayroll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -48,7 +56,7 @@ export function CompanySettingsManager() {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('/api/company/dossier');
+      const res = await apiFetch('/api/company/dossier');
       const data = await res.json();
       if (data.settings) {
         setSettings(data.settings);
@@ -61,6 +69,26 @@ export function CompanySettingsManager() {
     }
   };
 
+  const handleToggleModule = async (key: string) => {
+    setActivatingPayroll(true);
+    try {
+      const res = await apiFetch(`/api/company/modules/${key}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: 1 })
+      });
+
+      if (!res.ok) throw new Error('Failed to update module');
+      
+      await refreshModules();
+      setSuccess("Module Paie activé avec succès !");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de l\'activation');
+    } finally {
+      setActivatingPayroll(false);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!settings) return;
@@ -70,7 +98,7 @@ export function CompanySettingsManager() {
     setSuccess(null);
 
     try {
-      const res = await fetch('/api/company/settings', {
+      const res = await apiFetch('/api/company/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -97,13 +125,19 @@ export function CompanySettingsManager() {
           payment_cash_enabled: settings.payment_cash_enabled,
           payment_cash_account: settings.payment_cash_account,
           payment_mobile_enabled: settings.payment_mobile_enabled,
-          payment_mobile_account: settings.payment_mobile_account
+          payment_mobile_account: settings.payment_mobile_account,
+          rccm: settings.rccm,
+          syscohada_system: settings.syscohada_system,
+          vat_rate: settings.vat_rate,
+          cnps_employer_number: settings.cnps_employer_number,
+          tax_office: settings.tax_office,
+          logo_url: settings.logo_url
         })
       });
 
       if (res.ok) {
         setSuccess("Paramètres mis à jour avec succès.");
-        // Reload to ensure everything is synced if needed, or just keep state
+        await refreshCompanySettings();
       } else {
         const data = await res.json();
         setError(data.error || "Erreur lors de la sauvegarde.");
@@ -113,6 +147,24 @@ export function CompanySettingsManager() {
       setError("Erreur de connexion.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 1024 * 1024) {
+        setError("Le logo ne doit pas dépasser 1 Mo.");
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (settings) {
+          setSettings({ ...settings, logo_url: reader.result as string });
+        }
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -145,33 +197,63 @@ export function CompanySettingsManager() {
           </div>
         )}
 
+        <div className="flex flex-col md:flex-row gap-8 pb-6 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-32 h-32 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center overflow-hidden bg-slate-50 dark:bg-slate-800/50">
+              {settings.logo_url ? (
+                <img src={settings.logo_url} alt="Logo preview" className="w-full h-full object-contain" />
+              ) : (
+                <div className="text-center p-4">
+                  <Building className="mx-auto text-slate-400 mb-1" size={24} />
+                  <p className="text-[10px] text-slate-400 uppercase font-bold">Logo</p>
+                </div>
+              )}
+            </div>
+            <label className="cursor-pointer bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition-all transform active:scale-95 shadow-sm">
+              {settings.logo_url ? "Modifier le logo" : "Importer un logo"}
+              <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+            </label>
+            {settings.logo_url && (
+              <button 
+                type="button" 
+                onClick={() => setSettings({...settings, logo_url: null})}
+                className="text-rose-500 text-[10px] font-bold uppercase hover:underline"
+              >
+                Supprimer
+              </button>
+            )}
+          </div>
+
+          <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nom de l'entreprise</label>
+              <input 
+                type="text" 
+                required
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+                value={settings.name ?? ''}
+                onChange={e => setSettings({...settings, name: e.target.value})}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Forme Juridique</label>
+              <select 
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+                value={settings.legal_form ?? 'SARL'}
+                onChange={e => setSettings({...settings, legal_form: e.target.value})}
+              >
+                <option value="SARL">SARL</option>
+                <option value="SA">SA</option>
+                <option value="SAS">SAS</option>
+                <option value="EI">Entreprise Individuelle</option>
+                <option value="SUARL">SUARL</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nom de l'entreprise</label>
-            <input 
-              type="text" 
-              required
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.name ?? ''}
-              onChange={e => setSettings({...settings, name: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Forme Juridique</label>
-            <select 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.legal_form ?? 'SARL'}
-              onChange={e => setSettings({...settings, legal_form: e.target.value})}
-            >
-              <option value="SARL">SARL</option>
-              <option value="SA">SA</option>
-              <option value="SAS">SAS</option>
-              <option value="EI">Entreprise Individuelle</option>
-              <option value="SUARL">SUARL</option>
-            </select>
-          </div>
-
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Activité</label>
             <input 
@@ -207,6 +289,28 @@ export function CompanySettingsManager() {
               onChange={e => setSettings({...settings, fiscal_id: e.target.value})}
             />
           </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Registre de Commerce (RCCM)</label>
+            <input 
+              type="text" 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.rccm ?? ''}
+              onChange={e => setSettings({...settings, rccm: e.target.value})}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Système Comptable</label>
+            <select 
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.syscohada_system ?? 'normal'}
+              onChange={e => setSettings({...settings, syscohada_system: e.target.value})}
+            >
+              <option value="normal">Système Normal</option>
+              <option value="simplifie">Système Minimal de Trésorerie (SMT)</option>
+            </select>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Régime Fiscal</label>
@@ -232,6 +336,17 @@ export function CompanySettingsManager() {
               <option value="Non Assujetti">Non Assujetti</option>
               <option value="Exonéré">Exonéré</option>
             </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Taux TVA (%)</label>
+            <input 
+              type="number" 
+              step="0.1"
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+              value={settings.vat_rate ?? 18}
+              onChange={e => setSettings({...settings, vat_rate: Number(e.target.value)})}
+            />
           </div>
 
           <div>
@@ -350,6 +465,32 @@ export function CompanySettingsManager() {
             </div>
           </div>
         </div>
+
+        {/* Activation Module Paie (Shortcut) */}
+        {!isActive('payroll') && (
+          <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
+            <div className="p-6 bg-amber-50 dark:bg-amber-900/10 rounded-2xl border border-amber-100 dark:border-amber-900/20 flex flex-col md:flex-row items-center justify-between gap-6">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-amber-100 dark:bg-amber-800/20 text-amber-600 dark:text-amber-400 rounded-xl">
+                  <Briefcase size={24} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-900 dark:text-white">Désirez-vous gérer la Paie ?</h4>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Activez le module de paie pour gérer vos salariés, générer des bulletins et suivre les cotisations sociales.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleToggleModule('payroll')}
+                disabled={activatingPayroll}
+                className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2 whitespace-nowrap active:scale-95 disabled:opacity-50"
+              >
+                {activatingPayroll ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} />}
+                Activer le module Paie
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Informations Sociales (Module Paie) */}
         {isActive('payroll') && (

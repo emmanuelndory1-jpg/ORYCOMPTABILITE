@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Activity, CheckCircle, XCircle, AlertTriangle, Server, Database, Brain, Calendar, Calculator, RefreshCw, PlayCircle } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -33,7 +34,7 @@ export function SystemHealthCheck() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/health/full');
+      const res = await apiFetch('/api/health/full');
       if (!res.ok) throw new Error("Erreur lors du diagnostic");
       const data = await res.json();
       setResult(data);
@@ -50,7 +51,7 @@ export function SystemHealthCheck() {
     
     try {
       // 1. Fetch custom operations to test them too
-      const res = await fetch('/api/custom-operations');
+      const res = await apiFetch('/api/custom-operations');
       const customOps: CustomOperation[] = await res.json();
 
       const allOps = [

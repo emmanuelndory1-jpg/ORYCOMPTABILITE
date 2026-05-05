@@ -1,3 +1,5 @@
+import { useDialog } from './DialogProvider';
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
   Calculator, 
@@ -59,6 +61,7 @@ interface TaxSummary {
 }
 
 export function TaxManager() {
+  const { alert: dialogAlert } = useDialog();
   const { formatCurrency } = useCurrency();
   const { activeYear } = useFiscalYear();
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
@@ -82,7 +85,7 @@ export function TaxManager() {
   const fetchTaxSummary = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/tax/summary?month=${selectedMonth}&year=${selectedYear}`);
+      const res = await apiFetch(`/api/tax/summary?month=${selectedMonth}&year=${selectedYear}`);
       if (res.ok) {
         const data = await res.json();
         setSummary(data);
@@ -96,7 +99,7 @@ export function TaxManager() {
 
   const fetchCompanySettings = async () => {
     try {
-      const res = await fetch('/api/company/settings');
+      const res = await apiFetch('/api/company/settings');
       if (res.ok) {
         const data = await res.json();
         setCompanySettings(data);
@@ -185,7 +188,7 @@ export function TaxManager() {
 
     } catch (err) {
       console.error("PDF Export failed", err);
-      alert("Erreur lors de la génération du rapport PDF");
+      dialogAlert("Erreur lors de la génération du rapport PDF");
     }
   };
 

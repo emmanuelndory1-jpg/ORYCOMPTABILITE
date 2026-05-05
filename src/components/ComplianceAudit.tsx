@@ -1,3 +1,5 @@
+import { useDialog } from './DialogProvider';
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { ShieldCheck, AlertTriangle, CheckCircle, XCircle, Loader2, RefreshCw, Download, Pencil, Save, X, Plus, Trash2, Sparkles } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -42,6 +44,7 @@ interface AuditReport {
 }
 
 export function ComplianceAudit() {
+  const { alert: dialogAlert } = useDialog();
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [correctingTx, setCorrectingTx] = useState<TransactionDetail | null>(null);
@@ -57,7 +60,7 @@ export function ComplianceAudit() {
 
   const fetchAccounts = async () => {
     try {
-      const res = await fetch('/api/accounts');
+      const res = await apiFetch('/api/accounts');
       const data = await res.json();
       setAccounts(data);
     } catch (err) {
@@ -68,7 +71,7 @@ export function ComplianceAudit() {
   const runAudit = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/compliance/audit');
+      const res = await apiFetch('/api/compliance/audit');
       const data = await res.json();
       setReport(data);
     } catch (err) {
@@ -82,7 +85,7 @@ export function ComplianceAudit() {
     if (!issue.transactionId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/transactions/${issue.transactionId}`);
+      const res = await apiFetch(`/api/transactions/${issue.transactionId}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setCorrectingTx(data);
@@ -90,7 +93,7 @@ export function ComplianceAudit() {
       setIsModalOpen(true);
     } catch (err) {
       console.error(err);
-      alert("Erreur lors du chargement de la transaction");
+      dialogAlert("Erreur lors du chargement de la transaction");
     } finally {
       setLoading(false);
     }
@@ -129,7 +132,7 @@ export function ComplianceAudit() {
 
     setSaving(true);
     try {
-      const res = await fetch(`/api/transactions/${correctingTx.id}`, {
+      const res = await apiFetch(`/api/transactions/${correctingTx.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(correctingTx)
@@ -142,11 +145,11 @@ export function ComplianceAudit() {
         runAudit();
       } else {
         const error = await res.json();
-        alert(`Erreur: ${error.error}`);
+        dialogAlert(`Erreur: ${error.error}`);
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de l'enregistrement");
+      dialogAlert("Erreur lors de l'enregistrement");
     } finally {
       setSaving(false);
     }

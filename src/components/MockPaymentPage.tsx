@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { apiFetch as fetch } from '@/lib/api';
@@ -20,7 +21,7 @@ export function MockPaymentPage() {
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     try {
-      const res = await fetch('/api/payment/mock-confirm', {
+      const res = await apiFetch('/api/payment/mock-confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transaction_id: transactionId })

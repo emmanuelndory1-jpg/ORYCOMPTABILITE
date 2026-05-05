@@ -1,5 +1,7 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
+import { PageHeader } from './ui/PageHeader';
 import { 
   Plus, 
   Search, 
@@ -21,7 +23,10 @@ import {
   FileX,
   Globe,
   XCircle,
-  Loader2
+  Loader2,
+  List,
+  BarChart3,
+  Receipt
 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useFiscalYear } from '@/context/FiscalYearContext';
@@ -57,6 +62,7 @@ interface Invoice {
 }
 
 export function InvoicingManager() {
+  const { alert: dialogAlert } = useDialog();
   const location = useLocation();
   const { confirm, alert } = useDialog();
   const { t } = useLanguage();
@@ -79,7 +85,7 @@ export function InvoicingManager() {
   }, [location.state]);
 
   useEffect(() => {
-    fetch('/api/company/dossier')
+    apiFetch('/api/company/dossier')
       .then(res => res.json())
       .then(data => setCompanySettings(data))
       .catch(err => console.error("Failed to fetch company settings", err));
@@ -103,8 +109,8 @@ export function InvoicingManager() {
   const fetchReports = async () => {
     try {
       const [statsRes, revenueRes] = await Promise.all([
-        fetch('/api/invoices/stats'),
-        fetch('/api/revenue/monthly')
+        apiFetch('/api/invoices/stats'),
+        apiFetch('/api/revenue/monthly')
       ]);
       if (statsRes.ok && revenueRes.ok) {
         const stats = await statsRes.json();
@@ -119,10 +125,10 @@ export function InvoicingManager() {
   const fetchDocuments = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/invoices?type=${activeTab}`);
+      const res = await apiFetch(`/api/invoices?type=${activeTab}`);
       if (res.ok) {
         const data = await res.json();
-        setDocuments(data);
+        setDocuments(Array.isArray(data) ? data : []);
       }
     } catch (err) {
       console.error(err);
@@ -136,16 +142,16 @@ export function InvoicingManager() {
     if (!confirmed) return;
 
     try {
-      const res = await fetch(`/api/invoices/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/invoices/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchDocuments();
       } else {
         const data = await res.json();
-        alert(data.error || "Erreur lors de la suppression", 'error');
+        dialogAlert(data.error || "Erreur lors de la suppression", 'error');
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur de connexion", 'error');
+      dialogAlert("Erreur de connexion", 'error');
     }
   };
 
@@ -157,7 +163,7 @@ export function InvoicingManager() {
 
   const handleExport = () => {
     if (documents.length === 0) {
-      alert("Aucune donnée à exporter", 'info');
+      dialogAlert("Aucune donnée à exporter", 'info');
       return;
     }
 
@@ -178,20 +184,20 @@ export function InvoicingManager() {
 
   const handleDownloadPDF = async (docId: number) => {
     try {
-      const res = await fetch(`/api/invoices/${docId}`);
+      const res = await apiFetch(`/api/invoices/${docId}`);
       if (res.ok) {
         const fullDoc = await res.json();
         generateInvoicePDF(fullDoc, companySettings);
       }
     } catch (err) {
       console.error("Failed to download PDF", err);
-      alert("Erreur lors du téléchargement du PDF", 'error');
+      dialogAlert("Erreur lors du téléchargement du PDF", 'error');
     }
   };
 
-  const filteredDocs = documents.filter(doc => 
-    doc.number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    doc.third_party_name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredDocs = (documents || []).filter(doc => 
+    (doc.number?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+    (doc.third_party_name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
   );
 
   const getStatusBadge = (status: string) => {
@@ -222,22 +228,22 @@ export function InvoicingManager() {
   };
 
   const stats = {
-    total: documents
+    total: (documents || [])
       .filter(d => activeTab === 'invoice' ? d.status !== 'cancelled' : d.status !== 'rejected')
-      .reduce((acc, doc) => acc + doc.total_amount, 0),
-    paid: documents
+      .reduce((acc, doc) => acc + (doc.total_amount || 0), 0),
+    paid: (documents || [])
       .filter(d => activeTab === 'invoice' ? d.status === 'paid' : d.status === 'accepted')
-      .reduce((acc, doc) => acc + doc.total_amount, 0),
-    pending: documents
+      .reduce((acc, doc) => acc + (doc.total_amount || 0), 0),
+    pending: (documents || [])
       .filter(d => d.status === 'sent' || d.status === 'draft')
-      .reduce((acc, doc) => acc + doc.total_amount, 0),
-    overdue: documents
+      .reduce((acc, doc) => acc + (doc.total_amount || 0), 0),
+    overdue: (documents || [])
       .filter(d => activeTab === 'invoice' ? d.status === 'overdue' : d.status === 'rejected')
-      .reduce((acc, doc) => acc + doc.total_amount, 0)
+      .reduce((acc, doc) => acc + (doc.total_amount || 0), 0)
   };
 
   return (
-    <div className="space-y-10 pb-20">
+    <div className="space-y-6 pb-20">
       <AnimatePresence>
         {showQuickView && selectedDocId && (
           <>
@@ -352,101 +358,111 @@ export function InvoicingManager() {
           </div>
         )}
       </AnimatePresence>
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div>
-          <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-            {activeTab === 'invoice' ? 'Facturation' : 'Devis'}
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 font-medium">
-            {activeTab === 'invoice' ? 'Gérez vos factures clients et suivez les paiements' : 'Préparez et envoyez vos propositions commerciales'}
-          </p>
-        </div>
-        
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
-          <div className="flex bg-slate-100 dark:bg-slate-800 p-1.5 rounded-2xl shadow-inner w-full sm:w-auto">
-            <button
-              onClick={() => setActiveView('list')}
-              className={cn(
-                "flex-1 sm:flex-none px-4 sm:px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-                activeView === 'list' 
-                  ? "bg-white dark:bg-slate-700 text-brand-green shadow-md scale-105" 
-                  : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-              )}
-            >
-              Liste
-            </button>
-            <button
-              onClick={() => setActiveView('reports')}
-              className={cn(
-                "flex-1 sm:flex-none px-4 sm:px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-                activeView === 'reports' 
-                  ? "bg-white dark:bg-slate-700 text-brand-green shadow-md scale-105" 
-                  : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-              )}
-            >
-              Rapports
-            </button>
-          </div>
+      <PageHeader
+        title={activeTab === 'invoice' ? 'Facturation' : activeTab === 'quote' ? 'Devis' : 'Facturation Récurrente'}
+        subtitle={activeTab === 'invoice' ? 'Gérez vos factures clients et suivez les paiements' : activeTab === 'quote' ? 'Propositions commerciales' : 'Abonnements et factures périodiques'}
+        icon={<Receipt size={24} />}
+        actions={
+          <div className="flex items-center gap-3">
+            <div className="hidden lg:flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner mr-2">
+              <button
+                onClick={() => setActiveView('list')}
+                className={cn(
+                  "p-2 rounded-lg transition-all",
+                  activeView === 'list' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400"
+                )}
+                title="Liste"
+              >
+                <List size={20} />
+              </button>
+              <button
+                onClick={() => setActiveView('reports')}
+                className={cn(
+                  "p-2 rounded-lg transition-all",
+                  activeView === 'reports' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400"
+                )}
+                title="Rapports"
+              >
+                <BarChart3 size={20} />
+              </button>
+            </div>
 
-          <div className="flex bg-slate-100 dark:bg-slate-800 p-1.5 rounded-2xl shadow-inner w-full sm:w-auto">
-            <button
-              onClick={() => setActiveTab('invoice')}
-              className={cn(
-                "flex-1 sm:flex-none px-4 sm:px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-                activeTab === 'invoice' 
-                  ? "bg-white dark:bg-slate-700 text-brand-green shadow-md scale-105" 
-                  : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-              )}
-            >
-              Factures
-            </button>
-            <button
-              onClick={() => setActiveTab('quote')}
-              className={cn(
-                "flex-1 sm:flex-none px-4 sm:px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-                activeTab === 'quote' 
-                  ? "bg-white dark:bg-slate-700 text-brand-green shadow-md scale-105" 
-                  : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-              )}
-            >
-              Devis
-            </button>
-            <button
-              onClick={() => setActiveTab('recurring')}
-              className={cn(
-                "flex-1 sm:flex-none px-4 sm:px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-                activeTab === 'recurring' 
-                  ? "bg-white dark:bg-slate-700 text-brand-green shadow-md scale-105" 
-                  : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-              )}
-            >
-              Récurrent
-            </button>
+            {activeTab !== 'recurring' && (
+              <>
+                <button 
+                  onClick={() => setShowAnalyzer(!showAnalyzer)}
+                  className={cn(
+                    "p-3 rounded-xl border transition-all active:scale-95 group",
+                    showAnalyzer 
+                      ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20" 
+                      : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50"
+                  )}
+                >
+                  <Globe size={20} />
+                </button>
+                <button 
+                  onClick={() => setShowEditor(true)}
+                  className="bg-brand-green hover:bg-brand-green/90 text-white px-6 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-green/20 transition-all active:scale-95 whitespace-nowrap"
+                >
+                  <Plus size={20} />
+                  <span>Nouveau</span>
+                </button>
+              </>
+            )}
           </div>
-        {activeTab !== 'recurring' && (
-          <>
-            <button 
-              onClick={() => setShowAnalyzer(!showAnalyzer)}
-              className={cn(
-                "p-4 rounded-2xl border transition-all active:scale-95 group",
-                showAnalyzer 
-                  ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20" 
-                  : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
-              )}
-              title="Analyse des devises"
-            >
-              <Globe size={22} className={cn(showAnalyzer && "animate-pulse")} />
-            </button>
-            <button 
-              onClick={() => setShowEditor(true)}
-              className="bg-brand-green hover:bg-brand-green-light text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-3 shadow-2xl shadow-brand-green/30 transition-all active:scale-95 group w-full sm:w-auto"
-            >
-              <Plus size={22} className="group-hover:rotate-90 transition-transform duration-300" />
-              <span className="whitespace-nowrap">Nouveau {activeTab === 'invoice' ? 'Facture' : 'Devis'}</span>
-            </button>
-          </>
-        )}
+        }
+      />
+
+      <div className="flex items-center justify-between gap-4 overflow-x-auto no-scrollbar py-1">
+        <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner">
+          <button
+            onClick={() => setActiveTab('invoice')}
+            className={cn(
+              "px-5 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all",
+              activeTab === 'invoice' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            Factures
+          </button>
+          <button
+            onClick={() => setActiveTab('quote')}
+            className={cn(
+              "px-5 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all",
+              activeTab === 'quote' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            Devis
+          </button>
+          <button
+            onClick={() => setActiveTab('recurring')}
+            className={cn(
+              "px-5 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all",
+              activeTab === 'recurring' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            Récurrent
+          </button>
+        </div>
+
+        <div className="lg:hidden flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner">
+          <button
+            onClick={() => setActiveView('list')}
+            className={cn(
+              "p-2 rounded-lg transition-all",
+              activeView === 'list' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400"
+            )}
+          >
+            <List size={18} />
+          </button>
+          <button
+            onClick={() => setActiveView('reports')}
+            className={cn(
+              "p-2 rounded-lg transition-all",
+              activeView === 'reports' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400"
+            )}
+          >
+            <BarChart3 size={18} />
+          </button>
         </div>
       </div>
 

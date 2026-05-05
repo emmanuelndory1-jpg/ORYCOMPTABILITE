@@ -23,6 +23,7 @@ export interface CompanySettings {
   bank_account_number?: string;
   bank_iban?: string;
   bank_swift?: string;
+  logo_url?: string | null;
   payment_bank_enabled?: boolean;
   payment_bank_account?: string;
   payment_cash_enabled?: boolean;
@@ -107,6 +108,11 @@ export const PDF_CONFIG = {
     secondary: [15, 23, 42] as [number, number, number], // Slate-900
     text: [71, 85, 105] as [number, number, number], // Slate-600
     light: [241, 245, 249] as [number, number, number], // Slate-100
+    border: [226, 232, 240] as [number, number, number], // Slate-200
+  },
+  fonts: {
+    normal: "helvetica",
+    bold: "helvetica",
   }
 };
 
@@ -117,79 +123,356 @@ export function addPDFHeader(doc: jsPDF, settings: CompanySettings, title: strin
   const pageWidth = doc.internal.pageSize.width;
   const today = new Date().toLocaleDateString('fr-FR');
 
-  // Background accent for header
-  doc.setFillColor(PDF_CONFIG.colors.light[0], PDF_CONFIG.colors.light[1], PDF_CONFIG.colors.light[2]);
-  doc.rect(0, 0, pageWidth, 40, 'F');
+  // Background accent for header (Top bar)
+  doc.setFillColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
+  doc.rect(0, 0, pageWidth, 5, 'F');
 
-  // Logo
+  // Company Logo & Info
+  let y = 15;
   try {
-    doc.addImage(PDF_CONFIG.logoUrl, 'PNG', 14, 8, 30, 15);
+    if (settings.logo_url && settings.logo_url.startsWith('data:image/')) {
+      doc.addImage(settings.logo_url, 'PNG', 14, y, 12, 12);
+    } else {
+      // Try to draw a placeholder if logo fails
+      doc.setFillColor(PDF_CONFIG.colors.primary[0], PDF_CONFIG.colors.primary[1], PDF_CONFIG.colors.primary[2]);
+      doc.roundedRect(14, y, 10, 10, 2, 2, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8);
+      doc.text("OC", 17, y + 7);
+    }
   } catch (e) {
-    console.warn("Logo could not be loaded for PDF");
+    console.warn("Logo draw error", e);
   }
 
-  // Company Info (Left)
+  // Company Name
   doc.setFontSize(14);
-  doc.setFont("helvetica", "bold");
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
   doc.setTextColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
-  doc.text(settings.name || PDF_CONFIG.companyName, 50, 15);
+  doc.text(sanitizeText(settings.name || PDF_CONFIG.companyName).toUpperCase(), 30, y + 7);
   
   doc.setFontSize(8);
-  doc.setFont("helvetica", "normal");
+  doc.setFont(PDF_CONFIG.fonts.normal, "normal");
   doc.setTextColor(PDF_CONFIG.colors.text[0], PDF_CONFIG.colors.text[1], PDF_CONFIG.colors.text[2]);
   
-  let y = 20;
-  const infoLines = [];
-  if (settings.legal_form) infoLines.push(settings.legal_form);
-  if (settings.address) infoLines.push(settings.address);
-  if (settings.city || settings.country) infoLines.push(`${settings.city || ''} ${settings.country || ''}`.trim());
-  if (settings.phone) infoLines.push(`Tél: ${settings.phone}`);
-  if (settings.email) infoLines.push(`Email: ${settings.email}`);
-  
-  infoLines.forEach(line => {
-    doc.text(sanitizeText(line), 50, y);
-    y += 4;
-  });
+  y = y + 15;
+  const col1X = 14;
+  const col2X = pageWidth / 2;
+  const col3X = pageWidth - 14;
 
-  // Tax Info (Right)
-  y = 15;
-  doc.setFont("helvetica", "bold");
+  // Left Column - Contact
+  let leftY = y;
+  if (settings.address) {
+    doc.text(sanitizeText(settings.address), col1X, leftY);
+    leftY += 4;
+  }
+  if (settings.city || settings.country) {
+    doc.text(sanitizeText(`${settings.city || ''} ${settings.country || ''}`.trim()), col1X, leftY);
+    leftY += 4;
+  }
+  if (settings.phone || settings.email) {
+    doc.text(sanitizeText(`${settings.phone || ''} ${settings.email ? ' | ' + settings.email : ''}`.trim()), col1X, leftY);
+  }
+
+  // Right Column - Legal
+  let rightY = y;
   if (settings.fiscal_id) {
-    doc.text(`NIF: ${settings.fiscal_id}`, pageWidth - 14, y, { align: 'right' });
-    y += 4;
+    doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+    doc.text(`NIF: ${settings.fiscal_id}`, col3X, rightY, { align: 'right' });
+    rightY += 4;
   }
   if (settings.rccm) {
-    doc.text(`RCCM: ${settings.rccm}`, pageWidth - 14, y, { align: 'right' });
-    y += 4;
+    doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+    doc.text(`RCCM: ${settings.rccm}`, col3X, rightY, { align: 'right' });
+    rightY += 4;
   }
+  doc.setFont(PDF_CONFIG.fonts.normal, "normal");
   if (settings.tax_regime) {
-    doc.setFont("helvetica", "normal");
-    doc.text(`Régime: ${settings.tax_regime}`, pageWidth - 14, y, { align: 'right' });
+    doc.text(`Régime: ${settings.tax_regime}`, col3X, rightY, { align: 'right' });
   }
 
-  // Document Title Section
-  doc.setDrawColor(PDF_CONFIG.colors.primary[0], PDF_CONFIG.colors.primary[1], PDF_CONFIG.colors.primary[2]);
-  doc.setLineWidth(1);
-  doc.line(14, 45, pageWidth - 14, 45);
+  // Divider
+  doc.setDrawColor(PDF_CONFIG.colors.border[0], PDF_CONFIG.colors.border[1], PDF_CONFIG.colors.border[2]);
+  doc.setLineWidth(0.5);
+  doc.line(14, leftY + 10, pageWidth - 14, leftY + 10);
 
-  doc.setFontSize(18);
-  doc.setFont("helvetica", "bold");
+  // Document Title
+  y = leftY + 25;
+  doc.setFontSize(22);
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
   doc.setTextColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
-  doc.text(title.toUpperCase(), pageWidth / 2, 55, { align: 'center' });
+  doc.text(sanitizeText(title).toUpperCase(), pageWidth / 2, y, { align: 'center' });
 
   if (subtitle) {
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "italic");
+    doc.setFontSize(10);
+    doc.setFont(PDF_CONFIG.fonts.normal, "normal");
     doc.setTextColor(PDF_CONFIG.colors.primary[0], PDF_CONFIG.colors.primary[1], PDF_CONFIG.colors.primary[2]);
-    doc.text(subtitle, pageWidth / 2, 62, { align: 'center' });
+    doc.text(sanitizeText(subtitle), pageWidth / 2, y + 8, { align: 'center' });
+    y += 8;
   }
 
-  doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setFont(PDF_CONFIG.fonts.normal, "normal");
   doc.setTextColor(PDF_CONFIG.colors.text[0], PDF_CONFIG.colors.text[1], PDF_CONFIG.colors.text[2]);
-  doc.text(`Édité le : ${today}`, pageWidth - 14, 70, { align: 'right' });
+  doc.text(`Date d'édition : ${today}`, col3X, y + 15, { align: 'right' });
 
-  return 80; // Return next Y position
+  return y + 25; // Return next Y position
+}
+
+/**
+ * Generates an Audit Report PDF
+ */
+export function generateAuditPDF(report: any, settings: CompanySettings) {
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.width;
+  
+  const startY = addPDFHeader(doc, settings, "Rapport d'Audit Financier", "Intelligence Synthétique SYSCOHADA");
+  let y = startY;
+
+  // Health Score Box
+  doc.setFillColor(PDF_CONFIG.colors.light[0], PDF_CONFIG.colors.light[1], PDF_CONFIG.colors.light[2]);
+  doc.roundedRect(14, y, pageWidth - 28, 30, 3, 3, 'F');
+  
+  doc.setFontSize(12);
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+  doc.setTextColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
+  doc.text("INDICE DE SANTÉ FINANCIÈRE", 25, y + 12);
+  
+  doc.setFontSize(24);
+  const scoreColor = report.healthScore >= 80 ? [22, 163, 74] : report.healthScore >= 60 ? [217, 119, 6] : [225, 29, 72];
+  doc.setTextColor(scoreColor[0], scoreColor[1], scoreColor[2]);
+  doc.text(`${report.healthScore}/100`, pageWidth - 25, y + 18, { align: 'right' });
+  
+  y += 40;
+
+  // Summary
+  doc.setFontSize(14);
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+  doc.setTextColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
+  doc.text("RÉSUMÉ EXÉCUTIF", 14, y);
+  
+  y += 8;
+  doc.setFontSize(10);
+  doc.setFont(PDF_CONFIG.fonts.normal, "normal");
+  doc.setTextColor(PDF_CONFIG.colors.text[0], PDF_CONFIG.colors.text[1], PDF_CONFIG.colors.text[2]);
+  const summaryLines = doc.splitTextToSize(sanitizeText(report.summary.replace(/\*/g, '')), pageWidth - 28);
+  doc.text(summaryLines, 14, y);
+  
+  y += (summaryLines.length * 5) + 15;
+
+  // Strengths & Weaknesses in a table or two columns
+  autoTable(doc, {
+    startY: y,
+    head: [['FORCES ET OPPORTUNITÉS', 'POINTS DE VIGILANCE']],
+    body: [
+      [
+        report.strengths.map((s: string) => `• ${sanitizeText(s)}`).join('\n\n'),
+        report.weaknesses.map((w: string) => `• ${sanitizeText(w)}`).join('\n\n')
+      ]
+    ],
+    theme: 'grid',
+    headStyles: { fillColor: PDF_CONFIG.colors.secondary, halign: 'center' },
+    styles: { fontSize: 9, cellPadding: 5 },
+    columnStyles: {
+      0: { textColor: [22, 163, 74], fontStyle: 'bold' },
+      1: { textColor: [225, 29, 72], fontStyle: 'bold' }
+    }
+  });
+
+  y = (doc as any).lastAutoTable.finalY + 15;
+
+  // Ratios Table
+  doc.setFontSize(12);
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+  doc.setTextColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
+  doc.text("ANALYSE DES RATIOS", 14, y);
+  
+  autoTable(doc, {
+    startY: y + 5,
+    head: [['Indicateur', 'Performance', 'Statut']],
+    body: report.ratios.map((r: any) => [
+      sanitizeText(r.name),
+      `${r.value}%`,
+      r.value >= 75 ? 'Optimal' : r.value >= 50 ? 'Satisfaisant' : 'À surveiller'
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: PDF_CONFIG.colors.primary },
+    columnStyles: {
+      1: { halign: 'center' },
+      2: { halign: 'center' }
+    }
+  });
+
+  y = (doc as any).lastAutoTable.finalY + 15;
+  if (y > doc.internal.pageSize.height - 60) {
+    doc.addPage();
+    y = 20;
+  }
+
+  // Recommendations
+  doc.setFontSize(12);
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+  doc.text("RECOMMANDATIONS STRATÉGIQUES", 14, y);
+  
+  autoTable(doc, {
+    startY: y + 5,
+    head: [['Titre', 'Description', 'Impact']],
+    body: report.recommendations.map((r: any) => [
+      sanitizeText(r.title),
+      sanitizeText(r.description),
+      sanitizeText(r.impact)
+    ]),
+    theme: 'grid',
+    headStyles: { fillColor: PDF_CONFIG.colors.secondary },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 50 },
+      1: { cellWidth: 'auto' },
+      2: { halign: 'center', cellWidth: 25 }
+    }
+  });
+
+  addPDFFooter(doc);
+  doc.save(`Audit_Financier_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+/**
+ * Generates an Audit Trail PDF
+ */
+export function generateAuditTrailPDF(logs: any[], settings: CompanySettings) {
+  const doc = new jsPDF('l', 'mm', 'a4');
+  const pageWidth = doc.internal.pageSize.width;
+  
+  const startY = addPDFHeader(doc, settings, "Journal des Activités (Audit Trail)", "Historique complet des opérations système");
+  
+  autoTable(doc, {
+    startY: startY + 10,
+    head: [['Date/Heure', 'Utilisateur', 'Action', 'Entité', 'ID', 'Détails']],
+    body: logs.map(log => [
+      log.date,
+      sanitizeText(log.user),
+      log.action,
+      sanitizeText(log.entity),
+      log.entity_id || '-',
+      sanitizeText(log.details?.substring(0, 50) || '-')
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: PDF_CONFIG.colors.secondary, fontSize: 8 },
+    styles: { fontSize: 7, cellPadding: 2 },
+    columnStyles: {
+      0: { cellWidth: 35 },
+      1: { cellWidth: 35 },
+      2: { cellWidth: 25 },
+      3: { cellWidth: 30 },
+      4: { cellWidth: 15 },
+      5: { cellWidth: 'auto' }
+    }
+  });
+
+  addPDFFooter(doc);
+  doc.save(`Journal_Audit_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+/**
+ * Generates a professional Payslip PDF
+ */
+export function generatePayslipPDF(payslip: any, period: any, settings: CompanySettings) {
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.width;
+  const monthName = new Date(2000, period.month - 1).toLocaleString('fr-FR', { month: 'long' });
+  const year = period.year;
+
+  const startY = addPDFHeader(doc, settings, "Bulletin de Paie", `Période de ${monthName} ${year}`);
+  let y = startY;
+
+  // Employee & Date Section
+  doc.setFillColor(PDF_CONFIG.colors.light[0], PDF_CONFIG.colors.light[1], PDF_CONFIG.colors.light[2]);
+  doc.roundedRect(14, y, pageWidth - 28, 25, 2, 2, 'F');
+  
+  doc.setFontSize(10);
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+  doc.setTextColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
+  doc.text("SALARIÉ :", 20, y + 10);
+  doc.text("INFOS PÉRIODE :", pageWidth / 2 + 10, y + 10);
+  
+  doc.setFont(PDF_CONFIG.fonts.normal, "normal");
+  doc.setTextColor(PDF_CONFIG.colors.text[0], PDF_CONFIG.colors.text[1], PDF_CONFIG.colors.text[2]);
+  doc.text(`${sanitizeText(payslip.first_name)} ${sanitizeText(payslip.last_name)}`, 20, y + 16);
+  doc.text(sanitizeText(payslip.position || "Employé"), 20, y + 21);
+  
+  doc.text(`Matricule : EMP-${payslip.employee_id}`, pageWidth / 2 + 10, y + 16);
+  doc.text(`Édité le : ${new Date().toLocaleDateString('fr-FR')}`, pageWidth / 2 + 10, y + 21);
+  
+  y += 35;
+
+  // Details Table
+  const details = typeof payslip.details === 'string' ? JSON.parse(payslip.details) : payslip.details;
+  
+  const body: any[] = [
+    ['Salaire de base', '', '', formatCurrencyPDF(payslip.base_salary)],
+  ];
+
+  if (details.bonusDetails && details.bonusDetails.length > 0) {
+    details.bonusDetails.forEach((b: any) => {
+      body.push([sanitizeText(b.label), '', '', formatCurrencyPDF(b.amount)]);
+    });
+  }
+
+  body.push([{ content: 'BRUT TOTAL', styles: { fontStyle: 'bold', fillColor: [248, 250, 252] } }, '', '', { content: formatCurrencyPDF(details.grossTotal || details.gross), styles: { fontStyle: 'bold', fillColor: [248, 250, 252] } }]);
+  
+  body.push([{ content: 'RETENUES', colSpan: 4, styles: { halign: 'center', fontStyle: 'bold', fillColor: [241, 245, 249] } }]);
+  
+  body.push(['CNPS Part Salariale', '6.3%', '', `(${formatCurrencyPDF(details.cnpsEmployee || 0)})`]);
+  body.push(['ITS (Impôt s/ Trait. & Sal.)', '', '', `(${formatCurrencyPDF(details.taxes?.is || 0)})`]);
+  body.push(['CN (Contrib. Nationale)', '', '', `(${formatCurrencyPDF(details.taxes?.cn || 0)})`]);
+  body.push(['IGR (Impôt Gén. sur Rev.)', '', '', `(${formatCurrencyPDF(details.taxes?.igr || 0)})`]);
+  
+  if (details.deductionDetails && details.deductionDetails.length > 0) {
+    details.deductionDetails.forEach((d: any) => {
+      body.push([sanitizeText(d.label), '', '', `(${formatCurrencyPDF(d.amount)})`]);
+    });
+  }
+
+  const totalDeductions = (details.cnpsEmployee || 0) + (details.taxes?.is || 0) + (details.taxes?.cn || 0) + (details.taxes?.igr || 0) + (payslip.deductions || 0);
+
+  autoTable(doc, {
+    startY: y,
+    head: [['RUBRIQUES', 'TAUX', 'RETAINU', 'GAIN']],
+    body: body as any[],
+    theme: 'grid',
+    headStyles: { fillColor: PDF_CONFIG.colors.secondary, halign: 'center' },
+    columnStyles: {
+      1: { halign: 'center' },
+      2: { halign: 'right', textColor: [225, 29, 72] },
+      3: { halign: 'right', textColor: [22, 163, 74] }
+    }
+  });
+
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  // Final Net
+  doc.setFillColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
+  doc.rect(pageWidth - 90, y, 76, 15, 'F');
+  
+  doc.setFont(PDF_CONFIG.fonts.bold, "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(255, 255, 255);
+  doc.text("NET À PAYER :", pageWidth - 85, y + 10);
+  doc.text(formatCurrencyPDF(payslip.net_salary), pageWidth - 18, y + 10, { align: 'right' });
+
+  y += 25;
+  
+  // Footer / Signature Section
+  doc.setFontSize(8);
+  doc.setTextColor(PDF_CONFIG.colors.text[0], PDF_CONFIG.colors.text[1], PDF_CONFIG.colors.text[2]);
+  doc.text("Pour valoir ce que de droit.", 14, y);
+  
+  addPDFSignature(doc, y + 10, "L'Employeur");
+  
+  // Add another signature spot for employee
+  doc.text("Signature du Salarié", 40, y + 10);
+  doc.line(14, y + 30, 70, y + 30);
+
+  addPDFFooter(doc);
+  doc.save(`Bulletin_${payslip.last_name}_${monthName}_${year}.pdf`);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Users, UserPlus, Mail, Shield, Trash2, Edit2, Loader2, Check, X, AlertCircle, History, Clock } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -10,8 +11,20 @@ interface User {
   email: string;
   name: string;
   role: 'admin' | 'user' | 'accountant';
+  permissions: Record<string, 'none' | 'view' | 'edit' | 'admin'> | null;
   created_at: string;
 }
+
+const MODULES = [
+  { id: 'dashboard', label: 'Tableau de bord' },
+  { id: 'journal', label: 'Journal & Écritures' },
+  { id: 'invoices', label: 'Facturation & Devis' },
+  { id: 'payroll', label: 'Paie & RH' },
+  { id: 'treasury', label: 'Trésorerie & Banque' },
+  { id: 'assets', label: 'Immobilisations' },
+  { id: 'reports', label: 'Rapports & États' },
+  { id: 'settings', label: 'Paramétrage' },
+];
 
 interface AuditLog {
   id: number;
@@ -24,7 +37,7 @@ interface AuditLog {
 }
 
 export function TeamManager() {
-  const { confirm } = useDialog();
+  const { confirm, alert: dialogAlert } = useDialog();
   const [users, setUsers] = useState<User[]>([]);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,7 +51,8 @@ export function TeamManager() {
     email: '',
     password: '',
     name: '',
-    role: 'user' as 'admin' | 'user' | 'accountant'
+    role: 'user' as 'admin' | 'user' | 'accountant',
+    permissions: {} as Record<string, 'none' | 'view' | 'edit' | 'admin'>
   });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -51,8 +65,8 @@ export function TeamManager() {
     setLoading(true);
     try {
       const [usersRes, logsRes] = await Promise.all([
-        fetch('/api/users'),
-        fetch('/api/audit-logs')
+        apiFetch('/api/users'),
+        apiFetch('/api/audit-logs')
       ]);
       
       if (usersRes.ok) {
@@ -73,7 +87,7 @@ export function TeamManager() {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch('/api/users');
+      const res = await apiFetch('/api/users');
       if (res.ok) {
         const data = await res.json();
         setUsers(data);
@@ -85,7 +99,7 @@ export function TeamManager() {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch('/api/audit-logs');
+      const res = await apiFetch('/api/audit-logs');
       if (res.ok) {
         const data = await res.json();
         setLogs(data);
@@ -113,7 +127,13 @@ export function TeamManager() {
       if (res.ok) {
         setIsModalOpen(false);
         setEditingUser(null);
-        setFormData({ email: '', password: '', name: '', role: 'user' as 'admin' | 'user' | 'accountant' });
+        setFormData({ 
+          email: '', 
+          password: '', 
+          name: '', 
+          role: 'user' as 'admin' | 'user' | 'accountant',
+          permissions: {}
+        });
         fetchUsers();
       } else {
         const data = await res.json();
@@ -131,12 +151,12 @@ export function TeamManager() {
     if (!confirmed) return;
     
     try {
-      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/users/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchUsers();
       } else {
         const data = await res.json();
-        alert(data.error);
+        dialogAlert(data.error);
       }
     } catch (err) {
       console.error(err);
@@ -149,7 +169,8 @@ export function TeamManager() {
       email: user.email,
       password: '',
       name: user.name || '',
-      role: user.role
+      role: user.role,
+      permissions: user.permissions || {}
     });
     setIsModalOpen(true);
   };
@@ -229,7 +250,7 @@ export function TeamManager() {
           <button 
             onClick={() => {
               setEditingUser(null);
-              setFormData({ email: '', password: '', name: '', role: 'user' });
+              setFormData({ email: '', password: '', name: '', role: 'user', permissions: {} });
               setIsModalOpen(true);
             }}
             className="bg-brand-green text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-brand-green-dark transition-all shadow-lg shadow-brand-green/20 flex items-center gap-2"
@@ -506,6 +527,39 @@ export function TeamManager() {
                     ))}
                   </div>
                 </div>
+
+                {formData.role !== 'admin' && (
+                  <div className="space-y-3 pt-2">
+                    <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Droits par module</label>
+                    <div className="space-y-2 border border-slate-100 dark:border-slate-800 rounded-xl p-3 bg-slate-50/50 dark:bg-slate-800/30">
+                      {MODULES.map((mod) => (
+                        <div key={mod.id} className="flex items-center justify-between gap-4 py-1">
+                          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{mod.label}</span>
+                          <div className="flex items-center bg-white dark:bg-slate-900 rounded-lg p-1 border border-slate-200 dark:border-slate-700">
+                            {(['none', 'view', 'edit', 'admin'] as const).map((level) => (
+                              <button
+                                key={level}
+                                type="button"
+                                onClick={() => setFormData({
+                                  ...formData,
+                                  permissions: { ...formData.permissions, [mod.id]: level }
+                                })}
+                                className={cn(
+                                  "px-2 py-1 rounded text-[10px] font-bold uppercase transition-all",
+                                  (formData.permissions[mod.id] || (formData.role === 'accountant' ? 'view' : 'none')) === level
+                                    ? "bg-brand-green text-white"
+                                    : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                                )}
+                              >
+                                {level === 'none' ? 'Aucun' : level === 'view' ? 'Voir' : level === 'edit' ? 'Édit' : 'Admin'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="pt-4 flex gap-3">
                   <button

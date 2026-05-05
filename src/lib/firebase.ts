@@ -7,9 +7,9 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
-// Use auto-detect long-polling to avoid gRPC connection issues in some environments (reduces 'unavailable' errors)
+// Force long-polling to avoid gRPC connection issues in the sandboxed environment
 export const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const googleProvider = new GoogleAuthProvider();

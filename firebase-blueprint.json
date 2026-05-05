@@ -51,6 +51,152 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "role", "content", "timestamp"]
+    },
+    "OCRCorrection": {
+      "title": "OCR Correction",
+      "description": "User correction of an OCR result for model improvement",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "imageHash": { "type": "string", "description": "Unique hash of the document image" },
+        "aiPrediction": { "type": "object", "description": "Original result from Gemini" },
+        "userCorrection": { "type": "object", "description": "Corrected result by the user" },
+        "region": { "type": "string", "description": "UEMOA, CEMAC, etc." },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "imageHash", "aiPrediction", "userCorrection", "timestamp"]
+    },
+    "P2PRequisition": {
+      "title": "P2P Requisition",
+      "description": "Purchase requisition",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "reference": { "type": "string" },
+        "description": { "type": "string" },
+        "requester": { "type": "string" },
+        "department": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "pending", "approved_mgr", "approved_fin", "approved", "rejected", "ordered"] },
+        "date": { "type": "string" },
+        "institutionType": { "type": "string", "enum": ["Ministère", "Institution Publique", "Collectivité Locale", "Entreprise Publique", "Autre"] },
+        "institutionName": { "type": "string" },
+        "budgetLine": { "type": "string" },
+        "projectCode": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": { "type": "string" },
+              "quantity": { "type": "number" },
+              "unitPrice": { "type": "number" },
+              "total": { "type": "number" },
+              "accountCode": { "type": "string" }
+            }
+          }
+        },
+        "attachments": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "reference", "description", "requester", "department", "amount", "status", "date", "createdAt"]
+    },
+    "P2PRFQ": {
+      "title": "P2P RFQ",
+      "description": "Request for Quotation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "reference": { "type": "string" },
+        "requisitionId": { "type": "string" },
+        "supplier_ids": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["sent", "received", "closed"] },
+        "date": { "type": "string" },
+        "attachments": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "reference", "requisitionId", "status", "date", "createdAt"]
+    },
+    "P2PPurchaseOrder": {
+      "title": "P2P Purchase Order",
+      "description": "Purchase order",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "reference": { "type": "string" },
+        "requisitionId": { "type": "string" },
+        "supplier_name": { "type": "string" },
+        "supplier_id": { "type": "string" },
+        "amount": { "type": "number" },
+        "vat_amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "sent", "partially_received", "received", "cancelled"] },
+        "date": { "type": "string" },
+        "expected_delivery": { "type": "string" },
+        "items": { "type": "array", "items": { "$ref": "#/entities/P2PRequisition/properties/items/items" } },
+        "attachments": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "reference", "supplier_name", "amount", "status", "date", "expected_delivery", "createdAt"]
+    },
+    "P2PGoodsReceipt": {
+      "title": "P2P Goods Receipt",
+      "description": "Goods receipt",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "reference": { "type": "string" },
+        "poId": { "type": "string" },
+        "po_reference": { "type": "string" },
+        "supplier_name": { "type": "string" },
+        "status": { "type": "string", "enum": ["received", "pending_inspection"] },
+        "date": { "type": "string" },
+        "attachments": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "reference", "poId", "po_reference", "supplier_name", "status", "date", "createdAt"]
+    },
+    "P2PInvoiceMatching": {
+      "title": "P2P Invoice Matching",
+      "description": "Invoice matching with anomaly detection",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "reference": { "type": "string" },
+        "po_reference": { "type": "string" },
+        "receipt_reference": { "type": "string" },
+        "supplier_name": { "type": "string" },
+        "amount_invoice": { "type": "number" },
+        "amount_po": { "type": "number" },
+        "vat_invoice": { "type": "number" },
+        "vat_po": { "type": "number" },
+        "discrepancies": { "type": "array", "items": { "type": "string" } },
+        "anomalies": { "type": "array", "items": { "type": "string" }, "description": "AI detected risks or duplicates" },
+        "status": { "type": "string", "enum": ["matched", "discrepancy", "pending", "accounted"] },
+        "accounting_entry_id": { "type": "string" },
+        "date": { "type": "string" },
+        "attachments": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "reference", "po_reference", "receipt_reference", "supplier_name", "amount_invoice", "status", "date", "createdAt"]
+    },
+    "P2PPayment": {
+      "title": "P2P Payment",
+      "description": "Payment record with priority score",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "reference": { "type": "string" },
+        "invoice_reference": { "type": "string" },
+        "supplier_name": { "type": "string" },
+        "amount": { "type": "number" },
+        "payment_date": { "type": "string" },
+        "payment_method": { "type": "string" },
+        "status": { "type": "string", "enum": ["scheduled", "paid", "cancelled"] },
+        "priority_score": { "type": "number", "description": "AI recommended priority 1-10" },
+        "attachments": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "reference", "invoice_reference", "amount", "payment_date", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -65,6 +211,34 @@
     "/users/{userId}/chat_history": {
       "schema": "ChatMessage",
       "description": "User's chat history with Gemini"
+    },
+    "/ocr_feedback/{feedbackId}": {
+      "schema": "OCRCorrection",
+      "description": "Collection of OCR corrections for model training"
+    },
+    "/p2p_requisitions/{reqId}": {
+      "schema": "P2PRequisition",
+      "description": "User's requisitions"
+    },
+    "/p2p_rfqs/{rfqId}": {
+      "schema": "P2PRFQ",
+      "description": "User's requests for quotation"
+    },
+    "/p2p_purchase_orders/{poId}": {
+      "schema": "P2PPurchaseOrder",
+      "description": "User's purchase orders"
+    },
+    "/p2p_goods_receipts/{receiptId}": {
+      "schema": "P2PGoodsReceipt",
+      "description": "User's goods receipts"
+    },
+    "/p2p_invoice_matching/{matchId}": {
+      "schema": "P2PInvoiceMatching",
+      "description": "User's invoice matchings"
+    },
+    "/p2p_payments/{paymentId}": {
+      "schema": "P2PPayment",
+      "description": "User's P2P payments"
     }
   }
 }

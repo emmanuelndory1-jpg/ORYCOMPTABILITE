@@ -1,7 +1,9 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { Download, Filter, Search, FileText, Printer, FileSpreadsheet } from 'lucide-react';
+import { Download, Filter, Search, FileText, Printer, FileSpreadsheet, X, Info, ExternalLink } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useFiscalYear } from '@/context/FiscalYearContext';
+import { motion, AnimatePresence } from 'framer-motion';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { cn } from '@/lib/utils';
@@ -34,6 +36,9 @@ export function GeneralLedger() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [accountFilter, setAccountFilter] = useState('');
+  const [descriptionSearch, setDescriptionSearch] = useState('');
+  const [selectedTx, setSelectedTx] = useState<any>(null);
+  const [txLoading, setTxLoading] = useState(false);
 
   const setQuickRange = (range: 'month' | 'quarter' | 'year' | 'all') => {
     if (range === 'all') {
@@ -65,7 +70,7 @@ export function GeneralLedger() {
 
   const fetchCompanySettings = async () => {
     try {
-      const res = await fetch('/api/company/settings');
+      const res = await apiFetch('/api/company/settings');
       const data = await res.json();
       setCompanySettings(data);
     } catch (err) {
@@ -80,7 +85,7 @@ export function GeneralLedger() {
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
       
-      const res = await fetch(`/api/reports/general-ledger?${params.toString()}`);
+      const res = await apiFetch(`/api/reports/general-ledger?${params.toString()}`);
       const data = await res.json();
       setLedgerData(data);
     } catch (err) {
@@ -90,9 +95,33 @@ export function GeneralLedger() {
     }
   };
 
-  const filteredData = ledgerData.filter(acc => 
-    acc.code.includes(accountFilter) || acc.name.toLowerCase().includes(accountFilter.toLowerCase())
-  );
+  const handleTxClick = async (reference: string) => {
+    if (!reference || reference === '-') return;
+    setTxLoading(true);
+    try {
+      const res = await apiFetch(`/api/transactions/by-reference/${reference}`);
+      if (res.ok) {
+        setSelectedTx(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTxLoading(false);
+    }
+  };
+
+  const filteredData = ledgerData
+    .map(acc => ({
+      ...acc,
+      entries: acc.entries.filter(entry => 
+        entry.description.toLowerCase().includes(descriptionSearch.toLowerCase()) ||
+        (entry.reference || '').toLowerCase().includes(descriptionSearch.toLowerCase())
+      )
+    }))
+    .filter(acc => 
+      (acc.code.includes(accountFilter) || acc.name.toLowerCase().includes(accountFilter.toLowerCase())) &&
+      acc.entries.length > 0
+    );
 
   const handleExportCSV = () => {
     const csvData = filteredData.flatMap(acc => acc.entries.map(entry => ({
@@ -278,14 +307,27 @@ export function GeneralLedger() {
           />
         </div>
         <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Rechercher un compte</label>
+          <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Filtrer par compte</label>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input 
               type="text" 
               value={accountFilter}
               onChange={(e) => setAccountFilter(e.target.value)}
-              placeholder="Code ou nom du compte..."
+              placeholder="Code ou nom..."
+              className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-800 dark:bg-slate-950 dark:text-white text-sm focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
+            />
+          </div>
+        </div>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Chercher dans l'écriture</label>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input 
+              type="text" 
+              value={descriptionSearch}
+              onChange={(e) => setDescriptionSearch(e.target.value)}
+              placeholder="Libellé ou référence..."
               className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-800 dark:bg-slate-950 dark:text-white text-sm focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green"
             />
           </div>
@@ -327,10 +369,22 @@ export function GeneralLedger() {
                   </thead>
                   <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
                     {account.entries.map((entry, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                      <tr 
+                        key={idx} 
+                        onClick={() => handleTxClick(entry.reference)}
+                        className={cn(
+                          "transition-colors",
+                          entry.reference && entry.reference !== '-' ? "cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800" : "hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                        )}
+                      >
                         <td className="px-6 py-2 text-slate-600 dark:text-slate-400">{entry.date}</td>
-                        <td className="px-6 py-2 text-slate-500 dark:text-slate-500 text-xs">{entry.reference || '-'}</td>
-                        <td className="px-6 py-2 text-slate-900 dark:text-white">{entry.description}</td>
+                        <td className="px-6 py-2">
+                          <div className="flex items-center gap-1">
+                            <span className="text-slate-500 dark:text-slate-500 text-xs font-mono">{entry.reference || '-'}</span>
+                            {entry.reference && entry.reference !== '-' && <ExternalLink size={10} className="text-slate-300" />}
+                          </div>
+                        </td>
+                        <td className="px-6 py-2 text-slate-900 dark:text-white font-medium">{entry.description}</td>
                         <td className="px-6 py-2 text-right font-mono text-slate-600 dark:text-slate-400">
                           {entry.debit > 0 ? formatCurrency(entry.debit) : '-'}
                         </td>
@@ -351,6 +405,126 @@ export function GeneralLedger() {
           ))
         )}
       </div>
+
+      {/* Transaction Details Modal */}
+      <AnimatePresence>
+        {selectedTx && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden border border-slate-200 dark:border-slate-800"
+            >
+              <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-brand-green text-white rounded-2xl shadow-lg shadow-brand-green/20">
+                    <FileText size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white">Détails de l'écriture</h2>
+                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">{selectedTx.reference}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedTx(null)}
+                  className="p-2 hover:bg-white dark:hover:bg-slate-700 rounded-xl transition-all text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="p-8">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Date</p>
+                    <p className="text-lg font-black text-slate-900 dark:text-white">
+                      {new Date(selectedTx.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Statut</p>
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest",
+                        selectedTx.status === 'validated' ? "bg-brand-green/10 text-brand-green border border-brand-green/20" : "bg-amber-100 text-amber-700 border border-amber-200"
+                      )}>
+                        {selectedTx.status === 'validated' ? 'Validé' : 'Brouillon'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total</p>
+                    <p className="text-lg font-black text-brand-green">
+                      {formatCurrency(selectedTx.lines.reduce((sum: number, l: any) => sum + (l.debit || 0), 0))}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between px-2">
+                    <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-400">Écritures Comptables</h3>
+                    <div className="h-px flex-1 mx-6 bg-slate-100 dark:bg-slate-800" />
+                  </div>
+                  
+                  <div className="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 dark:bg-slate-800/50 text-[10px] uppercase font-black tracking-widest text-slate-500">
+                        <tr>
+                          <th className="px-6 py-4 text-left">Compte</th>
+                          <th className="px-6 py-4 text-left">Libellé Ligne</th>
+                          <th className="px-6 py-4 text-right">Débit</th>
+                          <th className="px-6 py-4 text-right">Crédit</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {selectedTx.lines.map((line: any, i: number) => (
+                          <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                            <td className="px-6 py-4">
+                              <div className="font-mono text-xs text-brand-green font-bold">{line.account_code}</div>
+                              <div className="text-[10px] text-slate-400 font-medium truncate max-w-[150px]">{line.account_name}</div>
+                            </td>
+                            <td className="px-6 py-4 text-slate-600 dark:text-slate-300 font-medium">{line.description || selectedTx.description}</td>
+                            <td className="px-6 py-4 text-right font-mono font-bold text-slate-900 dark:text-white">
+                              {line.debit > 0 ? formatCurrency(line.debit) : '-'}
+                            </td>
+                            <td className="px-6 py-4 text-right font-mono font-bold text-slate-900 dark:text-white">
+                              {line.credit > 0 ? formatCurrency(line.credit) : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center">
+                <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest">
+                  <Info size={14} />
+                  Cliquer sur l'ID pour voir la pièce jointe
+                </div>
+                <button
+                  onClick={() => setSelectedTx(null)}
+                  className="px-8 py-3 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl font-black uppercase tracking-widest text-[10px] shadow-lg hover:scale-105 transition-all"
+                >
+                  Fermer
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Loading Overlay for Drill-down */}
+      {txLoading && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/20 backdrop-blur-[2px]">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-2xl flex flex-col items-center gap-4 border border-slate-200 dark:border-slate-800">
+            <div className="w-12 h-12 border-4 border-brand-green/30 border-t-brand-green rounded-full animate-spin" />
+            <p className="text-xs font-black uppercase tracking-widest text-slate-500">Chargement des détails...</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

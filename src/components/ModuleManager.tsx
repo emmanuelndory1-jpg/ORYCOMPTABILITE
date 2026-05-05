@@ -1,7 +1,9 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Settings, Check, X, Loader2, AlertCircle, RefreshCw, ToggleLeft, ToggleRight } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useModules } from '@/context/ModuleContext';
 
 interface Module {
   id: number;
@@ -18,6 +20,7 @@ const MODULE_LABELS: Record<string, { label: string, description: string }> = {
   'payroll': { label: 'Paie', description: 'Débloquez la gestion des salariés, les périodes de paie et la génération des bulletins.' },
   'budget': { label: 'Budgets & Prévisions', description: 'Définissez vos objectifs budgétaires et suivez les écarts de réalisation.' },
   'vat': { label: 'Fiscalité (TVA)', description: 'Calcul automatique de la TVA et préparation des déclarations fiscales.' },
+  'p2p': { label: 'Procure-To-Pay (P2P)', description: 'Processus achat complet : de la demande d\'achat à la facturation fournisseur.' },
   'bankRec': { label: 'Rapprochement', description: 'Pointez vos opérations bancaires avec votre comptabilité en toute simplicité.' },
   'analytics': { label: 'Analyses Avancées', description: 'Tableaux de bord graphiques et analyses détaillées de votre performance.' },
   'audit': { label: 'Module Audit', description: 'Enregistrement complet des actions utilisateur (création, modification, suppression) pour une traçabilité totale.' }
@@ -28,6 +31,7 @@ export function ModuleManager() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { refreshModules } = useModules();
 
   useEffect(() => {
     fetchModules();
@@ -36,7 +40,7 @@ export function ModuleManager() {
   const fetchModules = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/company/modules');
+      const res = await apiFetch('/api/company/modules');
       if (!res.ok) throw new Error('Failed to fetch modules');
       const data = await res.json();
       setModules(data);
@@ -50,7 +54,7 @@ export function ModuleManager() {
   const toggleModule = async (key: string, currentStatus: number) => {
     setUpdating(key);
     try {
-      const res = await fetch(`/api/company/modules/${key}`, {
+      const res = await apiFetch(`/api/company/modules/${key}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_active: currentStatus ? 0 : 1 })
@@ -60,8 +64,8 @@ export function ModuleManager() {
       
       setModules(prev => prev.map(m => m.module_key === key ? { ...m, is_active: currentStatus ? 0 : 1 } : m));
       
-      // We might need to reload the page or update a global context if the sidebar depends on this
-      // For now, we'll just update the local state and suggest a refresh if needed
+      // Refresh global context so sidebar and routes update
+      await refreshModules();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur lors de la mise à jour');
     } finally {
@@ -78,7 +82,7 @@ export function ModuleManager() {
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-colors">
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+      <div className="p-4 sm:p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
         <div>
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <Settings className="text-brand-green" size={20} />
@@ -105,10 +109,10 @@ export function ModuleManager() {
         {modules.map((module) => {
           const info = MODULE_LABELS[module.module_key] || { label: module.module_key, description: 'Module système' };
           return (
-            <div key={module.module_key} className="p-6 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-              <div className="flex-1 pr-8">
+            <div key={module.module_key} className="p-4 sm:p-6 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+              <div className="flex-1 pr-4 sm:pr-8">
                 <h3 className="font-bold text-slate-900 dark:text-white mb-1">{info.label}</h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">{info.description}</p>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">{info.description}</p>
               </div>
               <div className="flex items-center gap-4">
                 {updating === module.module_key ? (

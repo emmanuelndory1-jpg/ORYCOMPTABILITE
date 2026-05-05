@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Calendar, Check, Plus, Lock, Unlock, AlertCircle, Loader2 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -15,6 +16,7 @@ interface FiscalYear {
 }
 
 export function FiscalYearManager() {
+  const { alert: dialogAlert } = useDialog();
   const { confirm, alert } = useDialog();
   const { refreshActiveYear } = useFiscalYear();
   const [years, setYears] = useState<FiscalYear[]>([]);
@@ -32,7 +34,7 @@ export function FiscalYearManager() {
 
   const fetchYears = async () => {
     try {
-      const res = await fetch('/api/fiscal-years');
+      const res = await apiFetch('/api/fiscal-years');
       const data = await res.json();
       setYears(data);
     } catch (err) {
@@ -44,7 +46,7 @@ export function FiscalYearManager() {
 
   const handleActivate = async (id: number) => {
     try {
-      const res = await fetch(`/api/fiscal-years/${id}/activate`, { method: 'PUT' });
+      const res = await apiFetch(`/api/fiscal-years/${id}/activate`, { method: 'PUT' });
       if (res.ok) {
         await refreshActiveYear();
         fetchYears();
@@ -56,7 +58,7 @@ export function FiscalYearManager() {
 
   const handleCreate = async () => {
     try {
-      const res = await fetch('/api/fiscal-years', {
+      const res = await apiFetch('/api/fiscal-years', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -74,11 +76,11 @@ export function FiscalYearManager() {
         fetchYears();
       } else {
         const error = await res.json();
-        alert(error.error || "Une erreur est survenue lors de la création.");
+        dialogAlert(error.error || "Une erreur est survenue lors de la création.");
       }
     } catch (err) {
       console.error(err);
-      alert("Erreur réseau.");
+      dialogAlert("Erreur réseau.");
     }
   };
 
@@ -87,7 +89,7 @@ export function FiscalYearManager() {
     if (!confirmed) return;
     
     try {
-      await fetch(`/api/fiscal-years/${id}/close`, { method: 'PUT' });
+      await apiFetch(`/api/fiscal-years/${id}/close`, { method: 'PUT' });
       fetchYears();
     } catch (err) {
       console.error(err);

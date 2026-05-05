@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useAuth } from './AuthContext';
@@ -34,7 +35,7 @@ export function FiscalYearProvider({ children }: { children: ReactNode }) {
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
     
     try {
-      const res = await fetch('/api/fiscal-years/active', { signal: controller.signal });
+      const res = await apiFetch('/api/fiscal-years/active', { signal: controller.signal });
       if (res.ok) {
         const data = await res.json();
         setActiveYear(data);

@@ -1,5 +1,5 @@
+import { apiFetch } from '../lib/api';
 import { useState, useEffect, createElement } from 'react';
-import { apiFetch as fetch } from '@/lib/api';
 import { DollarSign, Euro, PoundSterling, Banknote, Coins, Wallet } from 'lucide-react';
 
 let cachedCurrency: string | null = null;
@@ -20,7 +20,7 @@ export function useCurrency() {
 
     const fetchRates = async () => {
       try {
-        const res = await fetch('/api/exchange-rates');
+        const res = await apiFetch('/api/exchange-rates');
         if (res.ok) {
           const data = await res.json();
           setExchangeRates(data);
@@ -37,7 +37,7 @@ export function useCurrency() {
     } else if (cachedLoading) {
       const fetchData = async () => {
         try {
-          const res = await fetch('/api/company/dossier');
+          const res = await apiFetch('/api/company/dossier');
           if (res.ok) {
             const data = await res.json();
             if (data.settings && data.settings.currency) {
@@ -48,7 +48,10 @@ export function useCurrency() {
           }
           await fetchRates();
         } catch (err) {
-          console.error("Failed to fetch currency", err);
+          console.error("Failed to fetch currency details:", err);
+          // Don't keep loading forever if fetch fails
+          cachedLoading = false;
+          setLoading(false);
         } finally {
           cachedLoading = false;
           setLoading(false);

@@ -1,5 +1,7 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { Users, UserPlus, Search, FileText, AlertTriangle, CheckCircle, X, Save, Trash2, Download, Briefcase, CreditCard, Calendar, FileSpreadsheet, Mail, Phone, History, ExternalLink } from 'lucide-react';
+import { PageHeader } from './ui/PageHeader';
+import { Users, UserPlus, Search, FileText, AlertTriangle, CheckCircle, X, Save, Trash2, Download, Briefcase, CreditCard, Calendar, FileSpreadsheet, Mail, Phone, History, ExternalLink, Contact2 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useFiscalYear } from '@/context/FiscalYearContext';
 import { cn } from '@/lib/utils';
@@ -26,6 +28,7 @@ interface ThirdParty {
 }
 
 export function ThirdPartyManager() {
+  const { alert: dialogAlert } = useDialog();
   const { confirm, alert } = useDialog();
   const { formatCurrency, currency } = useCurrency();
   const { activeYear } = useFiscalYear();
@@ -75,7 +78,7 @@ export function ThirdPartyManager() {
   const fetchParties = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/third-parties?type=${activeTab}`);
+      const res = await apiFetch(`/api/third-parties?type=${activeTab}`);
       const data = await res.json();
       setParties(data);
     } catch (err) {
@@ -87,7 +90,7 @@ export function ThirdPartyManager() {
 
   const fetchAgedBalance = async () => {
     try {
-      const res = await fetch(`/api/reports/aged-balance?type=${activeTab}`);
+      const res = await apiFetch(`/api/reports/aged-balance?type=${activeTab}`);
       const data = await res.json();
       setAgedBalanceData(data);
       setShowAgedBalance(true);
@@ -99,17 +102,17 @@ export function ThirdPartyManager() {
   const setupOccasional = async () => {
     setIsSettingUpOccasional(true);
     try {
-      const res = await fetch('/api/third-parties/defaults');
+      const res = await apiFetch('/api/third-parties/defaults');
       if (res.ok) {
-        alert('Comptes occasionnels initialisés avec succès !', 'success');
+        dialogAlert('Comptes occasionnels initialisés avec succès !', 'success');
         fetchParties();
       } else {
         const error = await res.json();
-        alert(error.error || 'Erreur lors de l\'initialisation', 'error');
+        dialogAlert(error.error || 'Erreur lors de l\'initialisation', 'error');
       }
     } catch (err) {
       console.error(err);
-      alert('Erreur de connexion au serveur', 'error');
+      dialogAlert('Erreur de connexion au serveur', 'error');
     } finally {
       setIsSettingUpOccasional(false);
     }
@@ -146,12 +149,12 @@ export function ThirdPartyManager() {
     if (!confirmed) return;
     
     try {
-      const res = await fetch(`/api/third-parties/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/third-parties/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchParties();
       } else {
         const error = await res.json();
-        alert(error.error, 'error');
+        dialogAlert(error.error, 'error');
       }
     } catch (err) {
       console.error(err);
@@ -203,7 +206,7 @@ export function ThirdPartyManager() {
     setIsHistoryOpen(true);
     setLoadingHistory(true);
     try {
-      const res = await fetch(`/api/third-parties/${party.id}/transactions`);
+      const res = await apiFetch(`/api/third-parties/${party.id}/transactions`);
       const data = await res.json();
       setTransactions(data);
     } catch (err) {
@@ -218,23 +221,23 @@ export function ThirdPartyManager() {
     if (!selectedPartyForPayment) return;
 
     try {
-      const res = await fetch(`/api/third-parties/${selectedPartyForPayment.id}/payment`, {
+      const res = await apiFetch(`/api/third-parties/${selectedPartyForPayment.id}/payment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(paymentData)
       });
 
       if (res.ok) {
-        alert('Paiement enregistré avec succès !', 'success');
+        dialogAlert('Paiement enregistré avec succès !', 'success');
         setIsPaymentModalOpen(false);
         fetchParties(); // Refresh balances
       } else {
         const error = await res.json();
-        alert(error.error, 'error');
+        dialogAlert(error.error, 'error');
       }
     } catch (err) {
       console.error(err);
-      alert('Erreur lors de l\'enregistrement du paiement', 'error');
+      dialogAlert('Erreur lors de l\'enregistrement du paiement', 'error');
     }
   };
 
@@ -303,86 +306,72 @@ export function ThirdPartyManager() {
   };
 
   return (
-    <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
-        <div className="space-y-2">
-          <div className="flex items-center gap-3 text-brand-green mb-2">
-            <div className="p-2 bg-brand-green/10 rounded-xl">
-              <Users size={20} />
-            </div>
-            <span className="text-[10px] font-black uppercase tracking-[0.3em]">Répertoire Commercial</span>
+    <div className="space-y-6 pb-20">
+      <PageHeader
+        title="Gestion des Tiers"
+        subtitle="Centralisez vos relations clients et fournisseurs (411/401)"
+        icon={<Contact2 size={24} />}
+        actions={
+          <div className="flex flex-wrap items-center justify-end gap-3">
+             <button 
+              onClick={handleExportCSV}
+              className="hidden sm:flex bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 p-2.5 rounded-xl transition-all shadow-sm active:scale-95"
+              title="Exporter CSV"
+            >
+              <FileSpreadsheet size={20} />
+            </button>
+            <button 
+              onClick={fetchAgedBalance}
+              className="hidden sm:flex bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 p-2.5 rounded-xl transition-all shadow-sm active:scale-95"
+              title="Balance Âgée"
+            >
+              <FileText size={20} />
+            </button>
+            <button 
+              onClick={() => { setIsFormOpen(true); setEditingParty(null); resetForm(); }}
+              className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all shadow-lg shadow-slate-900/20 active:scale-95"
+            >
+              <UserPlus size={18} />
+              <span className="hidden sm:inline">Nouveau {activeTab === 'client' ? 'Client' : 'Fournisseur'}</span>
+              <span className="sm:hidden">Nouveau</span>
+            </button>
           </div>
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-slate-900 dark:text-white tracking-tighter uppercase">Gestion des Tiers</h1>
-          <p className="text-slate-500 dark:text-slate-400 font-medium text-base sm:text-lg">Centralisez vos relations clients et fournisseurs (Comptes 411/401)</p>
-        </div>
-        
-        <div className="flex flex-col sm:flex-row flex-wrap gap-3 w-full md:w-auto">
-          <button 
-            onClick={setupOccasional}
-            disabled={isSettingUpOccasional}
-            className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-amber-600 dark:text-amber-500 px-4 py-3 md:px-6 md:py-4 rounded-2xl font-black text-[10px] sm:text-xs uppercase tracking-widest flex items-center justify-center gap-3 transition-all shadow-sm active:scale-95 disabled:opacity-50"
-            title="Créer automatiquement les comptes Client/Fournisseur occasionnels"
-          >
-            <Users size={18} />
-            <span className="whitespace-nowrap">{isSettingUpOccasional ? 'Initialisation...' : 'Init. Occasionnels'}</span>
-          </button>
-          <button 
-            onClick={handleExportCSV}
-            className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 px-4 py-3 md:px-6 md:py-4 rounded-2xl font-black text-[10px] sm:text-xs uppercase tracking-widest flex items-center justify-center gap-3 transition-all shadow-sm active:scale-95"
-          >
-            <FileSpreadsheet size={18} />
-            <span className="whitespace-nowrap">Exporter CSV</span>
-          </button>
-          <button 
-            onClick={fetchAgedBalance}
-            className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 px-4 py-3 md:px-6 md:py-4 rounded-2xl font-black text-[10px] sm:text-xs uppercase tracking-widest flex items-center justify-center gap-3 transition-all shadow-sm active:scale-95"
-          >
-            <FileText size={18} />
-            <span className="whitespace-nowrap">Balance Âgée</span>
-          </button>
-          <button 
-            onClick={() => { setIsFormOpen(true); setEditingParty(null); resetForm(); }}
-            className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl font-black text-[10px] sm:text-xs uppercase tracking-widest flex items-center justify-center gap-3 transition-all shadow-xl shadow-slate-900/20 active:scale-95"
-          >
-            <UserPlus size={18} />
-            <span className="whitespace-nowrap">Nouveau {activeTab === 'client' ? 'Client' : 'Fournisseur'}</span>
-          </button>
-        </div>
-      </div>
+        }
+      />
 
       {/* Tabs & Search Row */}
-      <div className="flex flex-col lg:flex-row gap-6 items-center">
-        <div className="flex p-1.5 bg-slate-100 dark:bg-slate-800 rounded-2xl w-full lg:w-fit overflow-x-auto scrollbar-hide">
+      <div className="flex flex-col lg:flex-row gap-4 items-center">
+        <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full lg:w-fit overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab('client')}
             className={cn(
-              "flex-1 lg:flex-none px-6 sm:px-8 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-3 whitespace-nowrap",
-              activeTab === 'client' ? "bg-white dark:bg-slate-900 text-brand-green shadow-xl shadow-slate-200/50 dark:shadow-none" : "text-slate-500 hover:text-slate-700"
+              "flex-1 lg:flex-none px-6 py-2 text-xs font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 whitespace-nowrap",
+              activeTab === 'client' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-500 hover:text-slate-700"
             )}
           >
-            <Users size={16} />
+            <Users size={14} />
             Clients
           </button>
           <button
             onClick={() => setActiveTab('supplier')}
             className={cn(
-              "flex-1 lg:flex-none px-6 sm:px-8 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-3 whitespace-nowrap",
-              activeTab === 'supplier' ? "bg-white dark:bg-slate-900 text-rose-500 shadow-xl shadow-slate-200/50 dark:shadow-none" : "text-slate-500 hover:text-slate-700"
+              "flex-1 lg:flex-none px-6 py-2 text-xs font-black uppercase tracking-widest rounded-lg transition-all flex items-center justify-center gap-2 whitespace-nowrap",
+              activeTab === 'supplier' ? "bg-white dark:bg-slate-700 text-rose-500 shadow-sm" : "text-slate-500 hover:text-slate-700"
             )}
           >
-            <Briefcase size={16} />
+            <Briefcase size={14} />
             Fournisseurs
           </button>
         </div>
 
         <div className="relative flex-1 w-full">
-          <Search className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
           <input
             type="text"
-            placeholder={`Rechercher par nom ou code compte...`}
+            placeholder={`Rechercher...`}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-3 sm:py-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl focus:outline-none focus:ring-4 focus:ring-brand-green/5 transition-all text-sm sm:text-base text-slate-900 dark:text-white font-medium placeholder:text-slate-400"
+            className="w-full pl-11 pr-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-green/20 transition-all text-sm text-slate-900 dark:text-white font-medium"
           />
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useEffect, useState } from 'react';
 import { FileText, Download, Loader2, TrendingUp, TrendingDown, Scale, FileSpreadsheet, PieChart, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -108,8 +109,8 @@ export function FinancialStatements() {
         if (endDate) params.append('endDate', endDate);
 
         const [financialRes, settingsRes] = await Promise.all([
-          fetch(`/api/financial-statements?${params.toString()}`),
-          fetch('/api/company/settings')
+          apiFetch(`/api/financial-statements?${params.toString()}`),
+          apiFetch('/api/company/settings')
         ]);
         const financialData = await financialRes.json();
         const settings = await settingsRes.json();

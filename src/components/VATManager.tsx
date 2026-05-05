@@ -1,3 +1,4 @@
+import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { Calculator, AlertCircle, FileText, Download } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
@@ -27,7 +28,7 @@ export function VATManager() {
     try {
       // Fetch current month data for dashboard
       const date = new Date();
-      const res = await fetch(`/api/vat/declaration?month=${date.getMonth() + 1}&year=${date.getFullYear()}`);
+      const res = await apiFetch(`/api/vat/declaration?month=${date.getMonth() + 1}&year=${date.getFullYear()}`);
       if (res.ok) {
         const data = await res.json();
         const net = data.netVat;
