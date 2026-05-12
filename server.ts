@@ -300,6 +300,8 @@ function calculateDepreciationSchedule(asset: any, scheduleType: 'annual' | 'mon
   const duration = asset.depreciation_duration;
   const acquisitionDate = new Date(asset.acquisition_date);
   const method = asset.depreciation_method || 'linear';
+  // Check if prorata temporis is enabled (default to true if undefined for backward compatibility)
+  const applyProrata = asset.prorata_temporis !== false && asset.prorata_temporis !== 0;
   
   // Default coefficients based on duration (Standard OHADA/French tax rules)
   const defaultCoefficient = duration >= 7 ? 2.25 : duration >= 5 ? 1.75 : 1.25;
@@ -310,27 +312,60 @@ function calculateDepreciationSchedule(asset: any, scheduleType: 'annual' | 'mon
   
   const linearRate = 1 / duration;
   const decliningRate = linearRate * coefficient;
+  
+  // Prorata computation for first year
+  let firstYearProrata = 1;
+  let maxYears = duration;
+
+  if (applyProrata) {
+    if (method === 'linear') {
+      // Linear prorata in days (360 days/year, 30 days/month)
+      const startDay = Math.min(30, acquisitionDate.getDate());
+      const startMonth = acquisitionDate.getMonth() + 1;
+      const daysInFirstYear = (30 - startDay + 1) + (12 - startMonth) * 30;
+      firstYearProrata = Math.min(1, Math.max(0, daysInFirstYear / 360));
+    } else {
+      // Declining balance prorata in months
+      const startMonth = acquisitionDate.getMonth() + 1;
+      const monthsInFirstYear = 13 - startMonth;
+      firstYearProrata = Math.min(1, Math.max(0, monthsInFirstYear / 12));
+    }
+    if (firstYearProrata < 1) {
+      maxYears = duration + 1; // Extra year to finish trailing amount
+    }
+  }
 
   if (scheduleType === 'annual') {
-    for (let year = 1; year <= duration; year++) {
+    for (let year = 1; year <= maxYears; year++) {
+      if (remainingValue <= 0.01) break;
+
       let currentDepreciation = 0;
       
       if (method === 'linear') {
-        currentDepreciation = purchasePrice / duration;
+        const annualBase = purchasePrice / duration;
+        if (year === 1) {
+          currentDepreciation = annualBase * firstYearProrata;
+        } else if (year === maxYears && firstYearProrata < 1) {
+          currentDepreciation = annualBase * (1 - firstYearProrata);
+        } else {
+          currentDepreciation = annualBase;
+        }
       } else {
         // Declining Balance method
-        const remainingYears = duration - year + 1;
-        const currentLinearRate = 1 / remainingYears;
+        const remainingLife = maxYears - year + 1;
+        const currentLinearRate = 1 / remainingLife;
         
-        // Use the declining rate until it falls below the equivalent linear rate for remaining years
-        if (decliningRate > currentLinearRate) {
-          currentDepreciation = remainingValue * decliningRate;
+        if (year === 1) {
+          currentDepreciation = remainingValue * decliningRate * firstYearProrata;
         } else {
-          currentDepreciation = remainingValue / remainingYears;
+          if (decliningRate > currentLinearRate) {
+            currentDepreciation = remainingValue * decliningRate;
+          } else {
+            currentDepreciation = remainingValue / remainingLife;
+          }
         }
       }
 
-      // Cap at remaining value to prevent rounding errors or sub-zero book value
       currentDepreciation = Math.min(currentDepreciation, remainingValue);
       
       const yearDate = new Date(acquisitionDate);
@@ -352,39 +387,99 @@ function calculateDepreciationSchedule(asset: any, scheduleType: 'annual' | 'mon
     }
   } else {
     // Monthly calculation
-    // Standard approach: calculate annual then split into 12 parts
     let currentRemainingValue = purchasePrice;
     let currentAccumulated = 0;
 
-    for (let year = 1; year <= duration; year++) {
+    const startYear = acquisitionDate.getFullYear();
+    const startMonthIndex = acquisitionDate.getMonth();
+    
+    for (let year = 1; year <= maxYears; year++) {
+      if (currentRemainingValue <= 0.01) break;
+
       let annualDep = 0;
-       if (method === 'linear') {
-        annualDep = purchasePrice / duration;
-      } else {
-        const remainingYears = duration - year + 1;
-        const currentLinearRate = 1 / remainingYears;
-        if (decliningRate > currentLinearRate) {
-          annualDep = currentRemainingValue * decliningRate;
+      
+      if (method === 'linear') {
+        const annualBase = purchasePrice / duration;
+        if (year === 1) {
+          annualDep = annualBase * firstYearProrata;
+        } else if (year === maxYears && firstYearProrata < 1) {
+          annualDep = annualBase * (1 - firstYearProrata);
         } else {
-          annualDep = currentRemainingValue / remainingYears;
+          annualDep = annualBase;
+        }
+      } else {
+         const remainingLife = maxYears - year + 1;
+         const currentLinearRate = 1 / remainingLife;
+         
+         if (year === 1) {
+           annualDep = currentRemainingValue * decliningRate * firstYearProrata;
+         } else {
+           if (decliningRate > currentLinearRate) {
+             annualDep = currentRemainingValue * decliningRate;
+           } else {
+             annualDep = currentRemainingValue / remainingLife;
+           }
+         }
+      }
+
+      annualDep = Math.min(annualDep, currentRemainingValue);
+
+      // Determine active months for this year
+      let activeMonthsInYear = 12;
+      let startMonthForYear = 0;
+
+      if (applyProrata) {
+        if (year === 1) {
+          activeMonthsInYear = 13 - (startMonthIndex + 1);
+          startMonthForYear = startMonthIndex;
+        } else if (year === maxYears && firstYearProrata < 1) {
+          // Trailing months to complete duration
+          const totalAccumMonths = (year - 2) * 12 + (13 - (startMonthIndex + 1));
+          activeMonthsInYear = (duration * 12) - totalAccumMonths;
+          activeMonthsInYear = Math.min(12, Math.max(0, activeMonthsInYear));
         }
       }
-      annualDep = Math.min(annualDep, currentRemainingValue);
-      const monthlyDep = annualDep / 12;
 
-      for (let m = 0; m < 12; m++) {
-        const monthDate = new Date(acquisitionDate);
-        monthDate.setMonth(acquisitionDate.getMonth() + (year - 1) * 12 + m);
+      if (activeMonthsInYear <= 0) break;
+
+      // Distribute annualDep over active months
+      // Wait, linear prorata is based on exact days for the first month.
+      // But for simplicity on standard monthly plan generation, dividing the actual year's computed dep evenly over its active months is common if we just want a schedule.
+      const monthlyDepBase = annualDep / activeMonthsInYear;
+
+      for (let m = 0; m < activeMonthsInYear; m++) {
+        if (currentRemainingValue <= 0.01) break;
+
+        let monthlyDep = monthlyDepBase;
         
-        const yearStr = monthDate.getFullYear();
-        const monthStr = (monthDate.getMonth() + 1).toString().padStart(2, '0');
-        const periodStr = `${yearStr}-${monthStr}`;
+        // Exact day prorata for first month if linear
+        if (applyProrata && method === 'linear' && year === 1 && m === 0) {
+           const startDay = Math.min(30, acquisitionDate.getDate());
+           const firstMonthFraction = (30 - startDay + 1) / 30;
+           // If we divide annualDep evenly it might be slightly off.
+           // Actually, it's better to just do `annualBase / 12 * firstMonthFraction`.
+           monthlyDep = (purchasePrice / duration / 12) * firstMonthFraction;
+        } else if (method === 'linear') {
+           monthlyDep = purchasePrice / duration / 12;
+        }
+        
+        // For last month in maxYears, ensure we round out correctly
+        if (monthlyDep > currentRemainingValue) {
+           monthlyDep = currentRemainingValue;
+        }
+
+        const currentYearStr = startYear + year - 1;
+        const currentMonthIndex = startMonthForYear + m;
+        const displayYear = currentYearStr + Math.floor(currentMonthIndex / 12);
+        const displayMonth = currentMonthIndex % 12;
+
+        const periodStr = `${displayYear}-${(displayMonth + 1).toString().padStart(2, '0')}`;
 
         currentAccumulated += monthlyDep;
         currentRemainingValue -= monthlyDep;
 
         schedule.push({
-          year: yearStr,
+          year: displayYear.toString(),
           period: periodStr,
           baseValue: Math.round(currentRemainingValue + monthlyDep),
           depreciation: Math.round(monthlyDep),
@@ -791,7 +886,10 @@ app.get("/api/export/ofx/:bankAccountId", (req, res) => {
 
     const transactions = db.prepare("SELECT * FROM bank_transactions WHERE bank_account_id = ? ORDER BY date DESC").all(bankAccountId) as any[];
 
-    // Generate OFX content (very simplified)
+    const now = new Date().toISOString().replace(/[:\-T]/g, '').split('.')[0];
+    const currency = bankAccount.currency || 'XOF';
+    
+    // OFX Header
     let ofx = `OFXHEADER:100
 DATA:OFXSGML
 VERSION:102
@@ -806,48 +904,50 @@ NEWFILEUID:NONE
   <SIGNONMSGSRSV1>
     <SONRS>
       <STATUS>
-        <CODE>0</CODE>
-        <SEVERITY>INFO</SEVERITY>
+        <CODE>0
+        <SEVERITY>INFO
       </STATUS>
-      <DTSERVER>${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}</DTSERVER>
-      <LANGUAGE>FRA</LANGUAGE>
+      <DTSERVER>${now}
+      <LANGUAGE>FRA
     </SONRS>
   </SIGNONMSGSRSV1>
   <BANKMSGSRSV1>
     <STMTTRNRS>
-      <TRNUID>${Date.now()}</TRNUID>
+      <TRNUID>${now}
       <STATUS>
-        <CODE>0</CODE>
-        <SEVERITY>INFO</SEVERITY>
+        <CODE>0
+        <SEVERITY>INFO
       </STATUS>
       <STMTRS>
-        <CURDEF>${bankAccount.currency || 'XOF'}</CURDEF>
+        <CURDEF>${currency}
         <BANKACCTFROM>
-          <BANKID>${bankAccount.bank_name}</BANKID>
-          <ACCTID>${bankAccount.account_number}</ACCTID>
-          <ACCTTYPE>CHECKING</ACCTTYPE>
+          <BANKID>${bankAccount.bank_name || 'Bank'}
+          <ACCTID>${bankAccount.account_number || '000000'}
+          <ACCTTYPE>CHECKING
         </BANKACCTFROM>
         <BANKTRANLIST>
-          <DTSTART>${transactions.length > 0 ? transactions[transactions.length - 1].date.replace(/-/g, '') : ''}</DTSTART>
-          <DTEND>${transactions.length > 0 ? transactions[0].date.replace(/-/g, '') : ''}</DTEND>
+          <DTSTART>${transactions.length > 0 ? transactions[transactions.length - 1].date.replace(/-/g, '') + '000000' : now}
+          <DTEND>${transactions.length > 0 ? transactions[0].date.replace(/-/g, '') + '000000' : now}
 `;
 
     transactions.forEach(tx => {
+      const txDate = tx.date.replace(/-/g, '') + '120000';
+      const type = tx.amount < 0 ? 'DEBIT' : 'CREDIT';
       ofx += `          <STMTTRN>
-            <TRNTYPE>${tx.amount > 0 ? 'CREDIT' : 'DEBIT'}</TRNTYPE>
-            <DTPOSTED>${tx.date.replace(/-/g, '')}</DTPOSTED>
-            <TRNAMT>${tx.amount}</TRNAMT>
-            <FITID>${tx.id}</FITID>
-            <NAME>${tx.description}</NAME>
-            <MEMO>${tx.reference || ''}</MEMO>
+            <TRNTYPE>${type}
+            <DTPOSTED>${txDate}
+            <TRNAMT>${tx.amount}
+            <FITID>${tx.id}
+            <NAME>${(tx.description || 'Transaction').substring(0, 32).replace(/[&<>]/g, '')}
+            <MEMO>${(tx.description || '').substring(0, 255).replace(/[&<>]/g, '')}
           </STMTTRN>
 `;
     });
 
     ofx += `        </BANKTRANLIST>
         <LEDGERBAL>
-          <BALAMT>${bankAccount.balance}</BALAMT>
-          <DTASOF>${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}</DTASOF>
+          <BALAMT>${bankAccount.balance || 0}
+          <DTASOF>${now}
         </LEDGERBAL>
       </STMTRS>
     </STMTTRNRS>
@@ -855,12 +955,13 @@ NEWFILEUID:NONE
 </OFX>`;
 
     res.setHeader('Content-Type', 'application/x-ofx');
-    res.setHeader('Content-Disposition', `attachment; filename=export-bank-${bankAccountId}.ofx`);
+    res.setHeader('Content-Disposition', `attachment; filename=releve-${bankAccount.account_number || 'banque'}-${new Date().toISOString().split('T')[0]}.ofx`);
     res.send(ofx);
     
     logAction(req.user?.email || 'Admin', 'EXPORT_OFX', 'BankAccount', bankAccountId);
   } catch (err) {
-    handleApiError(res, err);
+    console.error("OFX Export Error:", err);
+    res.status(500).json({ error: "Erreur lors de l'exportation OFX" });
   }
 });
 
@@ -1159,12 +1260,12 @@ app.post("/api/assets", (req, res) => {
     const assetStmt = db.prepare(`
       INSERT INTO assets (
         name, type, purchase_price, vat_amount, total_price, 
-        acquisition_date, depreciation_duration, depreciation_method, declining_coefficient, account_code, transaction_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        acquisition_date, depreciation_duration, depreciation_method, declining_coefficient, prorata_temporis, account_code, transaction_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     assetStmt.run(
       name, type, purchase_price, vat_amount, total_price, 
-      acquisition_date, depreciation_duration, depreciation_method || 'linear', declining_coefficient || null, assetAccount, txIdRes
+      acquisition_date, depreciation_duration, depreciation_method || 'linear', declining_coefficient || null, req.body.prorata_temporis !== false ? 1 : 0, assetAccount, txIdRes
     );
 
     return txIdRes;
@@ -1561,7 +1662,9 @@ function processRecurringTransaction(id: string, force: boolean = false) {
 
     // Update next date
     let nextDate = new Date(rt.next_date);
-    if (rt.frequency === 'weekly') nextDate.setDate(nextDate.getDate() + 7);
+    if (rt.frequency === 'daily') nextDate.setDate(nextDate.getDate() + 1);
+    else if (rt.frequency === 'weekly') nextDate.setDate(nextDate.getDate() + 7);
+    else if (rt.frequency === 'bi-weekly') nextDate.setDate(nextDate.getDate() + 14);
     else if (rt.frequency === 'monthly') nextDate.setMonth(nextDate.getMonth() + 1);
     else if (rt.frequency === 'quarterly') nextDate.setMonth(nextDate.getMonth() + 3);
     else if (rt.frequency === 'annually') nextDate.setFullYear(nextDate.getFullYear() + 1);
@@ -1636,6 +1739,16 @@ app.get("/api/recurring-transactions", (req, res) => {
   }
 });
 
+app.get("/api/recurring-transactions/due-count", (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const count = db.prepare("SELECT COUNT(*) as count FROM recurring_transactions WHERE active = 1 AND next_date <= ?").get(today) as any;
+    res.json({ count: count?.count || 0 });
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
 app.post("/api/recurring-transactions", (req, res) => {
   const { description, amount, frequency, next_date, end_date, max_occurrences, category, auto_process, lines } = req.body;
   const id = crypto.randomUUID();
@@ -1701,34 +1814,48 @@ app.post("/api/recurring-transactions/process-all", (req, res) => {
 
 app.patch("/api/recurring-transactions/:id", (req, res) => {
   const { id } = req.params;
-  const { auto_process, active } = req.body;
+  const { description, amount, frequency, next_date, end_date, max_occurrences, category, auto_process, active, lines } = req.body;
   
   try {
-    const fields = [];
-    const params = [];
+    db.transaction(() => {
+      const fields = [];
+      const params = [];
+      
+      if (description !== undefined) { fields.push("description = ?"); params.push(description); }
+      if (amount !== undefined) { fields.push("amount = ?"); params.push(amount); }
+      if (frequency !== undefined) { fields.push("frequency = ?"); params.push(frequency); }
+      if (next_date !== undefined) { fields.push("next_date = ?"); params.push(next_date); }
+      if (end_date !== undefined) { fields.push("end_date = ?"); params.push(end_date || null); }
+      if (max_occurrences !== undefined) { fields.push("max_occurrences = ?"); params.push(max_occurrences || null); }
+      if (category !== undefined) { fields.push("category = ?"); params.push(category); }
+      if (auto_process !== undefined) { fields.push("auto_process = ?"); params.push(auto_process ? 1 : 0); }
+      if (active !== undefined) { fields.push("active = ?"); params.push(active ? 1 : 0); }
+      
+      if (fields.length > 0) {
+        params.push(id);
+        db.prepare(`UPDATE recurring_transactions SET ${fields.join(", ")} WHERE id = ?`).run(...params);
+      }
+
+      if (lines) {
+        // Replace existing lines
+        db.prepare("DELETE FROM recurring_transaction_lines WHERE recurring_transaction_id = ?").run(id);
+        const lineStmt = db.prepare(`
+          INSERT INTO recurring_transaction_lines (recurring_transaction_id, account_code, debit, credit, description)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        for (const line of lines) {
+          lineStmt.run(id, line.account_code, line.debit || 0, line.credit || 0, line.description || null);
+        }
+      }
+    })();
     
-    if (auto_process !== undefined) {
-      fields.push("auto_process = ?");
-      params.push(auto_process ? 1 : 0);
-    }
-    
-    if (active !== undefined) {
-      fields.push("active = ?");
-      params.push(active ? 1 : 0);
-    }
-    
-    if (fields.length === 0) return res.status(400).json({ error: "Aucun champ à mettre à jour" });
-    
-    params.push(id);
-    db.prepare(`UPDATE recurring_transactions SET ${fields.join(", ")} WHERE id = ?`).run(...params);
-    
-    // If auto_process was turned on, trigger processing immediately
     if (auto_process === true) {
       setTimeout(autoProcessRecurringTransactions, 100);
     }
     
     res.json({ success: true });
   } catch (error) {
+    console.error(error);
     handleApiError(res, new AppError("Erreur lors de la mise à jour" , 500, "server_error"));
   }
 });
@@ -3520,6 +3647,33 @@ app.get("/api/accounts", (req, res) => {
 });
 
 // Create account
+app.post("/api/accounts/import", (req, res) => {
+  const accounts = req.body;
+  if (!Array.isArray(accounts)) {
+    return res.status(400).json({ error: "Format invalide, un tableau est attendu." });
+  }
+
+  const stmtStr = 'INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES (?, ?, ?, ?)';
+  
+  try {
+    let insertedCount = 0;
+    db.transaction(() => {
+      for (const acc of accounts) {
+        const insertStmt = db.prepare(stmtStr);
+        const result = insertStmt.run(acc.code, acc.name, acc.class_code, acc.type);
+        if (result.changes > 0) {
+          insertedCount++;
+        }
+      }
+    })();
+    
+    logAction(req.user?.email || 'Admin', 'IMPORT', 'Account', null, { count: insertedCount });
+    res.json({ success: true, message: `${insertedCount} compte(s) ajouté(s) avec succès. (Les doublons ont été ignorés)` });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 app.post("/api/accounts", validate(schemas.accountSchema), (req, res) => {
   const { code, name, class_code, type } = req.body;
   try {
@@ -4062,15 +4216,23 @@ app.post("/api/transactions/:id/generate-invoice", (req, res) => {
       return res.status(400).json({ error: 'Une facture existe déjà pour cette transaction' });
     }
 
-    const entries = db.prepare("SELECT * FROM journal_entries WHERE transaction_id = ?").all(id) as any[];
+    const entries = db.prepare(`
+      SELECT je.*, a.type as account_type
+      FROM journal_entries je
+      JOIN accounts a ON je.account_code = a.code
+      WHERE je.transaction_id = ?
+    `).all(id) as any[];
     
-    // A sales transaction usually has:
-    // - Credit to a revenue account (Class 7)
-    // - Debit to a client account (Class 411) or treasury (Class 5)
-    
-    const revenueEntries = entries.filter(e => e.account_code.startsWith('7'));
-    if (revenueEntries.length === 0) {
-      return res.status(400).json({ error: 'Aucune ligne de revenu (Classe 7) trouvée dans cette transaction' });
+    // A document (invoice or bill) usually represents revenue (Class 7) or expenses (Class 6)
+    const relevantEntries = entries.filter(e => 
+      e.account_code.startsWith('7') || 
+      e.account_code.startsWith('6') ||
+      e.account_type === 'produit' ||
+      e.account_type === 'charge'
+    );
+
+    if (relevantEntries.length === 0) {
+      return res.status(400).json({ error: 'Aucune ligne de type Produit (Classe 7) ou Charge (Classe 6) trouvée dans cette transaction' });
     }
 
     const nextNumber = generateDocumentNumber('invoice');
@@ -4079,8 +4241,9 @@ app.post("/api/transactions/:id/generate-invoice", (req, res) => {
 
     const generate = db.transaction(() => {
       let subtotal = 0;
-      for (const entry of revenueEntries) {
-        subtotal += entry.credit;
+      for (const entry of relevantEntries) {
+        // Use the side that has the absolute value (usually credit for sales, debit for purchases)
+        subtotal += Math.max(entry.credit, entry.debit);
       }
 
       const vatAmount = subtotal * (defaultVatRate / 100);
@@ -4107,14 +4270,15 @@ app.post("/api/transactions/:id/generate-invoice", (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
 
-      for (const entry of revenueEntries) {
+      for (const entry of relevantEntries) {
+        const itemAmount = Math.max(entry.credit, entry.debit);
         insertItem.run(
           newInvoiceId,
           transaction.description + (entry.account_code ? ` (${entry.account_code})` : ''),
           1,
-          entry.credit,
+          itemAmount,
           defaultVatRate,
-          entry.credit * (1 + defaultVatRate / 100),
+          itemAmount * (1 + defaultVatRate / 100),
           entry.account_code
         );
       }
@@ -5712,6 +5876,52 @@ app.get("/api/reports/profit-loss", (req, res) => {
   }
 });
 
+app.get("/api/reports/hr", (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const start = (startDate as string) || '1970-01-01';
+    const end = (endDate as string) || '9999-12-31';
+
+    // 1. Salaries & Bonuses by Department
+    const departmentStats = db.prepare(`
+      SELECT 
+        e.department,
+        COUNT(DISTINCT e.id) as employee_count,
+        SUM(p.base_salary) as total_base_salary,
+        SUM(p.bonuses) as total_bonuses,
+        SUM(p.deductions) as total_deductions,
+        SUM(p.net_salary) as total_net_salary
+      FROM payslips p
+      JOIN employees e ON p.employee_id = e.id
+      JOIN payroll_periods pp ON p.period_id = pp.id
+      WHERE pp.status IN ('validated', 'paid')
+      GROUP BY e.department
+    `).all();
+
+    // 2. Employee specific bonus and deductions history (used to track primes/heures sup)
+    const employeeBonuses = db.prepare(`
+      SELECT 
+        e.id,
+        e.first_name,
+        e.last_name,
+        e.department,
+        pp.month,
+        pp.year,
+        p.bonuses,
+        p.details
+      FROM payslips p
+      JOIN employees e ON p.employee_id = e.id
+      JOIN payroll_periods pp ON p.period_id = pp.id
+      WHERE pp.status IN ('validated', 'paid') AND p.bonuses > 0
+      ORDER BY pp.year DESC, pp.month DESC
+    `).all();
+
+    res.json({ departmentStats, employeeBonuses });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 app.get("/api/reports/custom", (req, res) => {
   const { type, startDate, endDate, accountCodes, detailed } = req.query;
   
@@ -5982,7 +6192,6 @@ app.get("/api/tax/summary", (req, res) => {
     // 2. Payroll Taxes (from payslips in that period)
     const payrollTaxes = db.prepare(`
       SELECT 
-        SUM(CASE WHEN tr.code = 'CNPS_RET_SAL' THEN 1 ELSE 0 END * 0) as dummy, -- Placeholder for complex logic
         p.details
       FROM payslips p
       JOIN payroll_periods pp ON p.period_id = pp.id

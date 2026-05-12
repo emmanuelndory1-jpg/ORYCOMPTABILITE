@@ -27,9 +27,10 @@ import {
   ExternalLink, 
   FileX, 
   Edit,
-  Pencil
+  Pencil,
+  Brain,
+  Maximize
 } from 'lucide-react';
-import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { sanitizeText, formatCurrencyPDF } from '@/lib/pdfUtils';
@@ -148,6 +149,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [isListening, setIsListening] = useState(false);
   const [lastAiPrediction, setLastAiPrediction] = useState<InvoiceAnalysis | null>(null);
   const [lastAiImage, setLastAiImage] = useState<string | null>(null);
+  const [showImagePreview, setShowImagePreview] = useState(true);
   const [currentView, setCurrentView] = useState<'active' | 'trash'>('active');
   const magicInputRef = useRef<HTMLInputElement>(null);
   const descriptionInputRef = useRef<HTMLInputElement>(null);
@@ -817,7 +819,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
       const file = files[0];
-      if (file.type.startsWith('image/')) {
+      if (file.type.startsWith('image/') || file.type === 'application/pdf') {
         const useAI = await confirm("Voulez-vous qu'Ory analyse cette facture pour pré-remplir les champs ?");
         if (useAI) {
           await processFileForAI(file);
@@ -845,7 +847,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       const base64 = (reader.result as string).split(',')[1];
       const newUrl = `data:${file.type};base64,${base64}`;
       setDocumentUrls(prev => [...prev, newUrl]);
-      await performAIAnalysis(base64, sType);
+      await performAIAnalysis(base64, sType, file.type);
     };
     reader.readAsDataURL(file);
   };
@@ -863,8 +865,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       // Adding attachments
       const newFiles = Array.from(files);
       
-      // If it's an image and we are in the modal, ask to analyze
-      if (isModalOpen && newFiles.length > 0 && newFiles[0].type.startsWith('image/')) {
+      // If it's an image or PDF and we are in the modal, ask to analyze
+      if (isModalOpen && newFiles.length > 0 && (newFiles[0].type.startsWith('image/') || newFiles[0].type === 'application/pdf')) {
         const file = newFiles[0];
         const useAI = await confirm("Voulez-vous qu'Ory analyse ce document pour pré-remplir les champs de la transaction ?");
         
@@ -1009,9 +1011,9 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
-  const performAIAnalysis = async (base64: string, sType: 'vente' | 'achat') => {
+  const performAIAnalysis = async (base64: string, sType: 'vente' | 'achat', mimeType: string = 'image/jpeg') => {
     try {
-      const data = await analyzeInvoice(base64, sType, companySettings?.vat_settings || []);
+      const data = await analyzeInvoice(base64, sType, companySettings?.vat_settings || [], mimeType);
       
       if (!data) throw new Error("L'analyse IA a échoué");
 
@@ -1080,6 +1082,51 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       setScanType(null);
       setIsScanning(false);
     }
+  };
+
+  const applyDetailedItemsToEntries = () => {
+    if (!lastAiPrediction || !lastAiPrediction.items || lastAiPrediction.items.length === 0) return;
+
+    const sType = operationType.includes('vente') ? 'vente' : 'achat';
+    const newEntries: any[] = [];
+    
+    // Total for third party line
+    let totalTTC = 0;
+
+    // Create lines for each item
+    lastAiPrediction.items.forEach(item => {
+      totalTTC += item.total;
+      newEntries.push({
+        account_code: item.account_suggestion || (sType === 'achat' ? '601100' : '701100'),
+        debit: sType === 'achat' ? item.total : 0,
+        credit: sType === 'vente' ? item.total : 0,
+        description: item.description
+      });
+    });
+
+    // Add VAT line if present
+    if (lastAiPrediction.amount_tva > 0) {
+      const vatCode = sType === 'achat' ? '445200' : '443100';
+      newEntries.push({
+        account_code: vatCode,
+        debit: sType === 'achat' ? lastAiPrediction.amount_tva : 0,
+        credit: sType === 'vente' ? lastAiPrediction.amount_tva : 0,
+        description: 'TVA extraite'
+      });
+      totalTTC += lastAiPrediction.amount_tva;
+    }
+
+    // Add third party line
+    const thirdPartyCode = selectedThirdParty || (sType === 'achat' ? '401100' : '411100');
+    newEntries.push({
+      account_code: thirdPartyCode,
+      debit: sType === 'vente' ? totalTTC : 0,
+      credit: sType === 'achat' ? totalTTC : 0,
+      description: `Réglement ${lastAiPrediction.third_party || 'tiers'}`
+    });
+
+    setEntries(newEntries);
+    dialogAlert("Les écritures ont été détaillées par article.", "success");
   };
 
   const handleDeleteAttachment = async (id: number) => {
@@ -1318,7 +1365,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
       const entriesToSave = entries;
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -1787,6 +1834,13 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                 ref={importInputRef} 
                 onChange={onImportFileChange} 
                 accept=".xlsx, .xls, .csv" 
+                className="hidden" 
+              />
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                accept="image/*,application/pdf" 
                 className="hidden" 
               />
               <button 
@@ -2391,6 +2445,26 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                 
                 <div className="flex items-center gap-4">
                   <div className="flex bg-slate-100 dark:bg-slate-800 p-1.5 rounded-2xl">
+                    <Link
+                      to="/ai-training"
+                      className="px-4 py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center gap-2 text-brand-green hover:bg-brand-green/10"
+                      title="Voir comment l'IA apprend de vos corrections"
+                    >
+                      <Brain size={14} />
+                      <span className="hidden lg:inline">Lab IA</span>
+                    </Link>
+                    {lastAiImage && (
+                      <button
+                        onClick={() => setShowImagePreview(!showImagePreview)}
+                        className={cn(
+                          "px-6 py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all flex items-center gap-2",
+                          showImagePreview ? "bg-brand-green text-white shadow-lg" : "text-slate-500 dark:text-slate-400"
+                        )}
+                      >
+                        <FileText size={14} />
+                        {showImagePreview ? "Inputs" : "Aperçu"}
+                      </button>
+                    )}
                     <button 
                       onClick={() => setMode('guided')}
                       className={cn(
@@ -2581,6 +2655,71 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                   />
                   {errors.description && <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-1 font-bold uppercase tracking-tight">{errors.description}</p>}
                 </div>
+
+                {/* OCR Items Display */}
+                {lastAiPrediction?.items && lastAiPrediction.items.length > 0 && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="p-6 bg-brand-green/5 dark:bg-brand-green/10 rounded-3xl border border-brand-green/10 dark:border-brand-green/20"
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-brand-green/10 text-brand-green rounded-lg">
+                          <FilePlus size={16} />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-brand-green">Articles extraits par l'IA</span>
+                          {lastAiPrediction.confidence !== undefined && (
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <div className={`w-1 h-1 rounded-full ${lastAiPrediction.confidence > 80 ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                              <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Confiance : {lastAiPrediction.confidence}%</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <button 
+                        onClick={applyDetailedItemsToEntries}
+                        className="text-[9px] font-black uppercase tracking-widest bg-brand-green text-white px-3 py-1.5 rounded-xl shadow-lg shadow-brand-green/20 hover:scale-105 transition-transform"
+                      >
+                        Détailler les écritures
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      {lastAiPrediction.items.map((item, idx) => (
+                        <div key={idx} className="flex justify-between items-center bg-white/50 dark:bg-slate-900/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-800">
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold text-slate-900 dark:text-white">{item.description}</span>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Qte: {item.quantity}</span>
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">PU: {formatCurrency(item.unit_price, transactionCurrency)}</span>
+                              {item.account_suggestion && (
+                                <span className="text-[9px] font-black text-brand-green uppercase tracking-widest bg-brand-green/5 px-1.5 py-0.5 rounded">
+                                  {item.account_suggestion}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs font-black text-slate-900 dark:text-white font-display">
+                              {formatCurrency(item.total, transactionCurrency)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 mt-6">
+                      <div className="p-3 bg-white/30 dark:bg-slate-900/30 rounded-2xl border border-slate-100/50 dark:border-slate-800/50">
+                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Total HT extrait</div>
+                        <div className="text-sm font-black text-slate-900 dark:text-white">{formatCurrency(lastAiPrediction.amount_ht, transactionCurrency)}</div>
+                      </div>
+                      <div className="p-3 bg-white/30 dark:bg-slate-900/30 rounded-2xl border border-slate-100/50 dark:border-slate-800/50">
+                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Total TTC extrait</div>
+                        <div className="text-sm font-black text-slate-900 dark:text-white">{formatCurrency(lastAiPrediction.amount_ttc, transactionCurrency)}</div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
 
                 {/* AI Suggestion Feedback */}
                 {aiSuggestion && (
@@ -3308,79 +3447,174 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             </div>
 
             {/* Right Panel: Summary & Preview */}
-            <div className="w-full md:w-96 bg-slate-50 dark:bg-slate-800/30 p-6 sm:p-10 flex flex-col">
-              <div className="flex-1 space-y-10">
-                <div>
-                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Résumé financier</h3>
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-bold text-slate-500">Montant HT</span>
-                      <span className="text-lg font-black text-slate-900 dark:text-white font-display">
-                        {formatCurrency(amountHT, transactionCurrency)}
-                      </span>
+            <div className="w-full md:w-[450px] bg-slate-50 dark:bg-slate-800/30 p-6 sm:p-10 flex flex-col border-l border-slate-100 dark:border-slate-800">
+              <div className="flex-1 space-y-8 overflow-y-auto pr-2 custom-scrollbar">
+                
+                {lastAiImage && showImagePreview ? (
+                  <div className="space-y-6 animate-in slide-in-from-right duration-500">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Document Scanné</h3>
+                      <button 
+                        onClick={() => setShowImagePreview(false)}
+                        className="text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline"
+                      >
+                        Voir Résumé
+                      </button>
                     </div>
-                    {formConfig.hasVAT && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-bold text-slate-500">TVA ({vatRate}%)</span>
-                        <span className="text-sm font-bold text-slate-900 dark:text-white">
-                          {formatCurrency(amountHT * (vatRate / 100), transactionCurrency)}
-                        </span>
+                    
+                    <div className="relative group rounded-3xl overflow-hidden border-2 border-slate-200 dark:border-slate-700 shadow-2xl bg-white dark:bg-slate-900 group">
+                      <img 
+                        src={lastAiImage} 
+                        alt="Facture" 
+                        className="w-full h-auto object-contain cursor-zoom-in group-hover:scale-[1.02] transition-transform duration-500"
+                        onClick={() => window.open(lastAiImage, '_blank')}
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                        <div className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white">
+                          <Maximize size={24} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {lastAiPrediction && (
+                      <div className="space-y-4">
+                        {/* Compliance Score */}
+                        {lastAiPrediction.compliance_score !== undefined && (
+                          <div className={cn(
+                            "p-5 rounded-[2rem] border-2 flex flex-col gap-3",
+                            lastAiPrediction.compliance_score > 70 
+                              ? "bg-emerald-50/50 border-emerald-100 dark:bg-emerald-950/10 dark:border-emerald-900/20" 
+                              : "bg-amber-50/50 border-amber-100 dark:bg-amber-950/10 dark:border-amber-900/20"
+                          )}>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className={cn(
+                                  "w-2 h-2 rounded-full animate-pulse",
+                                  lastAiPrediction.compliance_score > 70 ? "bg-emerald-500" : "bg-amber-500"
+                                )} />
+                                <span className={cn(
+                                  "text-[10px] font-black uppercase tracking-widest",
+                                  lastAiPrediction.compliance_score > 70 ? "text-emerald-600" : "text-amber-600"
+                                )}>Confiance AI</span>
+                              </div>
+                              <span className="text-xl font-black text-slate-900 dark:text-white font-display">
+                                {lastAiPrediction.compliance_score}%
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+                              <motion.div 
+                                initial={{ width: 0 }}
+                                animate={{ width: `${lastAiPrediction.compliance_score}%` }}
+                                className={cn(
+                                  "h-full transition-all duration-1000",
+                                  lastAiPrediction.compliance_score > 70 ? "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" : "bg-amber-500"
+                                )}
+                              />
+                            </div>
+                            <p className="text-[10px] font-bold text-slate-500 leading-relaxed italic">
+                              {lastAiPrediction.compliance_score > 70 
+                                ? "Ce document semble conforme aux exigences fiscales OHADA (identifiants et taxes détectés)." 
+                                : "Attention : certains éléments légaux semblent manquer ou sont peu lisibles."}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Additional Taxes */}
+                        {lastAiPrediction.tax_details && lastAiPrediction.tax_details.length > 0 && (
+                          <div className="p-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-3">
+                            <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Taxes Additionnelles</span>
+                            {lastAiPrediction.tax_details.map((tax, i) => (
+                              <div key={i} className="flex justify-between items-center text-xs font-bold">
+                                <span className="text-slate-500">{tax.label}</span>
+                                <span className="text-slate-900 dark:text-white font-black">{formatCurrency(tax.amount, transactionCurrency)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
-                    <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight">Total TTC</span>
-                        <span className="text-2xl font-black text-brand-green font-display">
-                          {formatCurrency(amountTTC, transactionCurrency)}
-                        </span>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Résumé financier</h3>
+                        {lastAiImage && (
+                          <button 
+                            onClick={() => setShowImagePreview(true)}
+                            className="text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline"
+                          >
+                            Voir Facture
+                          </button>
+                        )}
                       </div>
-                      {transactionCurrency !== baseCurrency && (
-                        <div className="text-right mt-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            ≈ {formatCurrency(amountTTC * transactionExchangeRate, baseCurrency)}
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-bold text-slate-500">Montant HT</span>
+                          <span className="text-lg font-black text-slate-900 dark:text-white font-display">
+                            {formatCurrency(amountHT, transactionCurrency)}
                           </span>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Aperçu comptable</h3>
-                  <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-6 border border-slate-100 dark:border-slate-800 shadow-xl shadow-slate-200/20 dark:shadow-none space-y-4">
-                    <div className="grid grid-cols-2 gap-4 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 dark:border-slate-800 pb-2">
-                      <span>Compte</span>
-                      <div className="flex justify-between">
-                        <span>Débit</span>
-                        <span>Crédit</span>
+                        {formConfig.hasVAT && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm font-bold text-slate-500">TVA ({vatRate}%)</span>
+                            <span className="text-sm font-bold text-slate-900 dark:text-white">
+                              {formatCurrency(amountHT * (vatRate / 100), transactionCurrency)}
+                            </span>
+                          </div>
+                        )}
+                        <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight">Total TTC</span>
+                            <span className="text-2xl font-black text-brand-green font-display">
+                              {formatCurrency(amountTTC, transactionCurrency)}
+                            </span>
+                          </div>
+                          {transactionCurrency !== baseCurrency && (
+                            <div className="text-right mt-1">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                ≈ {formatCurrency(amountTTC * transactionExchangeRate, baseCurrency)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <div className="space-y-3 max-h-48 overflow-y-auto custom-scrollbar pr-2">
-                      {entries.map((e, i) => (
-                        <div key={i} className="grid grid-cols-2 gap-4 text-xs">
-                          <span className="font-mono font-bold text-slate-600 dark:text-slate-400">{e.account_code || '---'}</span>
-                          <div className="flex justify-between font-black text-slate-900 dark:text-white">
-                            <span>{e.debit > 0 ? formatCurrency(e.debit, transactionCurrency) : ''}</span>
-                            <span>{e.credit > 0 ? formatCurrency(e.credit, transactionCurrency) : ''}</span>
-                          </div>
+
+                    <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
+                      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Aperçu comptable</h3>
+                      <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-6 border border-slate-100 dark:border-slate-800 shadow-xl shadow-slate-200/20 dark:shadow-none space-y-4">
+                        <div className="grid grid-cols-3 gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 dark:border-slate-800 pb-2">
+                          <span className="col-span-1">Compte</span>
+                          <span className="text-right">Débit</span>
+                          <span className="text-right">Crédit</span>
                         </div>
-                      ))}
+                        <div className="space-y-3 max-h-48 overflow-y-auto custom-scrollbar pr-2">
+                          {entries.map((e, i) => (
+                            <div key={i} className="grid grid-cols-3 gap-2 text-[11px]">
+                              <span className="col-span-1 font-mono font-bold text-slate-600 dark:text-slate-400">{e.account_code || '---'}</span>
+                              <span className="text-right font-black text-slate-900 dark:text-white">{e.debit > 0 ? formatCurrency(e.debit, transactionCurrency) : ''}</span>
+                              <span className="text-right font-black text-slate-900 dark:text-white">{e.credit > 0 ? formatCurrency(e.credit, transactionCurrency) : ''}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="pt-3 border-t border-slate-50 dark:border-slate-800 flex justify-between items-center">
+                          <span className={cn(
+                            "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full",
+                            isBalanced ? "bg-brand-green/10 text-brand-green" : "bg-rose-50 text-rose-500"
+                          )}>
+                            {isBalanced ? 'Équilibré' : 'Déséquilibré'}
+                          </span>
+                          {!isBalanced && (
+                            <span className="text-[10px] font-black text-rose-500">
+                              Diff: {formatCurrency(Math.abs(entries.reduce((acc, e) => acc + (Number(e.debit) - Number(e.credit)), 0)), transactionCurrency)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="pt-3 border-t border-slate-50 dark:border-slate-800 flex justify-between items-center">
-                      <span className={cn(
-                        "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full",
-                        isBalanced ? "bg-brand-green/10 text-brand-green" : "bg-rose-50 text-rose-500"
-                      )}>
-                        {isBalanced ? 'Équilibré' : 'Déséquilibré'}
-                      </span>
-                      {!isBalanced && (
-                        <span className="text-[10px] font-black text-rose-500">
-                          Diff: {formatCurrency(Math.abs(entries.reduce((acc, e) => acc + (e.debit - e.credit), 0)), transactionCurrency)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                  </>
+                )}
               </div>
 
               <div className="mt-10 space-y-4">

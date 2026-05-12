@@ -8,7 +8,6 @@ import {
   Users, CreditCard, Smartphone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useLanguage } from '@/context/LanguageContext';

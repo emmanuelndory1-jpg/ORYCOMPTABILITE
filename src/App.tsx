@@ -97,13 +97,16 @@ function DashboardLayout() {
 
   const fetchCompanyStatus = async () => {
     // Safety check to prevent infinite loading if the network is totally blocked
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Fetch timeout')), 15000));
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Fetch timeout')), 45000));
     
     try {
       const resPromise = apiFetch('/api/company/status');
       const res = await Promise.race([resPromise, timeoutPromise]) as Response;
       
-      if (!res.ok) throw new Error('Failed to fetch status');
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => 'No error body');
+        throw new Error(`Failed to fetch status: ${res.status} ${errorText}`);
+      }
       const data = await res.json();
       setIsCompanyCreated(data.created);
       
@@ -198,7 +201,7 @@ function DashboardLayout() {
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden pb-20 md:pb-0 relative">
         <div className="hidden md:block">
-          <Header logoUrl={companySettings?.logo_url} companyName={companySettings?.name} />
+          <Header logoUrl={companySettings?.logo_url} />
         </div>
         
         {/* Mobile Header */}
@@ -250,15 +253,16 @@ export default function App() {
     const initCsrf = async (retries = 3) => {
       for (let i = 0; i < retries; i++) {
         try {
-    const res = await apiFetch('/api/csrf-token');
-    if (res.ok) {
-      const { token } = await res.json();
-      if (token) {
-        localStorage.setItem('XSRF-TOKEN', token);
-        console.log('CSRF initialized');
-      }
-      return;
-    }
+          const res = await apiFetch('/api/csrf-token');
+          if (res.ok) {
+            const data = await res.json();
+            const token = data.csrfToken || data.token;
+            if (token) {
+              localStorage.setItem('XSRF-TOKEN', token);
+              console.log('CSRF initialized');
+            }
+            return;
+          }
         } catch (e) {
           if (i === retries - 1) console.error("Final CSRF init failure:", e);
           else console.warn(`CSRF init retry ${i + 1}/${retries}...`);

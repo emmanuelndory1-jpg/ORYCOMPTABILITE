@@ -71,6 +71,15 @@ export function BankReconciliation() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isCsvMappingModalOpen, setIsCsvMappingModalOpen] = useState(false);
+  const [csvData, setCsvData] = useState<any[]>([]);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvMapping, setCsvMapping] = useState({
+    date: '',
+    description: '',
+    amount: '',
+    reference: ''
+  });
   const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
   const [isCreateEntryModalOpen, setIsCreateEntryModalOpen] = useState(false);
   const [isManualMatchModalOpen, setIsManualMatchModalOpen] = useState(false);
@@ -368,57 +377,83 @@ export function BankReconciliation() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!selectedAccountId) {
+      dialogAlert("Veuillez sélectionner un compte bancaire avant d'importer un relevé.", "info");
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setIsUploading(true);
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
       complete: (results) => {
-        try {
-          const parsed = results.data.map((row: any, index) => {
-            const amountStr = row['Amount'] || row['Montant'] || row['Debit'] || row['Credit'] || Object.values(row)[2];
-            let amount = 0;
-            if (amountStr) {
-              const cleanStr = String(amountStr).replace(/[^\d.,-]/g, '').replace(',', '.');
-              amount = parseFloat(cleanStr);
-            }
-
-            return {
-              date: row['Date'] || Object.values(row)[0] || new Date().toISOString().split('T')[0],
-              description: row['Description'] || row['Libellé'] || Object.values(row)[1] || 'Transaction inconnue',
-              amount: amount,
-              reference: row['Reference'] || row['Référence'] || ''
-            };
-          });
-
-          if (selectedAccountId) {
-            apiFetch(`/api/bank-accounts/${selectedAccountId}/import`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ transactions: parsed })
-            }).then(res => {
-              if (res.ok) {
-                fetchTransactions(selectedAccountId);
-                dialogAlert(`${parsed.length} transactions importées.`, "success");
-              }
-            }).catch(err => {
-              console.error(err);
-              dialogAlert("Erreur lors de l'importation.", "error");
-            });
-          }
-        } catch (error) {
-          console.error("Erreur de parsing CSV:", error);
-          dialogAlert("Erreur lors de la lecture du fichier CSV.", "error");
-        } finally {
-          setIsUploading(false);
-          if (fileInputRef.current) fileInputRef.current.value = '';
+        if (results.data && results.data.length > 0) {
+          const headers = Object.keys(results.data[0]);
+          setCsvHeaders(headers);
+          setCsvData(results.data);
+          
+          // Try to auto-map
+          const mapping = {
+            date: headers.find(h => /date/i.test(h)) || headers[0],
+            description: headers.find(h => /desc|libel|motif/i.test(h)) || headers[1],
+            amount: headers.find(h => /montant|amount|debit|valeur/i.test(h)) || headers[2],
+            reference: headers.find(h => /ref/i.test(h)) || ''
+          };
+          setCsvMapping(mapping);
+          setIsCsvMappingModalOpen(true);
         }
+        setIsUploading(false);
       },
       error: (error) => {
         console.error("Erreur PapaParse:", error);
-        dialogAlert("Erreur lors de l'importation.", "error");
+        dialogAlert("Erreur lors de la lecture du fichier CSV.", "error");
         setIsUploading(false);
       }
     });
+  };
+
+  const confirmCsvImport = async () => {
+    if (!selectedAccountId || csvData.length === 0) return;
+
+    setIsUploading(true);
+    try {
+      const parsed = csvData.map(row => {
+        const amountStr = row[csvMapping.amount];
+        let amount = 0;
+        if (amountStr !== undefined) {
+          const cleanStr = String(amountStr).replace(/[^\d.,-]/g, '').replace(',', '.');
+          amount = parseFloat(cleanStr);
+        }
+
+        return {
+          date: row[csvMapping.date] || new Date().toISOString().split('T')[0],
+          description: row[csvMapping.description] || 'Transaction inconnue',
+          amount: amount,
+          reference: csvMapping.reference ? row[csvMapping.reference] : ''
+        };
+      });
+
+      const res = await apiFetch(`/api/bank-accounts/${selectedAccountId}/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: parsed })
+      });
+
+      if (res.ok) {
+        fetchTransactions(selectedAccountId);
+        setIsCsvMappingModalOpen(false);
+        dialogAlert(`${parsed.length} transactions importées avec succès.`, "success");
+      } else {
+        throw new Error("Erreur serveur lors de l'import");
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert("Erreur lors de l'importation des transactions.", "error");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const handleReconcile = async () => {
@@ -1360,6 +1395,147 @@ export function BankReconciliation() {
                 className="px-6 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 font-bold hover:bg-slate-100 dark:hover:bg-slate-700"
               >
                 Fermer
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* CSV Mapping Modal */}
+      {isCsvMappingModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white dark:bg-slate-800 rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+          >
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-indigo-600 text-white">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Upload /> Mapage des colonnes CSV
+              </h2>
+              <button onClick={() => setIsCsvMappingModalOpen(false)} className="hover:rotate-90 transition-transform">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 flex flex-col md:flex-row gap-8">
+              {/* Mapping Controls */}
+              <div className="md:w-1/3 space-y-6">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-4">Assigner les colonnes</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" /> Date
+                      </label>
+                      <select 
+                        value={csvMapping.date}
+                        onChange={e => setCsvMapping({...csvMapping, date: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" /> Description / Libellé
+                      </label>
+                      <select 
+                        value={csvMapping.description}
+                        onChange={e => setCsvMapping({...csvMapping, description: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" /> Montant
+                      </label>
+                      <select 
+                        value={csvMapping.amount}
+                        onChange={e => setCsvMapping({...csvMapping, amount: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-slate-400" /> Référence (Optionnel)
+                      </label>
+                      <select 
+                        value={csvMapping.reference}
+                        onChange={e => setCsvMapping({...csvMapping, reference: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="">Aucune</option>
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800">
+                  <p className="text-xs text-indigo-700 dark:text-indigo-300 leading-relaxed font-medium">
+                    <AlertCircle size={14} className="inline mr-1" />
+                    Assurez-vous que le format de date est valide et que les montants utilisent un point (.) ou une virgule (,) comme séparateur décimal.
+                  </p>
+                </div>
+              </div>
+
+              {/* Data Preview */}
+              <div className="md:w-2/3 space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Aperçu (10 premières lignes)</h3>
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{csvData.length} lignes trouvées</span>
+                </div>
+                <div className="border border-slate-100 dark:border-slate-700 rounded-2xl overflow-hidden shadow-inner">
+                  <div className="overflow-x-auto max-h-[400px] custom-scrollbar">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900 z-10 shadow-sm border-b border-slate-100 dark:border-slate-700">
+                        <tr>
+                          {csvHeaders.map(h => (
+                            <th key={h} className={cn(
+                              "px-3 py-2 whitespace-nowrap font-bold",
+                              Object.values(csvMapping).includes(h) ? "text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-500/10" : "text-slate-400"
+                            )}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                        {csvData.slice(0, 10).map((row, i) => (
+                          <tr key={i} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+                            {csvHeaders.map(h => (
+                              <td key={h} className="px-3 py-2 whitespace-nowrap text-slate-600 dark:text-slate-400">
+                                {row[h]}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-700 flex justify-end gap-3">
+              <button
+                onClick={() => setIsCsvMappingModalOpen(false)}
+                className="px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 font-bold hover:bg-white dark:hover:bg-slate-800 transition-all shadow-sm"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={confirmCsvImport}
+                disabled={isUploading}
+                className="px-8 py-2.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 flex items-center gap-2"
+              >
+                {isUploading ? <RefreshCw className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
+                Confirmer l'importation
               </button>
             </div>
           </motion.div>

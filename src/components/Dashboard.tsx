@@ -10,25 +10,25 @@ import {
   ArrowUpRight, ArrowDownRight, Wallet, CreditCard, Users, FileText, Plus, FileSpreadsheet,
   Target, ChevronRight, MessageSquareText, PieChart as PieChartIcon, History as HistoryIcon,
   Activity, BarChart3, PieChart, Settings as SettingsIcon, Check, Calculator, Shield, Briefcase, Building2,
-  ShoppingBag, ShieldCheck, Brain, Sparkles, Zap, Mic, MicOff
+  ShoppingBag, ShieldCheck, Brain, Sparkles, Zap, Mic, MicOff, Repeat, Percent
 } from 'lucide-react';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useFiscalYear } from '@/context/FiscalYearContext';
+import { useLanguage } from '@/context/LanguageContext';
 import { apiFetch } from '../lib/api';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { useOutletContext, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { exportToCSV } from '@/lib/exportUtils';
 import { DashboardCustomizer, type WidgetConfig } from './DashboardCustomizer';
 import { getQuickInsight, parseNaturalLanguageEntry } from '../services/geminiService';
-import { Logo } from './Logo';
 
 export function Dashboard() {
   const { formatCurrency } = useCurrency();
   const { activeYear } = useFiscalYear();
+  const { t } = useLanguage();
   const navigate = useNavigate();
-  const { companySettings } = useOutletContext<{ companySettings: any }>();
   const [stats, setStats] = useState({
     turnover: 0,
     expenses: 0,
@@ -57,6 +57,7 @@ export function Dashboard() {
   const [quickEntry, setQuickEntry] = useState('');
   const [processingQuickEntry, setProcessingQuickEntry] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [pendingRecurringCount, setPendingRecurringCount] = useState(0);
 
   const startListening = () => {
     if (!('webkitSpeechRecognition' in window)) {
@@ -138,7 +139,7 @@ export function Dashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes] = await Promise.all([
+        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes] = await Promise.all([
           apiFetch('/api/dashboard/stats'),
           apiFetch('/api/dashboard/charts'),
           apiFetch('/api/dashboard/cashflow-forecast'),
@@ -147,10 +148,11 @@ export function Dashboard() {
           apiFetch('/api/dashboard/budget-vs-actual'),
           apiFetch('/api/dashboard/ratios'),
           apiFetch('/api/assets/stats'),
-          apiFetch('/api/audit-logs?limit=5')
+          apiFetch('/api/audit-logs?limit=5'),
+          apiFetch('/api/recurring-transactions/due-count')
         ]);
         
-        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes];
+        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes];
         const allOk = responses.every(r => r.ok);
         
         if (!allOk) {
@@ -161,7 +163,7 @@ export function Dashboard() {
           return;
         }
 
-        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData, auditData] = await Promise.all(
+        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData, auditData, recurringData] = await Promise.all(
           responses.map(r => r.json())
         );
         
@@ -174,6 +176,7 @@ export function Dashboard() {
         setBudgetVsActual(budgetData);
         setRatios(ratiosData);
         setAssetStats(assetStatsData);
+        setPendingRecurringCount(recurringData.count || 0);
         setLoading(false);
 
         // Fetch AI insight with more context
@@ -307,49 +310,75 @@ export function Dashboard() {
     <div className="space-y-16 pb-24 relative">
       <div className="atmospheric-bg" />
       
+      {/* Pending Recurring Transactions Alert */}
+      <AnimatePresence>
+        {pendingRecurringCount > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            onClick={() => navigate('/recurring')}
+            className="cursor-pointer bg-brand-green/10 border border-brand-green/20 p-4 rounded-2xl flex items-center justify-between group hover:bg-brand-green/20 transition-all"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-brand-green text-white rounded-xl shadow-lg shadow-brand-green/30">
+                <Repeat size={18} className="animate-spin-slow" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-900">
+                  {pendingRecurringCount} {pendingRecurringCount === 1 ? 'écriture récurrente est' : 'écritures récurrentes sont'} en attente
+                </p>
+                <p className="text-xs text-slate-500">Cliquez pour les traiter maintenant et automatiser votre comptabilité.</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-brand-green font-black uppercase text-[10px] tracking-widest">
+              Gérer <ChevronRight size={14} className="group-hover:translate-x-1 transition-transform" />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Editorial Header - Recipe 2 & 11 inspired */}
       <div className="relative pt-12 pb-16 overflow-hidden">
         <div className="absolute top-0 right-0 w-2/3 h-full bg-[radial-gradient(circle_at_right,_rgba(16,185,129,0.05)_0%,_transparent_70%)] pointer-events-none" />
         
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-12 relative z-10">
-          <div className="flex-1 flex flex-col md:flex-row items-center md:items-start gap-8">
-            {companySettings?.logo_url && (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.8, rotate: -5 }}
-                animate={{ opacity: 1, scale: 1, rotate: 0 }}
-                transition={{ duration: 0.8, ease: "easeOut" }}
-                className="w-32 h-32 md:w-40 md:h-40 rounded-[2.5rem] bg-white dark:bg-slate-900 shadow-2xl flex items-center justify-center p-6 border border-slate-100 dark:border-white/10 shrink-0 group relative overflow-hidden"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-brand-green/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-                <Logo className="w-full h-full" showText={false} src={companySettings.logo_url} />
-              </motion.div>
-            )}
+          <div className="space-y-8 max-w-4xl">
+            <div className="flex items-center gap-6 animate-in fade-in slide-in-from-left-4 duration-700">
+              <span className="px-4 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-[10px] font-black uppercase tracking-[0.3em] rounded-full border border-slate-200 dark:border-slate-700">
+                Ory Intelligence v4.0
+              </span>
+              <div className="flex items-center gap-2 text-brand-green">
+                <div className="w-2 h-2 rounded-full bg-current animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
+                <span className="text-[10px] font-black uppercase tracking-widest">Système Opérationnel</span>
+              </div>
+            </div>
             
-            <div className="space-y-8 flex-1 text-center md:text-left">
-              <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 sm:gap-6 animate-in fade-in slide-in-from-left-4 duration-700">
-                <span className="px-4 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-[10px] font-black uppercase tracking-[0.3em] rounded-full border border-slate-200 dark:border-slate-700 shadow-sm">
-                  Ory Intelligence v4.0
-                </span>
-                <div className="flex items-center gap-2 text-brand-green">
-                  <div className="w-2 h-2 rounded-full bg-current animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
-                  <span className="text-[10px] font-black uppercase tracking-widest">{companySettings?.name || "Système Opérationnel"}</span>
-                </div>
+            <div className="space-y-4">
+              <h1 className="text-4xl sm:text-8xl md:text-[120px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                Tableau de <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 italic drop-shadow-sm">Bord</span>
+              </h1>
+              <div className="flex items-center gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
+                <div className="h-px w-24 bg-brand-green/30" />
+                <p className="text-[12px] font-black text-slate-400 uppercase tracking-[0.6em] whitespace-nowrap">Gestion Intelligence & Croissance</p>
+                <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
               </div>
-              
-              <div className="space-y-4">
-                <h1 className="text-4xl sm:text-6xl md:text-[100px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
-                  Business <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 italic drop-shadow-sm">Review</span>
-                </h1>
-                <div className="flex items-center justify-center md:justify-start gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
-                  <div className="h-px w-24 bg-brand-green/30" />
-                  <p className="text-[12px] font-black text-slate-400 uppercase tracking-[0.6em] whitespace-nowrap">Gestion Intelligence & Croissance</p>
-                  <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-                </div>
-              </div>
+            </div>
+            
+            <div className="text-2xl text-slate-500 dark:text-slate-400 font-medium leading-tight max-w-2xl animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
+              Transformez vos données comptables en <span className="text-slate-900 dark:text-slate-100 font-black relative inline-block">
+                levier stratégique
+                <motion.span 
+                  initial={{ width: 0 }}
+                  animate={{ width: '100%' }}
+                  transition={{ delay: 1, duration: 1.5 }}
+                  className="absolute -bottom-1 left-0 h-1 bg-brand-green/20 rounded-full"
+                />
+              </span>.
             </div>
           </div>
           
-          <div className="flex flex-wrap justify-center lg:justify-end gap-4 animate-in fade-in slide-in-from-right-4 duration-1000 delay-500">
+          <div className="flex flex-wrap gap-4 animate-in fade-in slide-in-from-right-4 duration-1000 delay-500">
             <button 
               onClick={() => setIsCustomizerOpen(true)}
               className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 dark:hover:bg-slate-800 transition-all duration-500 shadow-sm flex items-center gap-4 active:scale-95"
@@ -377,14 +406,14 @@ export function Dashboard() {
 
       {/* Quick Navigation - New Feature */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
-        <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+        <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
           {[
             { label: 'Journal', icon: Calculator, path: '/journal', color: 'text-blue-500', bg: 'bg-blue-500/10' },
             { label: 'Tiers', icon: Users, path: '/third-parties', color: 'text-brand-gold', bg: 'bg-brand-gold/10' },
             { label: 'Trésorerie', icon: Wallet, path: '/treasury', color: 'text-brand-green', bg: 'bg-brand-green/10' },
             { label: 'Factures', icon: FileText, path: '/invoicing', color: 'text-purple-500', bg: 'bg-purple-500/10' },
-            { label: 'Fiscalité', icon: ShieldCheck, path: '/tax-report', color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
-            { label: 'Rapports', icon: BarChart3, path: '/financials', color: 'text-rose-500', bg: 'bg-rose-500/10' },
+            { label: 'Paie & RH', icon: Users, path: '/payroll', color: 'text-orange-500', bg: 'bg-orange-500/10' },
+            { label: 'Récurrences', icon: Repeat, path: '/recurring', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
           ].map((item, idx) => (
             <motion.button
               key={item.path}

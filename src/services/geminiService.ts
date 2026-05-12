@@ -9,6 +9,52 @@ if (!apiKey) {
 
 const ai = new GoogleGenAI({ apiKey: apiKey || "" });
 
+/**
+ * Global lock to ensure a minimum interval between requests and handle queuing.
+ */
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 1000; // 1 second minimum gap between requests
+
+/**
+ * Helper to wrap AI requests with exponential backoff and retry logic for 429 errors.
+ */
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  let lastError: any;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Ensure minimum interval between requests
+      const now = Date.now();
+      const timeSinceLastRequest = now - lastRequestTime;
+      if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+        await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL - timeSinceLastRequest));
+      }
+      
+      lastRequestTime = Date.now();
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      const errorString = error?.message || String(error);
+      const isRateLimit = errorString.includes('429') || 
+                         errorString.includes('RESOURCE_EXHAUSTED') ||
+                         errorString.includes('quota');
+
+      if (isRateLimit && attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 2000 + Math.random() * 1000; // Increased base delay
+        console.warn(`Gemini rate limited (429). Retrying in ${Math.round(delay)}ms... (Attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      // If it's a 429 and we're out of retries, throw a descriptive error
+      if (isRateLimit) {
+        throw new Error("L'IA est actuellement surchargée. Veuillez patienter un instant avant de réessayer.");
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 export interface AISuggestion {
   entries: {
     account_code: string;
@@ -32,6 +78,14 @@ export interface InvoiceAnalysis {
   operation_type: string;
   invoice_number?: string;
   currency?: string;
+  confidence?: number;
+  items?: {
+    description: string;
+    quantity: number;
+    unit_price: number;
+    total: number;
+    account_suggestion?: string;
+  }[];
   tax_details?: {
     label: string;
     amount: number;
@@ -67,7 +121,8 @@ export const parseNaturalLanguageEntry = async (text: string): Promise<NaturalLa
       - Si une date est mentionnée (ex: 'hier', 'le 12'), convertissez-la en YYYY-MM-DD. Sinon, utilisez la date actuelle.
       - Associez l'opération au type le plus proche parmis la liste autorisée : achat_marchandises, achat_services, frais_generaux, vente_marchandises, vente_services, paiement_fournisseur, encaissement_client, virement_interne, depot_especes, retrait_especes, frais_bancaires, paiement_impots, salaire, loyer, remboursement_emprunt.
     `;
-    const response = await ai.models.generateContent({
+    
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
@@ -93,7 +148,7 @@ export const parseNaturalLanguageEntry = async (text: string): Promise<NaturalLa
           required: ["amount", "operationType", "paymentMode", "description"]
         }
       }
-    });
+    }));
 
     const result = response.text;
     if (result) {
@@ -108,7 +163,8 @@ export const parseNaturalLanguageEntry = async (text: string): Promise<NaturalLa
 export const analyzeInvoice = async (
   imageBase64: string,
   scanType: 'vente' | 'achat',
-  vatSettings: any[]
+  vatSettings: any[],
+  mimeType: string = "image/jpeg"
 ): Promise<InvoiceAnalysis | null> => {
   try {
     const vatContext = vatSettings.length > 0 
@@ -124,39 +180,54 @@ export const analyzeInvoice = async (
       Analyse cette facture ou reçu dans le contexte de l'espace OHADA (UEMOA/CEMAC). ${typeContext}
       Ta priorité absolue est l'exactitude des informations extraites malgré la présence possible de tampons, signatures ou logos.
       
-      CONSIGNES SPÉCIFIQUES AFRIQUE :
-      - Identifiants : Recherche activement les mentions RCCM, IFU, NINEA, NIF ou Agrément.
-      - Taxes : Identifie la TVA (18% ou 19.25%) mais aussi les Timbres Fiscaux, Précomptes ou AIR.
-      - Devises : Par défaut XOF (CFA) sauf mention contraire explicite.
-      - Langues : Gère les mentions en Français et Anglais.
+      CONSIGNES GÉOGRAPHIQUES (AFRIQUE DE L'OUEST ET CENTRALE) :
+      - Identifiants : Recherche activement les mentions RCCM, IFU, NINEA, NIF ou Agrément. Extraits-les fidèlement.
+      - Taxes : Identifie précisément la TVA (18% au Sénégal/Burkina, 19.25% au Cameroun, etc.). 
+      - Timbres : Identifie les Timbres Fiscaux (souvent 100, 200, 500, 1000 FCFA), les Précomptes ou Acomptes BIC/AIR.
+      - Tiers : Détermine si c'est une grande entreprise (Senelec, Orange, CEET...) ou un commerçant local.
+      - Devises : Par défaut XOF (CFA) sauf mention contraire explicite (EUR, USD, GNF, CDF).
+      
+      CONSIGNES COMPTABLES SYSCOHADA RÉVISÉ :
+      - Charges : Utilise les comptes de classe 6 (601: Marchandises, 602: Fournitures, 604: Matériel, 605: Électricité, 61: Transport, 62: Services extérieurs, 63: Frais divers).
+      - Produits : Utilise les comptes de classe 7 (701: Vente marchandises, 706: Services).
+      - TVA : 4452 (Récupérable sur achats) ou 4431 (Facturée sur ventes).
+      - Tiers : 4011 (Fournisseurs) ou 4111 (Clients).
+      
+      DÉTAILLAGE EXTRÊME :
+      - Items : Extrais CHAQUE ligne de la facture individuellement. Ne regroupe pas si possible.
+      - Account_suggestion : Pour chaque article, propose un compte SYSCOHADA à 6 chiffres ultra-précis.
+      - Conformité : Évalue si le document est une facture "normale" (NIF présent, TVA distincte) ou un simple reçu informel.
       
       Extrais les informations suivantes au format JSON :
       - date (YYYY-MM-DD)
-      - description (Objet sommaire de la facture)
-      - third_party (Nom de l'entreprise tiers)
+      - description (Libellé professionnel de l'opération)
+      - third_party (Nom complet du tiers)
       - third_party_id (Identifiant fiscal type NIF/IFU/RCCM/NINEA)
-      - amount_ht (Montant Hors Taxes)
-      - amount_tva (Montant de la TVA uniquement)
-      - amount_ttc (Montant Net à Payer)
-      - vat_rate (Taux de TVA, ex: 18)
-      - invoice_number (Numéro de facture)
-      - currency (Devise ISO, ex: XOF)
-      - tax_details (Tableau des autres taxes comme timbre fiscal ou précompte)
-      - compliance_score (0-100 basé sur la présence des mentions légales obligatoires OHADA)
+      - amount_ht (Montant Hors Taxes global)
+      - amount_tva (Montant de la TVA globale)
+      - amount_ttc (Montant TOTAL Net à Payer)
+      - vat_rate (Taux de TVA appliqué, ex: 18)
+      - invoice_number (Numéro de facture ou référence)
+      - currency (Code ISO ex: XOF)
+      - items (Tableau : description, quantity, unit_price, total, account_suggestion)
+      - tax_details (Tableau des autres taxes comme timbre fiscal : label, amount)
+      - compliance_score (0-100 basés sur : presence NIF, date, montants clairs, detail TVA)
       - operation_type (STRICTEMENT : 'achat_marchandises', 'achat_services', 'vente_marchandises', 'vente_services', 'frais_generaux')
-      - entries: Ecritures SYSCOHADA (4452/4431 pour TVA, 6x/7x pour HT, 401/411 pour tiers).
+      - entries: Écritures SYSCOHADA complètes, balancées à 6 chiffres.
+      - confidence: Score 0-100.
       
       ${vatContext}
       
-      Réponds UNIQUEMENT avec le JSON validé.
+      IMPORTANT : Ignore les mentions manuscrites 'PAYÉ' ou les tampons circulaires qui cachent le texte si possible.
+      Réponds UNIQUEMENT avec le JSON.
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3.1-pro-preview",
       contents: {
         parts: [
           { text: prompt },
-          { inlineData: { data: imageBase64.split(',')[1] || imageBase64, mimeType: "image/jpeg" } }
+          { inlineData: { data: imageBase64.split(',')[1] || imageBase64, mimeType } }
         ]
       },
       config: {
@@ -176,6 +247,19 @@ export const analyzeInvoice = async (
             invoice_number: { type: Type.STRING },
             currency: { type: Type.STRING },
             compliance_score: { type: Type.NUMBER },
+            items: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  description: { type: Type.STRING },
+                  quantity: { type: Type.NUMBER },
+                  unit_price: { type: Type.NUMBER },
+                  total: { type: Type.NUMBER },
+                  account_suggestion: { type: Type.STRING }
+                }
+              }
+            },
             tax_details: {
               type: Type.ARRAY,
               items: {
@@ -204,11 +288,12 @@ export const analyzeInvoice = async (
           required: ["date", "description", "third_party", "amount_ht", "amount_tva", "amount_ttc", "vat_rate", "operation_type", "entries"]
         }
       }
-    });
+    }));
 
     if (response.text) {
       return JSON.parse(response.text);
     }
+
     return null;
   } catch (error) {
     console.error("Error analyzing invoice:", error);
@@ -282,7 +367,7 @@ export const suggestJournalEntry = async (
       6. Calculez le montant TTC si une TVA est fournie (TTC = HT * (1 + TVA/100)).
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
@@ -310,7 +395,7 @@ export const suggestJournalEntry = async (
           required: ["entries", "explanation", "confidence"]
         }
       }
-    });
+    }));
 
     if (response.text) {
       return JSON.parse(response.text);
@@ -353,7 +438,7 @@ export const suggestCorrection = async (
       5. Fournissez l'écriture complète corrigée.
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
@@ -381,7 +466,7 @@ export const suggestCorrection = async (
           required: ["entries", "explanation", "confidence"]
         }
       }
-    });
+    }));
 
     if (response.text) {
       return JSON.parse(response.text);
@@ -393,18 +478,11 @@ export const suggestCorrection = async (
   }
 };
 
-let lastInsightCache: { data: string, insight: string } | null = null;
-
 export const getQuickInsight = async (data: any) => {
   try {
-    const dataString = JSON.stringify(data);
-    if (lastInsightCache && lastInsightCache.data === dataString) {
-      return lastInsightCache.insight;
-    }
-
     const systemPrompt = `Tu es un conseiller financier stratégique ORY IA.
     Donne un SEUL conseil financier court, percutant et actionnable (max 18 mots) basé sur ces données actuelles de l'entreprise :
-    ${dataString}
+    ${JSON.stringify(data)}
     
     CONSIGNES :
     - Sois très spécifique. Si tu vois un risque de trésorerie, mentionne-le.
@@ -412,22 +490,15 @@ export const getQuickInsight = async (data: any) => {
     - Utilise un ton professionnel et stratégique.
     - Réponds en Français.`;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: systemPrompt,
-    });
+    }));
 
-    const insight = response.text.trim();
-    lastInsightCache = { data: dataString, insight };
-    return insight;
+    return response.text.trim();
   } catch (error: any) {
-    const errorString = JSON.stringify(error);
-    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
-      console.warn("Gemini API rate limit exceeded for quick insight.");
-      return "Optimisation : Maintenez un suivi rigoureux de vos comptes clients pour sécuriser votre trésorerie ce mois-ci.";
-    }
-    console.error("Error getting quick insight:", error);
-    return null;
+    console.warn("AI Insight temporairement indisponible:", error.message);
+    return "Optimisez vos flux de trésorerie en suivant vos créances de près.";
   }
 };
 
@@ -462,7 +533,7 @@ export const generateAudit = async (auditData: any) => {
     
     Format JSON strictement obligatoire.`;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3.1-pro-preview",
       contents: "Génère l'audit financier complet.",
       config: {
@@ -502,22 +573,10 @@ export const generateAudit = async (auditData: any) => {
           required: ["summary", "healthScore", "strengths", "weaknesses", "recommendations", "ratios"]
         }
       }
-    });
+    }));
 
     return JSON.parse(response.text);
-  } catch (error: any) {
-    const errorString = JSON.stringify(error);
-    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
-      console.warn("Gemini API rate limit exceeded for audit.");
-      return {
-        summary: "Audit momentanément indisponible en raison d'une forte demande. Veuillez réessayer dans quelques minutes.",
-        healthScore: auditData.ca > auditData.charges ? 75 : 45,
-        strengths: ["Continuité d'exploitation"],
-        weaknesses: ["Indisponibilité temporaire du module IA"],
-        recommendations: [{ title: "Ressayer plus tard", description: "Le service d'audit par IA est saturé.", impact: "Bas" }],
-        ratios: [{ name: "Ratio de marge brute", value: auditData.ca > 0 ? Math.round(((auditData.ca - auditData.charges) / auditData.ca) * 100) : 0 }]
-      };
-    }
+  } catch (error) {
     console.error("Error generating audit:", error);
     return null;
   }
@@ -539,7 +598,7 @@ export const getP2PAdvice = async (p2pData: any) => {
     - Sois vigilant sur la trésorerie (ex: suggère de retarder un paiement non critique).
     - Réponds en Français sous forme de tableau de strings.`;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: systemPrompt,
       config: {
@@ -552,15 +611,11 @@ export const getP2PAdvice = async (p2pData: any) => {
           required: ["advices"]
         }
       }
-    });
+    }));
 
     const data = JSON.parse(response.text);
     return data.advices as string[];
-  } catch (error: any) {
-    const errorString = JSON.stringify(error);
-    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
-      return ["Surveillez vos délais de livraison fournisseurs.", "Optimisez la validation des factures reçues."];
-    }
+  } catch (error) {
     console.error("Error getting P2P advice:", error);
     return [];
   }
@@ -610,7 +665,7 @@ export const suggestAccountCode = async (
       RENVOIE UNIQUEMENT UN JSON contenant un tableau 'suggestions' :
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
@@ -636,7 +691,7 @@ export const suggestAccountCode = async (
           required: ["suggestions"]
         }
       }
-    });
+    }));
 
     if (response.text) {
       const data = JSON.parse(response.text);
@@ -659,6 +714,13 @@ export interface TaxDocumentAnalysis {
   amount_ttc: number;
   vat_rate: number;
   currency: string;
+  confidence?: number;
+  items?: {
+    description: string;
+    quantity: number;
+    unit_price: number;
+    total: number;
+  }[];
   accounting_suggestions: {
     account_code: string;
     account_name: string;
@@ -679,7 +741,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
       Analyse ce document fiscal (facture, reçu, avis d'imposition, etc.) pour une entreprise opérant dans la zone OHADA.
       
       TACHES :
-      1. OCR : Extrais toutes les données clés (Date, Numéro, Fournisseur, Montants).
+      1. OCR : Extrais toutes les données clés (Date, Numéro, Fournisseur, Montants, LIGNES D'ARTICLES).
       2. COMPTABILITÉ : Suggère l'écriture comptable complète selon le référentiel SYSCOHADA révisé.
       3. CONFORMITÉ : Vérifie si le document respecte les mentions obligatoires (NIF, RCCM, TVA apparente, etc.) selon le Code Général des Impôts (UEMOA/CEMAC).
       
@@ -699,6 +761,9 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
         "amount_ttc": 0,
         "vat_rate": 0,
         "currency": "XOF/EUR/USD/etc.",
+        "items": [
+           { "description": "Libellé", "quantity": 1, "unit_price": 0, "total": 0 }
+        ],
         "accounting_suggestions": [
           { "account_code": "Code", "account_name": "Libellé", "debit": 0, "credit": 0, "reason": "Pourquoi ce compte ?" }
         ],
@@ -710,7 +775,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
       }
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3.1-pro-preview",
       contents: {
         parts: [
@@ -733,6 +798,18 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
             amount_ttc: { type: Type.NUMBER },
             vat_rate: { type: Type.NUMBER },
             currency: { type: Type.STRING },
+            items: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  description: { type: Type.STRING },
+                  quantity: { type: Type.NUMBER },
+                  unit_price: { type: Type.NUMBER },
+                  total: { type: Type.NUMBER }
+                }
+              }
+            },
             accounting_suggestions: {
               type: Type.ARRAY,
               items: {
@@ -760,7 +837,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
           required: ["document_type", "date", "vendor_name", "invoice_number", "amount_ht", "amount_tva", "amount_ttc", "vat_rate", "currency", "accounting_suggestions", "compliance_check"]
         }
       }
-    });
+    }));
 
     if (response.text) {
       return JSON.parse(response.text);
@@ -779,14 +856,14 @@ export const getTaxCompliance = async (message: string, imageBase64?: string | n
       parts.push({ inlineData: { data: imageBase64.split(',')[1] || imageBase64, mimeType: "image/jpeg" } });
     }
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: { parts },
       config: {
         systemInstruction: "Tu es un expert en fiscalité OHADA (UEMOA/CEMAC). Ton rôle est d'aider les entreprises à rester en conformité avec les Codes Généraux des Impôts locaux. Réponds de manière précise, cite les articles de loi si possible, et sois pédagogique.",
         tools: [{ googleSearch: {} }]
       }
-    });
+    }));
 
     return response.text;
   } catch (error) {
@@ -821,7 +898,7 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
       }
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await withRetry(() => ai.models.generateContent({
       model: "gemini-3.1-pro-preview",
       contents: prompt,
       config: {
@@ -869,21 +946,10 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
           required: ["matches", "discrepancies", "suggestions", "reconciliationSummary"]
         }
       }
-    });
+    }));
 
-    const data = JSON.parse(response.text);
-    return data;
-  } catch (error: any) {
-    const errorString = JSON.stringify(error);
-    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
-      console.warn("Gemini API rate limit exceeded for bank reconciliation.");
-      return {
-        matches: [],
-        discrepancies: [{ source: "System", amount: 0, description: "Limite de quota IA atteinte. Le rapprochement doit être fait manuellement." }],
-        suggestions: [],
-        reconciliationSummary: "Le module d'IA est temporairement saturé. Veuillez procéder au rapprochement manuel ou réessayer plus tard."
-      };
-    }
+    return JSON.parse(response.text);
+  } catch (error) {
     console.error("Error reconciling bank:", error);
     return null;
   }
@@ -926,7 +992,7 @@ export const askAssistant = async (
     });
 
     const lastMessage = chatHistory[chatHistory.length - 1];
-    const response = await chat.sendMessage({ message: lastMessage.parts[0].text });
+    const response = await withRetry(() => chat.sendMessage({ message: lastMessage.parts[0].text }));
     
     let text = response.text;
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
@@ -943,11 +1009,7 @@ export const askAssistant = async (
     }
 
     return text;
-  } catch (error: any) {
-    const errorString = JSON.stringify(error);
-    if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED')) {
-      return "Désolé, le service d'IA est actuellement saturé (limite de quota atteinte). Veuillez réessayer dans quelques instants ou contactez le support si le problème persiste.";
-    }
+  } catch (error) {
     console.error("Error in askAssistant:", error);
     return "Désolé, je n'ai pas pu traiter votre demande pour le moment.";
   }
@@ -962,7 +1024,7 @@ export const askGemini = async (prompt: string, history: { role: 'user' | 'model
     },
   });
 
-  const response = await chat.sendMessage({ message: prompt });
+  const response = await withRetry(() => chat.sendMessage({ message: prompt }));
   
   // Extract grounding metadata if available
   const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
@@ -983,7 +1045,7 @@ export const askGemini = async (prompt: string, history: { role: 'user' | 'model
 };
 
 export const findNearbyBusinessResources = async (query: string, location?: { latitude: number, longitude: number }) => {
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: query,
     config: {
@@ -997,7 +1059,7 @@ export const findNearbyBusinessResources = async (query: string, location?: { la
         }
       }
     },
-  });
+  }));
 
   return {
     text: response.text,

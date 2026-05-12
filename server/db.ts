@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 const dbPath = process.env.DB_PATH || 'compta.db';
 const db = new Database(dbPath);
 
+db.pragma('foreign_keys = ON');
 console.log(`Database connected at ${dbPath}`);
 
 // Initialize database
@@ -177,11 +178,19 @@ db.exec(`
     depreciation_duration INTEGER NOT NULL, -- in years
     depreciation_method TEXT DEFAULT 'linear', -- linear, declining
     declining_coefficient REAL,
+    prorata_temporis BOOLEAN DEFAULT 1,
     account_code TEXT NOT NULL,
     transaction_id INTEGER,
     status TEXT DEFAULT 'active', -- active, sold, scrapped
     FOREIGN KEY(transaction_id) REFERENCES transactions(id)
   );
+
+  try {
+    db.prepare("ALTER TABLE assets ADD COLUMN prorata_temporis BOOLEAN DEFAULT 1").run();
+  } catch (e) {
+    // ignore if already exists
+  }
+
 
   CREATE TABLE IF NOT EXISTS depreciations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

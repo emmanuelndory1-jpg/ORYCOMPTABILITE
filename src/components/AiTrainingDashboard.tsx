@@ -47,7 +47,7 @@ export function AiTrainingDashboard() {
 
   const calculateDiffCount = (ai: any, user: any) => {
     let diffs = 0;
-    const keys = ['amount_ht', 'amount_ttc', 'date', 'third_party', 'invoice_number'];
+    const keys = ['amount_ht', 'amount_ttc', 'date', 'third_party', 'invoice_number', 'third_party_id', 'currency'];
     keys.forEach(k => {
       if (ai[k] !== user[k]) diffs++;
     });

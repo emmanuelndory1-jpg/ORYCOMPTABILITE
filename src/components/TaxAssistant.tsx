@@ -225,7 +225,14 @@ export function TaxAssistant() {
                   <div className="mt-4 space-y-4 border-t border-slate-100 dark:border-slate-800 pt-4">
                     <div className="grid grid-cols-2 gap-3">
                       <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Fournisseur</p>
+                        <div className="flex justify-between items-start">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Fournisseur</p>
+                          {msg.analysis.confidence && (
+                            <span className={`text-[8px] font-black px-1.5 py-0.5 rounded ${msg.analysis.confidence > 80 ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'}`}>
+                              {msg.analysis.confidence}%
+                            </span>
+                          )}
+                        </div>
                         <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{msg.analysis.vendor_name}</p>
                       </div>
                       <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-700">
@@ -233,6 +240,23 @@ export function TaxAssistant() {
                         <p className="text-sm font-bold text-brand-green">{msg.analysis.amount_ttc.toLocaleString()} {msg.analysis.currency}</p>
                       </div>
                     </div>
+
+                    {msg.analysis.items && msg.analysis.items.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-2">Lignes d'articles extraites</p>
+                        <div className="bg-slate-50 dark:bg-slate-800/40 rounded-xl p-3 border border-slate-100 dark:border-slate-800 space-y-2">
+                          {msg.analysis.items.map((item, idx) => (
+                            <div key={idx} className="flex justify-between items-start text-xs border-b border-slate-100 dark:border-slate-800 pb-1 last:border-0 last:pb-0">
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-slate-700 dark:text-slate-300">{item.description}</span>
+                                <span className="text-[10px] text-slate-400">Qte: {item.quantity} | PU: {item.unit_price.toLocaleString()}</span>
+                              </div>
+                              <span className="font-bold text-slate-900 dark:text-white shrink-0">{item.total.toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="space-y-2">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Suggestions Comptables (SYSCOHADA)</p>

@@ -1,8 +1,9 @@
 import { apiFetch } from '../lib/api';
-import React, { useState, useEffect } from 'react';
-import { Search, Plus, Filter, Pencil, Trash2, X, Check, Copy } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Plus, Filter, Pencil, Trash2, X, Check, Copy, Upload, ArrowRight, RefreshCw, AlertCircle } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useDialog } from './DialogProvider';
+import Papa from 'papaparse';
 
 import { PageHeader } from './ui/PageHeader';
 import { Calculator } from 'lucide-react';
@@ -28,6 +29,15 @@ export function Accounts() {
   const [name, setName] = useState('');
   const [type, setType] = useState('actif');
 
+  // Import State
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvData, setCsvData] = useState<any[]>([]);
+  const [columnMapping, setColumnMapping] = useState<{code: string, name: string, type: string, class: string}>({ code: '', name: '', type: '', class: '' });
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     fetchAccounts();
   }, []);
@@ -41,6 +51,100 @@ export function Accounts() {
         setLoading(false);
       })
       .catch(err => console.error(err));
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImportFile(file);
+    setIsImporting(true);
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        setIsImporting(false);
+        if (results.data && results.data.length > 0) {
+          setCsvData(results.data);
+          const headers = results.meta.fields || [];
+          setCsvHeaders(headers);
+          
+          // Auto-guess mapping
+          const guessMapping = {
+            code: headers.find(h => h.toLowerCase().includes('compte') || h.toLowerCase().includes('code')) || '',
+            name: headers.find(h => h.toLowerCase().includes('intitul') || h.toLowerCase().includes('libell') || h.toLowerCase().includes('name')) || '',
+            type: headers.find(h => h.toLowerCase().includes('type') || h.toLowerCase().includes('nature')) || '',
+            class: headers.find(h => h.toLowerCase().includes('classe')) || '',
+          };
+          setColumnMapping(guessMapping);
+        } else {
+          dialogAlert("Le fichier semble vide ou mal formaté.", "error");
+        }
+      },
+      error: (error) => {
+        setIsImporting(false);
+        dialogAlert(`Erreur de lecture du fichier: ${error.message}`, "error");
+      }
+    });
+  };
+
+  const submitImport = async () => {
+    if (!columnMapping.code || !columnMapping.name) {
+      dialogAlert("Veuillez mapper au moins le Code et l'Intitulé du compte.", "error");
+      return;
+    }
+
+    setIsImporting(true);
+
+    const accountsToImport = csvData.map(row => {
+      const rowCode = String(row[columnMapping.code] || '').trim();
+      const rowName = String(row[columnMapping.name] || '').trim();
+      const rowType = columnMapping.type ? String(row[columnMapping.type] || '').trim().toLowerCase() : 'actif';
+      
+      let classCode = parseInt(rowCode.charAt(0)) || 0;
+      if (columnMapping.class && row[columnMapping.class]) {
+        classCode = parseInt(String(row[columnMapping.class]).trim()) || classCode;
+      }
+      
+      return {
+        code: rowCode,
+        name: rowName,
+        class_code: classCode,
+        type: ['actif', 'passif', 'charge', 'produit', 'capitaux'].includes(rowType) ? rowType : 'actif',
+      };
+    }).filter(acc => acc.code && acc.name);
+
+    if (accountsToImport.length === 0) {
+      dialogAlert("Aucun compte valide trouvé après le mappage.", "error");
+      setIsImporting(false);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/accounts/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(accountsToImport)
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        dialogAlert(data.message || "Importation réussie", "success");
+        setIsImportModalOpen(false);
+        setImportFile(null);
+        setCsvData([]);
+        fetchAccounts();
+      } else {
+        dialogAlert(data.error || "Une erreur est survenue lors de l'importation.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert("Erreur de connexion lors de l'importation.", "error");
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const filteredAccounts = accounts.filter(acc => 
@@ -124,14 +228,23 @@ export function Accounts() {
         subtitle="SYSCOHADA Révisé"
         icon={<Calculator size={24} />}
         actions={
-          <button 
-            onClick={() => handleOpenModal()}
-            className="bg-brand-green hover:bg-brand-green-light text-white px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-brand-green/20 active:scale-95 whitespace-nowrap"
-          >
-            <Plus size={18} />
-            <span className="hidden sm:inline">Nouveau Compte</span>
-            <span className="sm:hidden">Nouveau</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setIsImportModalOpen(true)}
+              className="bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 px-4 py-2 sm:py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
+            >
+              <Upload size={18} />
+              <span className="hidden sm:inline">Importer</span>
+            </button>
+            <button 
+              onClick={() => handleOpenModal()}
+              className="bg-brand-green hover:bg-brand-green-light text-white px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-brand-green/20 active:scale-95 whitespace-nowrap"
+            >
+              <Plus size={18} />
+              <span className="hidden sm:inline">Nouveau Compte</span>
+              <span className="sm:hidden">Nouveau</span>
+            </button>
+          </div>
         }
       />
 
@@ -297,6 +410,148 @@ export function Accounts() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Import Modal */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl p-6 elevate-3 flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Upload size={24} className="text-brand-green" />
+                Importer des Comptes
+              </h2>
+              <button onClick={() => { setIsImportModalOpen(false); setImportFile(null); setCsvData([]); }} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-6">
+              <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-6 text-center">
+                <input
+                  type="file"
+                  accept=".csv,.txt"
+                  className="hidden"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  disabled={isImporting}
+                />
+                
+                <Upload className="mx-auto h-12 w-12 text-slate-400 mb-4" />
+                <h3 className="text-lg font-medium text-slate-900 dark:text-white mb-2">
+                  {importFile ? importFile.name : "Sélectionner un fichier CSV"}
+                </h3>
+                <p className="text-sm text-slate-500 mb-4">
+                  Format attendu: CSV avec séparateur virgule ou point-virgule.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isImporting}
+                  className="mx-auto bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg font-medium shadow-sm hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors flex items-center justify-center gap-2"
+                >
+                  {isImporting ? <RefreshCw className="animate-spin" size={18} /> : "Parcourir..."}
+                </button>
+              </div>
+
+              {csvData.length > 0 && csvHeaders.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="font-bold text-slate-900 dark:text-white flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                    Mappage des colonnes
+                    <span className="text-sm font-normal text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
+                      {csvData.length} lignes détectées
+                    </span>
+                  </h3>
+                  
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4 items-center">
+                      <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Code Compte <span className="text-rose-500">*</span>
+                      </div>
+                      <select 
+                        value={columnMapping.code}
+                        onChange={(e) => setColumnMapping({...columnMapping, code: e.target.value})}
+                        className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:border-brand-green outline-none"
+                      >
+                        <option value="">Sélectionner une colonne...</option>
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 items-center">
+                      <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Intitulé (Nom) <span className="text-rose-500">*</span>
+                      </div>
+                      <select 
+                        value={columnMapping.name}
+                        onChange={(e) => setColumnMapping({...columnMapping, name: e.target.value})}
+                        className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:border-brand-green outline-none"
+                      >
+                        <option value="">Sélectionner une colonne...</option>
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 items-center">
+                      <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Classe (Optionnel)
+                      </div>
+                      <select 
+                        value={columnMapping.class}
+                        onChange={(e) => setColumnMapping({...columnMapping, class: e.target.value})}
+                        className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:border-brand-green outline-none"
+                      >
+                        <option value="">Auto (déduit du code)</option>
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 items-center mb-2">
+                      <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Type (Optionnel)
+                      </div>
+                      <select 
+                        value={columnMapping.type}
+                        onChange={(e) => setColumnMapping({...columnMapping, type: e.target.value})}
+                        className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:border-brand-green outline-none"
+                      >
+                        <option value="">Par défaut (Actif)</option>
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                    
+                    <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl flex gap-3 text-blue-700 dark:text-blue-400 text-sm">
+                      <AlertCircle className="shrink-0 mt-0.5" size={16} />
+                      <p>
+                        Les valeurs pour "Type" doivent correspondre à: <strong>actif, passif, charge, produit, capitaux</strong>.
+                        Si la colonne Type n'est pas renseignée ou contient une autre valeur, "actif" sera utilisé par défaut.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
+              <button 
+                type="button"
+                onClick={() => { setIsImportModalOpen(false); setImportFile(null); setCsvData([]); }}
+                className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl font-medium transition-colors"
+              >
+                Annuler
+              </button>
+              <button 
+                type="button"
+                onClick={submitImport}
+                disabled={csvData.length === 0 || !columnMapping.code || !columnMapping.name || isImporting}
+                className="bg-brand-green hover:bg-brand-green-light disabled:opacity-50 disabled:hover:bg-brand-green text-white px-6 py-2 rounded-xl font-bold shadow-lg shadow-brand-green/20 transition-all flex items-center gap-2"
+              >
+                {isImporting ? <RefreshCw className="animate-spin" size={18} /> : <Check size={18} />}
+                Importer ({csvData.length})
+              </button>
+            </div>
           </div>
         </div>
       )}

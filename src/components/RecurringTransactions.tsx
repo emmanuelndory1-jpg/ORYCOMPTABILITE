@@ -16,7 +16,8 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   X,
-  Sparkles
+  Sparkles,
+  History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -35,7 +36,7 @@ interface RecurringTransaction {
   id: string;
   description: string;
   amount: number;
-  frequency: 'weekly' | 'monthly' | 'quarterly' | 'annually';
+  frequency: 'daily' | 'weekly' | 'bi-weekly' | 'monthly' | 'quarterly' | 'annually';
   next_date: string;
   end_date: string | null;
   max_occurrences: number | null;
@@ -54,6 +55,7 @@ export function RecurringTransactions() {
   const [transactions, setTransactions] = useState<RecurringTransaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<RecurringTransaction | null>(null);
   const [isProcessing, setIsProcessing] = useState<string | null>(null);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const { formatCurrency } = useCurrency();
@@ -62,7 +64,7 @@ export function RecurringTransactions() {
   const [formData, setFormData] = useState({
     description: '',
     amount: '',
-    frequency: 'monthly' as const,
+    frequency: 'monthly' as 'daily' | 'weekly' | 'bi-weekly' | 'monthly' | 'quarterly' | 'annually',
     next_date: new Date().toISOString().split('T')[0],
     end_date: '',
     max_occurrences: '',
@@ -108,8 +110,11 @@ export function RecurringTransactions() {
     }
 
     try {
-      const response = await apiFetch('/api/recurring-transactions', {
-        method: 'POST',
+      const url = editingTransaction && !isDuplicate ? `/api/recurring-transactions/${editingTransaction.id}` : '/api/recurring-transactions';
+      const method = editingTransaction && !isDuplicate ? 'PATCH' : 'POST';
+
+      const response = await apiFetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
@@ -120,24 +125,79 @@ export function RecurringTransactions() {
       });
       if (response.ok) {
         setIsModalOpen(false);
-        setFormData({
-          description: '',
-          amount: '',
-          frequency: 'monthly',
-          next_date: new Date().toISOString().split('T')[0],
-          end_date: '',
-          max_occurrences: '',
-          category: 'Général',
-          auto_process: false,
-          lines: [
-            { account_code: '', debit: 0, credit: 0, description: '' },
-            { account_code: '', debit: 0, credit: 0, description: '' }
-          ]
-        });
+        setEditingTransaction(null);
+        setIsDuplicate(false);
+        resetForm();
+        fetchTransactions();
+        dialogAlert(method === 'POST' ? "Récurrence créée avec succès" : "Récurrence mise à jour", "success");
+      }
+    } catch (error) {
+      console.error('Error saving recurring transaction:', error);
+    }
+  };
+
+  const [isDuplicate, setIsDuplicate] = useState(false);
+
+  const resetForm = () => {
+    setFormData({
+      description: '',
+      amount: '',
+      frequency: 'monthly',
+      next_date: new Date().toISOString().split('T')[0],
+      end_date: '',
+      max_occurrences: '',
+      category: 'Général',
+      auto_process: false,
+      lines: [
+        { account_code: '', debit: 0, credit: 0, description: '' },
+        { account_code: '', debit: 0, credit: 0, description: '' }
+      ]
+    });
+  };
+
+  const handleEdit = (tx: RecurringTransaction) => {
+    setEditingTransaction(tx);
+    setIsDuplicate(false);
+    setFormData({
+      description: tx.description,
+      amount: tx.amount.toString(),
+      frequency: tx.frequency,
+      next_date: tx.next_date,
+      end_date: tx.end_date || '',
+      max_occurrences: tx.max_occurrences?.toString() || '',
+      category: tx.category,
+      auto_process: tx.auto_process === 1,
+      lines: tx.lines && tx.lines.length > 0 ? tx.lines.map(l => ({ ...l })) : [
+        { account_code: tx.debit_account, debit: tx.amount, credit: 0, description: tx.description },
+        { account_code: tx.credit_account, debit: 0, credit: tx.amount, description: tx.description }
+      ]
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleDuplicate = (tx: RecurringTransaction) => {
+    handleEdit(tx);
+    setEditingTransaction(tx);
+    setIsDuplicate(true);
+    setFormData(prev => ({
+      ...prev,
+      description: `Copie de ${prev.description}`,
+      next_date: new Date().toISOString().split('T')[0]
+    }));
+  };
+
+  const handleToggleActive = async (tx: RecurringTransaction) => {
+    try {
+      const response = await apiFetch(`/api/recurring-transactions/${tx.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: tx.active === 1 ? 0 : 1 })
+      });
+      if (response.ok) {
         fetchTransactions();
       }
     } catch (error) {
-      console.error('Error creating recurring transaction:', error);
+      console.error('Error toggling active state:', error);
     }
   };
 
@@ -242,7 +302,9 @@ export function RecurringTransactions() {
 
   const getFrequencyLabel = (freq: string) => {
     switch (freq) {
+      case 'daily': return 'Quotidien';
       case 'weekly': return 'Hebdomadaire';
+      case 'bi-weekly': return 'Bi-hebdomadaire';
       case 'monthly': return 'Mensuel';
       case 'quarterly': return 'Trimestriel';
       case 'annually': return 'Annuel';
@@ -374,6 +436,11 @@ export function RecurringTransactions() {
                             <Sparkles size={8} /> Auto
                           </span>
                         )}
+                        {tx.active === 0 && (
+                          <span className="flex items-center gap-0.5 text-[9px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-black uppercase tracking-tighter">
+                            Suspendu
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -415,13 +482,21 @@ export function RecurringTransactions() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-2 text-sm text-slate-600">
-                        <Calendar size={14} className="text-slate-400" />
-                        {new Date(tx.next_date).toLocaleDateString('fr-FR')}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-sm text-slate-900 font-bold">
+                          <Calendar size={14} className="text-brand-green" />
+                          {new Date(tx.next_date).toLocaleDateString('fr-FR')}
+                        </div>
+                        {tx.last_processed && (
+                          <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                            <History size={10} />
+                            Dernier : {new Date(tx.last_processed).toLocaleDateString('fr-FR')}
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-3">
+                      <div className="flex items-center justify-end gap-2">
                         <div className="flex flex-col items-end gap-1 mr-2">
                           <label className="relative inline-flex items-center cursor-pointer">
                             <input 
@@ -441,32 +516,62 @@ export function RecurringTransactions() {
                                 }
                               }}
                             />
-                            <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-green/20 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-brand-green"></div>
-                            <span className="ml-2 text-[10px] font-black text-slate-400 uppercase tracking-tighter">Auto</span>
+                            <div className="w-8 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-green"></div>
+                            <span className="ml-1.5 text-[8px] font-black text-slate-400 uppercase tracking-tighter">Auto</span>
                           </label>
                         </div>
 
                         <button
                           onClick={() => handleProcess(tx.id)}
-                          disabled={isProcessing === tx.id}
+                          disabled={isProcessing === tx.id || tx.active === 0}
                           className={cn(
-                            "flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all text-xs font-bold",
-                            isProcessing === tx.id 
-                              ? "bg-slate-100 text-slate-400" 
+                            "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all text-[10px] font-bold",
+                            isProcessing === tx.id || tx.active === 0
+                              ? "bg-slate-100 text-slate-400 opacity-50 cursor-not-allowed" 
                               : "bg-brand-green/10 text-brand-green hover:bg-brand-green hover:text-white"
                           )}
                           title="Générer l'écriture maintenant"
                         >
-                          {isProcessing === tx.id ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                          {isProcessing === tx.id ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
                           Générer
                         </button>
-                        <button
-                          onClick={() => handleDelete(tx.id)}
-                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                          title="Supprimer"
-                        >
-                          <Trash2 size={18} />
-                        </button>
+
+                        <div className="relative group/menu">
+                          <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                            <MoreVertical size={18} />
+                          </button>
+                          <div className="absolute right-0 top-full mt-1 w-40 bg-white rounded-xl shadow-xl border border-slate-100 py-1.5 z-10 hidden group-hover/menu:block">
+                            <button 
+                              onClick={() => handleEdit(tx)}
+                              className="w-full text-left px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                            >
+                              <Plus size={14} className="text-blue-500" /> Modifier
+                            </button>
+                            <button 
+                              onClick={() => handleDuplicate(tx)}
+                              className="w-full text-left px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                            >
+                              <Repeat size={14} className="text-purple-500" /> Dupliquer
+                            </button>
+                            <button 
+                              onClick={() => handleToggleActive(tx)}
+                              className={cn(
+                                "w-full text-left px-4 py-2 text-xs font-bold flex items-center gap-2",
+                                tx.active === 1 ? "text-amber-600 hover:bg-amber-50" : "text-emerald-600 hover:bg-emerald-50"
+                              )}
+                            >
+                              {tx.active === 1 ? <X size={14} /> : <CheckCircle2 size={14} />} 
+                              {tx.active === 1 ? 'Suspendre' : 'Reprendre'}
+                            </button>
+                            <div className="h-px bg-slate-100 my-1"></div>
+                            <button 
+                              onClick={() => handleDelete(tx.id)}
+                              className="w-full text-left px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50 flex items-center gap-2"
+                            >
+                              <Trash2 size={14} /> Supprimer
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -504,10 +609,17 @@ export function RecurringTransactions() {
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                  <Plus className="text-brand-green" />
-                  Nouvelle Écriture Récurrente
+                  {editingTransaction && !isDuplicate ? <Plus className="text-blue-500 rotate-45" /> : <Plus className="text-brand-green" />}
+                  {editingTransaction && !isDuplicate ? 'Modifier la Récurrence' : 'Nouvelle Écriture Récurrente'}
                 </h2>
-                <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                <button 
+                  onClick={() => {
+                    setIsModalOpen(false);
+                    setEditingTransaction(null);
+                    setIsDuplicate(false);
+                  }} 
+                  className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                >
                   <X size={20} />
                 </button>
               </div>
@@ -550,6 +662,18 @@ export function RecurringTransactions() {
                       value={formData.description}
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                     />
+                    <div className="flex flex-col gap-1.5 p-3 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aperçu du libellé</div>
+                      <div className="text-sm font-medium text-slate-700">
+                        {formData.description
+                          .replace(/{month}/g, new Date(formData.next_date).toLocaleDateString('fr-FR', { month: 'long' }))
+                          .replace(/{year}/g, new Date(formData.next_date).getFullYear().toString())
+                          .replace(/{prev_month}/g, new Date(new Date(formData.next_date).setMonth(new Date(formData.next_date).getMonth() - 1)).toLocaleDateString('fr-FR', { month: 'long' }))
+                          .replace(/{next_month}/g, new Date(new Date(formData.next_date).setMonth(new Date(formData.next_date).getMonth() + 1)).toLocaleDateString('fr-FR', { month: 'long' }))
+                          || '...'
+                        }
+                      </div>
+                    </div>
                     <p className="text-[10px] text-slate-400 mt-1 italic">
                       Astuce : Utilisez <span className="text-brand-green font-mono">{'{month}'}</span>, <span className="text-brand-green font-mono">{'{year}'}</span>, <span className="text-brand-green font-mono">{'{prev_month}'}</span> pour des libellés dynamiques.
                     </p>
@@ -562,7 +686,9 @@ export function RecurringTransactions() {
                       value={formData.frequency}
                       onChange={(e) => setFormData({ ...formData, frequency: e.target.value as any })}
                     >
+                      <option value="daily">Quotidien</option>
                       <option value="weekly">Hebdomadaire</option>
+                      <option value="bi-weekly">Bi-hebdomadaire</option>
                       <option value="monthly">Mensuel</option>
                       <option value="quarterly">Trimestriel</option>
                       <option value="annually">Annuel</option>
@@ -717,7 +843,7 @@ export function RecurringTransactions() {
                     type="submit"
                     className="flex-1 px-6 py-3 bg-brand-green text-white font-bold rounded-xl hover:bg-brand-green-dark transition-colors shadow-lg shadow-brand-green/20"
                   >
-                    Créer la Récurrence
+                    {editingTransaction && !isDuplicate ? 'Mettre à jour' : 'Créer la Récurrence'}
                   </button>
                 </div>
               </form>

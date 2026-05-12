@@ -32,7 +32,7 @@ interface Notification {
   created_at: string;
 }
 
-export function Header({ logoUrl, companyName }: { logoUrl?: string | null, companyName?: string | null }) {
+export function Header({ logoUrl }: { logoUrl?: string | null }) {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -199,9 +199,9 @@ export function Header({ logoUrl, companyName }: { logoUrl?: string | null, comp
         setUnreadCount(data.filter((n: Notification) => !n.is_read).length);
       }
     } catch (error: any) {
-      // Only log if it's not a standard "Failed to fetch" which happens during server restarts
-      if (error.message !== 'Failed to fetch') {
-        console.error('Error fetching notifications:', error);
+      // Only log if it's not a standard "Failed to fetch" or "timed out" which happens during server restarts
+      if (error.message !== 'Failed to fetch' && error.message !== 'Request timed out' && error.name !== 'AbortError') {
+        console.warn('Silent failure fetching notifications:', error.message);
       }
     }
   };
@@ -261,7 +261,7 @@ export function Header({ logoUrl, companyName }: { logoUrl?: string | null, comp
             <Logo className="w-6 h-6 text-emerald-600" showText={false} src={logoUrl} />
           </div>
           <div className="flex flex-col">
-            <span className="font-black text-sm tracking-tight text-slate-900 dark:text-slate-100 uppercase truncate max-w-[150px]">{companyName || "ORYCOMPTA"}</span>
+            <span className="font-black text-sm tracking-tight text-slate-900 dark:text-slate-100">ORYCOMPTA</span>
             <div className="flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse" />
               <span className="text-[8px] font-black text-brand-green uppercase tracking-widest">Connecté</span>

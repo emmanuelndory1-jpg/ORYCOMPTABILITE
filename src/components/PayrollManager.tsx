@@ -10,6 +10,7 @@ import { useDialog } from './DialogProvider';
 import { useLanguage } from '@/context/LanguageContext';
 import { PayrollWizard } from './PayrollWizard';
 import { PayrollSettingsManager } from './PayrollSettingsManager';
+import { HRReports } from './HRReports';
 import { generatePayslipPDF, CompanySettings } from '../lib/exportUtils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -78,11 +79,11 @@ export function PayrollManager() {
   const { t } = useLanguage();
   
   const initialView = (searchParams.get('view') as any) || 'dashboard';
-  const [activeView, setActiveView] = useState<'dashboard' | 'employees' | 'periods' | 'period_details' | 'declarations' | 'advances' | 'settings'>(initialView);
+  const [activeView, setActiveView] = useState<'dashboard' | 'employees' | 'periods' | 'period_details' | 'declarations' | 'advances' | 'settings' | 'reports'>(initialView);
 
   useEffect(() => {
     const view = searchParams.get('view');
-    if (view && ['dashboard', 'employees', 'periods', 'period_details', 'declarations', 'advances', 'settings'].includes(view)) {
+    if (view && ['dashboard', 'employees', 'periods', 'period_details', 'declarations', 'advances', 'settings', 'reports'].includes(view)) {
       setActiveView(view as any);
     }
   }, [searchParams]);
@@ -1318,6 +1319,7 @@ export function PayrollManager() {
                 { id: 'employees', icon: Users, title: 'Salariés' },
                 { id: 'periods', icon: Calendar, title: 'Périodes' },
                 { id: 'advances', icon: Coins, title: 'Avances' },
+                { id: 'reports', icon: FileText, title: 'Rapports RH' },
                 { id: 'settings', icon: SettingsIcon, title: 'Configuration' }
               ].map(item => (
                 <button
@@ -1394,6 +1396,7 @@ export function PayrollManager() {
           { id: 'employees', icon: Users },
           { id: 'periods', icon: Calendar },
           { id: 'advances', icon: Coins },
+          { id: 'reports', icon: FileText },
           { id: 'settings', icon: SettingsIcon }
         ].map(item => (
           <button
@@ -1416,6 +1419,7 @@ export function PayrollManager() {
         {activeView === 'period_details' && renderPeriodDetails()}
         {activeView === 'declarations' && renderDeclarations()}
         {activeView === 'advances' && renderAdvances()}
+        {activeView === 'reports' && <HRReports />}
         {activeView === 'settings' && <PayrollSettingsManager />}
       </div>
 

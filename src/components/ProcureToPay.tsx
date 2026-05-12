@@ -145,6 +145,13 @@ interface InvoiceMatching {
     credit: number;
     description?: string;
   }>;
+  items?: Array<{
+    description: string;
+    quantity: number;
+    unit_price: number;
+    total: number;
+    account_suggestion?: string;
+  }>;
   accounting_entry_id?: string;
   date: string;
   attachments?: string[];
@@ -348,6 +355,7 @@ export function ProcureToPay() {
             vat_invoice: analysis.amount_tva || 0,
             vat_po: (po?.amount || 0) * 0.18,
             entries: analysis.entries,
+            items: analysis.items || [],
             anomalies: anomalies,
             status: (discrepancy || anomalies.length > 0) ? 'discrepancy' : 'matched',
             date: analysis.date || new Date().toISOString().split('T')[0],
@@ -1296,6 +1304,25 @@ export function ProcureToPay() {
                                 </span>
                                 <span className="font-bold">
                                   {formatCurrency(entry.debit > 0 ? entry.debit : entry.credit)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {inv.items && inv.items.length > 0 && (
+                        <div className="mb-4 bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
+                          <div className="text-[9px] font-black uppercase text-slate-400 mb-2 tracking-widest">Lignes de Facture (OCR)</div>
+                          <div className="space-y-2">
+                            {inv.items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between items-start gap-2">
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{item.description}</span>
+                                  <span className="text-[8px] text-slate-400 uppercase tracking-tighter">Qte: {item.quantity} | PU: {formatCurrency(item.unit_price)}</span>
+                                </div>
+                                <span className="text-[10px] font-black text-slate-900 dark:text-white shrink-0">
+                                  {formatCurrency(item.total)}
                                 </span>
                               </div>
                             ))}

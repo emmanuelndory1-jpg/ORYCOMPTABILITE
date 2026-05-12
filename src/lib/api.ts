@@ -165,7 +165,7 @@ export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit): Pr
       lastError = error;
       if (error.name === 'AbortError') {
         clearTimeout(timeoutId);
-        console.error('Request timed out:', input);
+        console.warn('Request timed out or aborted:', input);
         throw new Error('Request timed out');
       }
       

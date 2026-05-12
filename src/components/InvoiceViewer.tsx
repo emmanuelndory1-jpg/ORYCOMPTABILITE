@@ -29,7 +29,6 @@ import { PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings, formatCurrency
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
 import autoTable from 'jspdf-autotable';
-import { Logo } from './Logo';
 
 interface InvoiceItem {
   id: number;
@@ -480,8 +479,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
           {/* Paper Header */}
           <div className="p-16 border-b border-slate-50 dark:border-slate-800 flex flex-col md:flex-row justify-between items-start gap-12">
             <div className="space-y-8">
-              <div className="w-32 h-32 bg-white dark:bg-slate-900 rounded-[2rem] flex items-center justify-center border border-slate-100 dark:border-slate-800 shadow-2xl shadow-slate-200/50 dark:shadow-none overflow-hidden p-4">
-                <Logo className="w-full h-full" src={companySettings?.logo_url} showText={false} />
+              <div className="w-24 h-24 bg-brand-green rounded-[2rem] flex items-center justify-center text-white font-black text-4xl shadow-2xl shadow-brand-green/30">
+                {companySettings?.name?.charAt(0) || 'C'}
               </div>
               <div className="space-y-2">
                 <h3 className="text-2xl font-black text-slate-900 dark:text-white uppercase tracking-tighter">{companySettings?.name || 'Ma Société'}</h3>

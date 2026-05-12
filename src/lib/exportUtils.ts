@@ -23,7 +23,6 @@ export interface CompanySettings {
   bank_account_number?: string;
   bank_iban?: string;
   bank_swift?: string;
-  logo_url?: string | null;
   payment_bank_enabled?: boolean;
   payment_bank_account?: string;
   payment_cash_enabled?: boolean;
@@ -130,18 +129,14 @@ export function addPDFHeader(doc: jsPDF, settings: CompanySettings, title: strin
   // Company Logo & Info
   let y = 15;
   try {
-    if (settings.logo_url && settings.logo_url.startsWith('data:image/')) {
-      doc.addImage(settings.logo_url, 'PNG', 14, y, 12, 12);
-    } else {
-      // Try to draw a placeholder if logo fails
-      doc.setFillColor(PDF_CONFIG.colors.primary[0], PDF_CONFIG.colors.primary[1], PDF_CONFIG.colors.primary[2]);
-      doc.roundedRect(14, y, 10, 10, 2, 2, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(8);
-      doc.text("OC", 17, y + 7);
-    }
+    // Try to draw a placeholder if logo fails
+    doc.setFillColor(PDF_CONFIG.colors.primary[0], PDF_CONFIG.colors.primary[1], PDF_CONFIG.colors.primary[2]);
+    doc.roundedRect(14, y, 10, 10, 2, 2, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.text("OC", 17, y + 7);
   } catch (e) {
-    console.warn("Logo draw error", e);
+    console.warn("Logo placeholder error");
   }
 
   // Company Name
