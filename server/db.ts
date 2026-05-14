@@ -185,12 +185,6 @@ db.exec(`
     FOREIGN KEY(transaction_id) REFERENCES transactions(id)
   );
 
-  try {
-    db.prepare("ALTER TABLE assets ADD COLUMN prorata_temporis BOOLEAN DEFAULT 1").run();
-  } catch (e) {
-    // ignore if already exists
-  }
-
 
   CREATE TABLE IF NOT EXISTS depreciations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -452,6 +446,12 @@ db.exec(`
 try {
   db.prepare("ALTER TABLE assets ADD COLUMN depreciation_method TEXT DEFAULT 'linear'").run();
   db.prepare("ALTER TABLE assets ADD COLUMN declining_coefficient REAL").run();
+} catch (e) {
+  // Columns likely already exist
+}
+
+try {
+  db.prepare("ALTER TABLE assets ADD COLUMN prorata_temporis BOOLEAN DEFAULT 1").run();
 } catch (e) {
   // Columns likely already exist
 }

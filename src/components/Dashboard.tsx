@@ -23,11 +23,13 @@ import { cn } from '@/lib/utils';
 import { exportToCSV } from '@/lib/exportUtils';
 import { DashboardCustomizer, type WidgetConfig } from './DashboardCustomizer';
 import { getQuickInsight, parseNaturalLanguageEntry } from '../services/geminiService';
+import { useModules } from '@/context/ModuleContext';
 
 export function Dashboard() {
   const { formatCurrency } = useCurrency();
   const { activeYear } = useFiscalYear();
   const { t } = useLanguage();
+  const { isActive } = useModules();
   const navigate = useNavigate();
   const [stats, setStats] = useState({
     turnover: 0,
@@ -113,7 +115,20 @@ export function Dashboard() {
     ];
   });
 
-  const isVisible = (id: string) => widgets.find(w => w.id === id)?.visible ?? true;
+  const isVisible = (id: string) => {
+    // Determine module restriction
+    const requiresAnalytics = ['performance', 'analysis', 'performance_ratios', 'cashflow', 'expenses', 'financial_health', 'health'];
+    const requiresPayroll = ['payroll_summary'];
+    const requiresAssets = ['asset_summary'];
+    const requiresAudit = ['recent_audit_logs'];
+
+    if (requiresAnalytics.includes(id) && !isActive('analytics')) return false;
+    if (requiresPayroll.includes(id) && !isActive('payroll')) return false;
+    if (requiresAssets.includes(id) && !isActive('assets')) return false;
+    if (requiresAudit.includes(id) && !isActive('audit')) return false;
+
+    return widgets.find(w => w.id === id)?.visible ?? true;
+  };
 
   const toggleWidget = (id: string) => {
     setWidgets(prev => {
@@ -1766,7 +1781,7 @@ export function Dashboard() {
               </div>
 
               <button 
-                onClick={() => navigate('/audit-trail')}
+                onClick={() => navigate('/audit')}
                 className="mt-6 w-full py-4 bg-slate-900/5 dark:bg-white/5 rounded-2xl text-[10px] font-black text-slate-600 dark:text-slate-400 uppercase tracking-[0.2em] hover:bg-slate-900 dark:hover:bg-slate-800 hover:text-white transition-all flex items-center justify-center gap-2 group/audit-btn"
               >
                 <span>Journal d'audit complet</span>
