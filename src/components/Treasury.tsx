@@ -1,7 +1,7 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { PageHeader } from './ui/PageHeader';
-import { Wallet, ArrowUpRight, ArrowDownLeft, CreditCard, Smartphone, Loader2, ArrowRightLeft, X, AlertCircle, PiggyBank } from 'lucide-react';
+import { Wallet, ArrowUpRight, ArrowDownLeft, CreditCard, Smartphone, Loader2, ArrowRightLeft, X, AlertCircle, PiggyBank, RefreshCw } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useFiscalYear } from '@/context/FiscalYearContext';
@@ -65,11 +65,30 @@ export function Treasury() {
   });
   const [forecastData, setForecastData] = useState<any[]>([]);
   const [activeChart, setActiveChart] = useState<'historical' | 'forecast'>('historical');
+  const [refreshingAccounts, setRefreshingAccounts] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     fetchTreasuryData();
     fetchForecastData();
   }, [activeYear?.id]);
+
+  const refreshAccount = async (code: string) => {
+    setRefreshingAccounts(prev => ({ ...prev, [code]: true }));
+    try {
+      const response = await apiFetch(`/api/treasury/accounts/${code}/balance`);
+      if (response.ok) {
+        const { balance } = await response.json();
+        setData(prev => ({
+          ...prev,
+          accounts: prev.accounts.map(acc => acc.code === code ? { ...acc, balance } : acc)
+        }));
+      }
+    } catch (error) {
+      console.error(`Error refreshing account ${code}:`, error);
+    } finally {
+      setRefreshingAccounts(prev => ({ ...prev, [code]: false }));
+    }
+  };
 
   const fetchTreasuryData = async () => {
     try {
@@ -229,8 +248,18 @@ export function Treasury() {
             
             <div className="space-y-1">
               <div className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100 truncate">{acc.name}</div>
-              <div className="text-base sm:text-lg font-black font-mono text-slate-900 dark:text-white tracking-tighter">
-                {formatCurrency(acc.balance)}
+              <div className="flex items-center justify-between">
+                <div className="text-base sm:text-lg font-black font-mono text-slate-900 dark:text-white tracking-tighter">
+                  {formatCurrency(acc.balance)}
+                </div>
+                <button 
+                  onClick={() => refreshAccount(acc.code)}
+                  disabled={refreshingAccounts[acc.code]}
+                  className="p-1.5 text-slate-400 hover:text-brand-green hover:bg-brand-green/10 rounded-lg transition-colors disabled:opacity-50"
+                  title="Rafraîchir le solde"
+                >
+                  <RefreshCw size={16} className={refreshingAccounts[acc.code] ? "animate-spin" : ""} />
+                </button>
               </div>
             </div>
           </div>

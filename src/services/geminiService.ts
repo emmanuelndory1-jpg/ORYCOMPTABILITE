@@ -1,13 +1,24 @@
-import { GoogleGenAI, Modality, Type } from "@google/genai";
+import { parseSafeJSON } from "@/lib/utils";
+import { Modality, Type } from "@google/genai";
 import { db, auth, OperationType, handleFirestoreError } from '../lib/firebase';
 import { collection, addDoc } from 'firebase/firestore';
+import { apiFetch } from '../lib/api';
 
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) {
-  console.error("GEMINI_API_KEY is not defined in the environment.");
-}
-
-const ai = new GoogleGenAI({ apiKey: apiKey || "" });
+const ai = {
+  models: {
+    generateContent: async (req: any) => {
+      const response = await apiFetch('/api/gemini/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req)
+      });
+      if (!response.ok) {
+        throw new Error([429, 503].includes(response.status) ? String(response.status) : 'HTTP ' + response.status);
+      }
+      return await response.json();
+    }
+  }
+};
 
 /**
  * Global lock to ensure a minimum interval between requests and handle queuing.
@@ -35,6 +46,8 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
       lastError = error;
       const errorString = error?.message || String(error);
       const isRateLimit = errorString.includes('429') || 
+                         errorString.includes('503') ||
+                         errorString.includes('UNAVAILABLE') ||
                          errorString.includes('RESOURCE_EXHAUSTED') ||
                          errorString.includes('quota');
 
@@ -152,7 +165,7 @@ export const parseNaturalLanguageEntry = async (text: string): Promise<NaturalLa
 
     const result = response.text;
     if (result) {
-      return JSON.parse(result) as NaturalLanguageEntry;
+      return parseSafeJSON(result) as NaturalLanguageEntry;
     }
   } catch(e) {
     console.error("Error in parseNaturalLanguageEntry:", e);
@@ -223,7 +236,7 @@ export const analyzeInvoice = async (
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: {
         parts: [
           { text: prompt },
@@ -291,7 +304,7 @@ export const analyzeInvoice = async (
     }));
 
     if (response.text) {
-      return JSON.parse(response.text);
+      return parseSafeJSON(response.text);
     }
 
     return null;
@@ -398,7 +411,7 @@ export const suggestJournalEntry = async (
     }));
 
     if (response.text) {
-      return JSON.parse(response.text);
+      return parseSafeJSON(response.text);
     }
     return null;
   } catch (error) {
@@ -469,7 +482,7 @@ export const suggestCorrection = async (
     }));
 
     if (response.text) {
-      return JSON.parse(response.text);
+      return parseSafeJSON(response.text);
     }
     return null;
   } catch (error) {
@@ -534,7 +547,7 @@ export const generateAudit = async (auditData: any) => {
     Format JSON strictement obligatoire.`;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: "Génère l'audit financier complet.",
       config: {
         systemInstruction: systemPrompt,
@@ -575,7 +588,7 @@ export const generateAudit = async (auditData: any) => {
       }
     }));
 
-    return JSON.parse(response.text);
+    return parseSafeJSON(response.text);
   } catch (error) {
     console.error("Error generating audit:", error);
     return null;
@@ -613,7 +626,7 @@ export const getP2PAdvice = async (p2pData: any) => {
       }
     }));
 
-    const data = JSON.parse(response.text);
+    const data = parseSafeJSON(response.text);
     return data.advices as string[];
   } catch (error) {
     console.error("Error getting P2P advice:", error);
@@ -694,7 +707,7 @@ export const suggestAccountCode = async (
     }));
 
     if (response.text) {
-      const data = JSON.parse(response.text);
+      const data = parseSafeJSON(response.text);
       return data.suggestions || null;
     }
     return null;
@@ -776,7 +789,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: {
         parts: [
           { text: prompt },
@@ -840,7 +853,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
     }));
 
     if (response.text) {
-      return JSON.parse(response.text);
+      return parseSafeJSON(response.text);
     }
     return null;
   } catch (error) {
@@ -899,7 +912,7 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
         systemInstruction: "Tu es un expert en audit bancaire. Ton but est de réconcilier parfaitement les comptes bancaires avec la comptabilité.",
@@ -948,7 +961,7 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
       }
     }));
 
-    return JSON.parse(response.text);
+    return parseSafeJSON(response.text);
   } catch (error) {
     console.error("Error reconciling bank:", error);
     return null;
@@ -982,17 +995,14 @@ export const askAssistant = async (
     4. Si l'utilisateur demande une analyse de document (image), sois très précis sur les montants et les dates.
     5. Ne donne jamais de conseils d'investissement, reste sur la gestion comptable et fiscale.`;
 
-    const chat = ai.chats.create({
-      model: "gemini-3.1-pro-preview",
-      history: chatHistory.slice(0, -1), // History excluding the last message
+    const response = await withRetry(() => ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: chatHistory,
       config: {
         systemInstruction,
         tools: [{ googleSearch: {} }],
       }
-    });
-
-    const lastMessage = chatHistory[chatHistory.length - 1];
-    const response = await withRetry(() => chat.sendMessage({ message: lastMessage.parts[0].text }));
+    }));
     
     let text = response.text;
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
@@ -1016,15 +1026,19 @@ export const askAssistant = async (
 };
 
 export const askGemini = async (prompt: string, history: { role: 'user' | 'model', content: string }[] = []) => {
-  const chat = ai.chats.create({
-    model: "gemini-3.1-pro-preview",
+  const contents = [
+    ...history.map(msg => ({ role: msg.role === 'model' ? 'model' : 'user', parts: [{ text: msg.content }] })),
+    { role: 'user', parts: [{ text: prompt }] }
+  ];
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents,
     config: {
       systemInstruction: "You are a highly accurate accounting and business assistant specializing in the OHADA (Organization for the Harmonization of Business Law in Africa) region. Your primary goal is to provide verified, factually correct information. Always use Google Search to verify tax laws, business regulations, and current financial standards if you are not 100% certain. Cite your sources when possible.",
       tools: [{ googleSearch: {} }],
     },
-  });
-
-  const response = await withRetry(() => chat.sendMessage({ message: prompt }));
+  }));
   
   // Extract grounding metadata if available
   const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;

@@ -377,6 +377,32 @@ db.exec(`
     FOREIGN KEY(budget_id) REFERENCES budgets(id)
   );
 
+  CREATE TABLE IF NOT EXISTS budget_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color TEXT DEFAULT '#94a3b8',
+    parent_id INTEGER,
+    type TEXT DEFAULT 'expense',
+    FOREIGN KEY(parent_id) REFERENCES budget_categories(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS budget_category_accounts (
+    category_id INTEGER NOT NULL,
+    account_code TEXT NOT NULL,
+    PRIMARY KEY (category_id, account_code),
+    FOREIGN KEY(category_id) REFERENCES budget_categories(id),
+    FOREIGN KEY(account_code) REFERENCES accounts(code)
+  );
+
+  CREATE TABLE IF NOT EXISTS budget_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category_id INTEGER,
+    account_code TEXT,
+    threshold REAL NOT NULL, -- 0.8 for 80%, etc
+    is_active INTEGER DEFAULT 1,
+    last_triggered_at TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS budget_engagements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_code TEXT NOT NULL,
@@ -1182,5 +1208,54 @@ try {
 try {
   db.prepare("ALTER TABLE transactions ADD COLUMN is_locked BOOLEAN DEFAULT 0").run();
 } catch (e) {}
+
+// Add default budget categories
+try {
+  const checkBudgetCats = db.prepare('SELECT COUNT(*) as count FROM budget_categories');
+  if (checkBudgetCats.get().count === 0) {
+    const defaultCats = [
+      ['Achats & Approvisionnements', '#3b82f6', 'expense'],
+      ['Transports & Déplacements', '#f59e0b', 'expense'],
+      ['Services Extérieurs', '#10b981', 'expense'],
+      ['Impôts & Taxes', '#ef4444', 'expense'],
+      ['Charges de Personnel', '#8b5cf6', 'expense'],
+      ['Frais Financiers', '#6366f1', 'expense'],
+      ['Ventes & Prestations', '#22c55e', 'income']
+    ];
+    const insertCat = db.prepare('INSERT INTO budget_categories (name, color, type) VALUES (?, ?, ?)');
+    db.transaction(() => {
+      for (const c of defaultCats) insertCat.run(c);
+    })();
+
+    // Map some default accounts to these categories
+    const mapCat = db.prepare('INSERT INTO budget_category_accounts (category_id, account_code) VALUES (?, ?)');
+    db.transaction(() => {
+      const mappings: [number, string[]][] = [
+        [1, ['601', '602', '604', '608']],
+        [2, ['611', '612', '613', '618']],
+        [3, ['621', '622', '623', '624', '631', '632']],
+        [4, ['641', '642', '643']],
+        [5, ['661', '662', '663']],
+        [6, ['671', '672', '673']],
+        [7, ['701', '702', '703', '704']]
+      ];
+      for (const [catId, codes] of mappings) {
+        for (const code of codes) {
+          try {
+            // Check if account exists
+            const accountExists = db.prepare('SELECT code FROM accounts WHERE code = ?').get(code);
+            if (accountExists) {
+              mapCat.run(catId, code);
+            }
+          } catch(err) {
+            // ignore if relation breaks
+          }
+        }
+      }
+    })();
+  }
+} catch (error) {
+  console.error("Error setting up budget limits", error);
+}
 
 export default db;

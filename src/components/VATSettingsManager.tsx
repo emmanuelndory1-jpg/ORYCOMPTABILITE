@@ -42,7 +42,7 @@ export function VATSettingsManager() {
       const url = isNew ? '/api/vat-settings' : `/api/vat-settings/${editingId}`;
       const method = isNew ? 'POST' : 'PUT';
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)

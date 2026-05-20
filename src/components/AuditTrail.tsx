@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { History, Search, Filter, User, Calendar, FileText, ArrowRight, Loader2 } from 'lucide-react';
@@ -58,7 +59,7 @@ export function AuditTrail() {
 
   const formatDetails = (details: string) => {
     try {
-      const parsed = JSON.parse(details);
+      const parsed = parseSafeJSON(details);
       return (
         <div className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-1 bg-slate-50 dark:bg-slate-900/50 p-2 rounded border border-slate-100 dark:border-slate-800 overflow-x-auto transition-colors">
           {JSON.stringify(parsed, null, 2)}

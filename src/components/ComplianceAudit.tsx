@@ -164,6 +164,7 @@ export function ComplianceAudit() {
   };
 
   const removeEntry = (index: number) => {
+    if (!window.confirm("Voulez-vous vraiment supprimer cette ligne d'écriture ? Cette action est irréversible.")) return;
     if (!correctingTx) return;
     const newEntries = [...correctingTx.entries];
     newEntries.splice(index, 1);

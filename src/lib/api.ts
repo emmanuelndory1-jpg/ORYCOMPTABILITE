@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "@/lib/utils";
 
 import { auth } from './firebase';
 
@@ -78,7 +79,7 @@ export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit): Pr
         try {
           const text = await clone.text();
           try {
-            const data = JSON.parse(text);
+            const data = parseSafeJSON(text);
             if ((data.error === 'TokenExpired' || data.error === 'Unauthorized' || data.error === 'Forbidden') && auth.currentUser) {
               console.log('Token expired or unauthorized, attempting to refresh...');
               

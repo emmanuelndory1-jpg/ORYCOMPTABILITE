@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, useLocation, Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
@@ -29,7 +30,8 @@ import {
   Edit,
   Pencil,
   Brain,
-  Maximize
+  Maximize,
+  Copy
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -133,6 +135,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [suggestingAccount, setSuggestingAccount] = useState<number | null>(null); // null means not suggesting, -1 means guided mode override
   const [aiSuggestion, setAiSuggestion] = useState<AISuggestion | null>(null);
   const [mode, setMode] = useState<'guided' | 'expert'>('guided');
+  const [isAiAssistEnabled, setIsAiAssistEnabled] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [selectedTransactionDetail, setSelectedTransactionDetail] = useState<DetailedTransaction | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
@@ -222,6 +225,18 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     { account_code: '', debit: 0, credit: 0 }
   ]);
 
+  // Auto-save Draft
+  useEffect(() => {
+    if (isModalOpen && !editingId) {
+      const hasChanges = description.trim() !== '' || amountHT > 0 || entries.some(e => e.account_code !== '' || e.debit > 0 || e.credit > 0);
+      if (hasChanges) {
+        localStorage.setItem('journal_draft', JSON.stringify({
+          mode, date, reference, description, amountHT, entries, selectedThirdParty, occasionalName, operationType
+        }));
+      }
+    }
+  }, [isModalOpen, editingId, mode, date, reference, description, amountHT, entries, selectedThirdParty, occasionalName, operationType]);
+
   const handleModalClose = async (force = false) => {
     const hasChanges = description.trim() !== '' || 
                        amountHT > 0 || 
@@ -233,6 +248,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       const proceed = await confirm("Voulez-vous abandonner l'écriture en cours ? Toutes les données non enregistrées seront perdues.");
       if (!proceed) return;
     }
+    localStorage.removeItem('journal_draft');
     setIsModalOpen(false);
     setEditingId(null);
     setReference('');
@@ -265,6 +281,11 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (e.key === 'Enter') {
       const row = (e.currentTarget.closest('.space-y-1') as HTMLElement);
       if (field === 'account') {
+        const val = entries[idx].account_code;
+        if (isAiAssistEnabled && val && !/^\d+$/.test(val)) {
+          handleSuggestAccountHead(idx, val);
+          return;
+        }
         const next = row?.querySelector('input[placeholder="Débit"]') as HTMLInputElement;
         next?.focus();
       } else if (field === 'debit') {
@@ -338,20 +359,26 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   }, [isModalOpen, description, amountHT, entries, pendingFiles, isCustomOpModalOpen, isDetailOpen, isQuickInvoiceOpen]);
 
   useEffect(() => {
-    const party = thirdParties.find(p => p.account_code === selectedThirdParty);
-    const params = new URLSearchParams();
-    if (party) params.append('thirdPartyId', party.id.toString());
-    if (operationType) params.append('operationType', operationType);
+    const fetchSuggestions = () => {
+      const party = thirdParties.find(p => p.account_code === selectedThirdParty);
+      const params = new URLSearchParams();
+      if (party) params.append('thirdPartyId', party.id.toString());
+      if (operationType) params.append('operationType', operationType);
+      if (description) params.append('description', description);
 
-    if (params.toString()) {
-      apiFetch(`/api/journal/suggestions?${params.toString()}`)
-        .then(res => res.json())
-        .then(data => setSuggestedAccounts(data))
-        .catch(err => console.error(err));
-    } else {
-      setSuggestedAccounts([]);
-    }
-  }, [selectedThirdParty, operationType, thirdParties]);
+      if (params.toString()) {
+        apiFetch(`/api/journal/suggestions?${params.toString()}`)
+          .then(res => res.json())
+          .then(data => setSuggestedAccounts(data))
+          .catch(err => console.error(err));
+      } else {
+        setSuggestedAccounts([]);
+      }
+    };
+    
+    const timeoutId = setTimeout(fetchSuggestions, 300);
+    return () => clearTimeout(timeoutId);
+  }, [selectedThirdParty, operationType, thirdParties, description]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -694,15 +721,17 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
       setEditingId(null);
       setDate(new Date().toISOString().split('T')[0]);
-      setReference(data.reference ? `${data.reference}-COPY` : generateReference());
-      setDescription(`${data.description} (Copie)`);
+      setReference(generateReference());
+      // Clean description from potential copy suffix
+      const cleanDesc = data.description ? data.description.replace(/\(copie\)/gi, '').replace(/^Copie de /i, '').trim() : '';
+      setDescription(cleanDesc);
       setNotes(data.notes || '');
       
       // Parse document URLs if they are stored as JSON array
       let urls: string[] = [];
       if (data.document_url) {
         try {
-          const parsed = JSON.parse(data.document_url);
+          const parsed = parseSafeJSON(data.document_url);
           if (Array.isArray(parsed)) {
             urls = parsed;
           } else {
@@ -713,13 +742,47 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         }
       }
       setDocumentUrls(urls);
+      // Not duplicating physical attachments to avoid reference errors
       
       setEntries(data.entries.map((e: any) => ({ 
         account_code: e.account_code,
         debit: e.debit,
-        credit: e.credit
+        credit: e.credit,
+        description: e.description
       })));
-      setMode('expert');
+      setTransactionCurrency(data.currency || 'FCFA');
+      setTransactionExchangeRate(data.exchange_rate || 1);
+      
+      // Restore guided mode parameters if they exist
+      if (data.operation_type) setOperationType(data.operation_type);
+      
+      let recoveredAmountHT = data.amount_ht;
+      if (!recoveredAmountHT && data.entries && data.entries.length > 0) {
+        const baseEntry = data.entries.find((e: any) => e.account_code?.startsWith('6') || e.account_code?.startsWith('2') || e.account_code?.startsWith('7'));
+        if (baseEntry) {
+          recoveredAmountHT = baseEntry.account_code.startsWith('7') ? baseEntry.credit : baseEntry.debit;
+        } else {
+          recoveredAmountHT = data.entries.reduce((max: number, e: any) => Math.max(max, e.debit || 0, e.credit || 0), 0);
+        }
+      }
+      setAmountHT(recoveredAmountHT || 0);
+
+      if (data.vat_rate !== undefined) setVatRate(data.vat_rate);
+      if (data.payment_mode) setPaymentMode(data.payment_mode);
+      if (data.treasury_account) setSelectedTreasuryAccount(data.treasury_account);
+      
+      // Try to restore third party
+      if (data.third_party_id) {
+        const party = thirdParties.find(p => p.id === data.third_party_id);
+        if (party) {
+          setSelectedThirdParty(party.account_code);
+          if (party.is_occasional) {
+            setOccasionalName(data.occasional_name || '');
+          }
+        }
+      }
+
+      setMode(data.creation_mode || 'expert');
       setIsModalOpen(true);
     } catch (err) {
       console.error("Failed to duplicate transaction", err);
@@ -744,7 +807,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       let urls: string[] = [];
       if (data.document_url) {
         try {
-          const parsed = JSON.parse(data.document_url);
+          const parsed = parseSafeJSON(data.document_url);
           if (Array.isArray(parsed)) {
             urls = parsed;
           } else {
@@ -763,7 +826,18 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       
       // Restore guided mode parameters if they exist
       if (data.operation_type) setOperationType(data.operation_type);
-      if (data.amount_ht) setAmountHT(data.amount_ht);
+      
+      let recoveredAmountHT2 = data.amount_ht;
+      if (!recoveredAmountHT2 && data.entries && data.entries.length > 0) {
+        const baseEntry = data.entries.find((e: any) => e.account_code?.startsWith('6') || e.account_code?.startsWith('2') || e.account_code?.startsWith('7'));
+        if (baseEntry) {
+          recoveredAmountHT2 = baseEntry.account_code.startsWith('7') ? baseEntry.credit : baseEntry.debit;
+        } else {
+          recoveredAmountHT2 = data.entries.reduce((max: number, e: any) => Math.max(max, e.debit || 0, e.credit || 0), 0);
+        }
+      }
+      setAmountHT(recoveredAmountHT2 || 0);
+
       if (data.vat_rate !== undefined) setVatRate(data.vat_rate);
       if (data.payment_mode) setPaymentMode(data.payment_mode);
       if (data.treasury_account) setSelectedTreasuryAccount(data.treasury_account);
@@ -1197,11 +1271,15 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
-  const handleSuggestAccountHead = async (index: number = -1) => {
+  const handleSuggestAccountHead = async (index: number = -1, overrideSearchTerm: string = '') => {
     const lineDescription = index !== -1 ? entries[index].description : '';
-    const lookupDescription = lineDescription ? `${description} (${lineDescription})` : description;
+    let lookupDescription = lineDescription ? `${description} (${lineDescription})` : description;
+    
+    if (overrideSearchTerm) {
+      lookupDescription += ` - Recherche sémantique: ${overrideSearchTerm}`;
+    }
 
-    if (!lookupDescription) {
+    if (!lookupDescription && !overrideSearchTerm) {
       dialogAlert("Veuillez saisir un libellé pour que l'IA puisse suggérer un compte.", 'info');
       return;
     }
@@ -1411,7 +1489,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           }
         }
 
-        handleModalClose();
+        handleModalClose(true);
         fetchTransactions();
         // Reset
         setDescription('');
@@ -1457,7 +1535,33 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
-  const openNewModal = () => {
+  const handleRestoreDraft = () => {
+    const draftStr = localStorage.getItem('journal_draft');
+    if (draftStr) {
+      try {
+        const draft = JSON.parse(draftStr);
+        setMode(draft.mode || 'guided');
+        setDate(draft.date || new Date().toISOString().split('T')[0]);
+        setReference(draft.reference || generateReference());
+        setDescription(draft.description || '');
+        setAmountHT(draft.amountHT || 0);
+        setEntries(draft.entries || [{ account_code: '', debit: 0, credit: 0 }, { account_code: '', debit: 0, credit: 0 }]);
+        setSelectedThirdParty(draft.selectedThirdParty || '');
+        setOccasionalName(draft.occasionalName || '');
+        setOperationType(draft.operationType || 'sale');
+        setIsModalOpen(true);
+        return true;
+      } catch (e) {
+        console.error("Failed to restore draft", e);
+      }
+    }
+    return false;
+  };
+
+  const openNewModal = (defaultType?: string) => {
+    if (handleRestoreDraft()) {
+      return;
+    }
     setEditingId(null);
     setDate(new Date().toISOString().split('T')[0]);
     setReference(generateReference());
@@ -1465,10 +1569,16 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     setAmountHT(0);
     setEntries([{ account_code: '', debit: 0, credit: 0 }, { account_code: '', debit: 0, credit: 0 }]);
     setMode('guided');
+    if (defaultType) {
+      setOperationType(defaultType);
+    }
     setSelectedThirdParty('');
     setOccasionalName('');
     setSelectedTreasuryAccount('');
     setIsModalOpen(true);
+    setTimeout(() => {
+      descriptionInputRef.current?.focus();
+    }, 100);
   };
 
   const handleImportExcel = () => {
@@ -1868,7 +1978,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             </button>
             
             <button 
-              onClick={openNewModal}
+              onClick={() => openNewModal()}
               className="bg-brand-green text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-brand-green/90 transition-all shadow-lg shadow-brand-green/20 whitespace-nowrap active:scale-95"
             >
               <Plus size={20} />
@@ -1879,8 +1989,21 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         }
       />
 
+      {/* Quick Actions */}
+      <div className="flex flex-wrap items-center gap-3 relative z-10">
+        <button onClick={() => openNewModal('vente_marchandises')} className="px-4 py-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 font-bold text-xs rounded-xl flex items-center gap-2 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors border border-indigo-100 dark:border-indigo-900/30">
+          <Plus size={14} /> Nouvelle Vente
+        </button>
+        <button onClick={() => openNewModal('achat_marchandises')} className="px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-bold text-xs rounded-xl flex items-center gap-2 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors border border-emerald-100 dark:border-emerald-900/30">
+          <Plus size={14} /> Nouvel Achat
+        </button>
+        <button onClick={() => openNewModal('frais_generaux')} className="px-4 py-2 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 font-bold text-xs rounded-xl flex items-center gap-2 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors border border-amber-100 dark:border-amber-900/30">
+          <Plus size={14} /> Nouvelle Dépense
+        </button>
+      </div>
+
       {/* Magic Input */}
-      <form onSubmit={handleMagicSubmit} className="relative z-10">
+      <form onSubmit={handleMagicSubmit} className="relative z-10 pt-2">
         <label className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-green mb-2 block flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-brand-green animate-pulse"></span>
           Saisie Express
@@ -2283,10 +2406,22 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                   >
-                    <td colSpan={7} className="px-6 py-20 text-center">
-                      <div className="flex flex-col items-center gap-4 opacity-50">
-                        <FileText size={48} className="text-slate-300" />
-                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Aucune écriture comptable trouvée</p>
+                    <td colSpan={7} className="px-6 py-24 text-center">
+                      <div className="flex flex-col items-center gap-6 max-w-sm mx-auto">
+                        <div className="w-24 h-24 rounded-[2rem] bg-slate-50 dark:bg-slate-800/50 flex items-center justify-center shadow-inner border border-slate-100 dark:border-slate-800">
+                          <FileText size={40} className="text-slate-300 dark:text-slate-600" />
+                        </div>
+                        <div className="space-y-2">
+                           <p className="text-sm font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest">Aucune écriture trouvée</p>
+                           <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Commencez par ajouter une nouvelle écriture manuellement, ou scannez une facture via l'IA.</p>
+                        </div>
+                        <button
+                          onClick={() => openNewModal()}
+                          className="mt-2 px-6 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold uppercase tracking-widest text-slate-700 dark:text-slate-300 hover:border-brand-green hover:bg-brand-green/5 dark:hover:bg-brand-green/10 hover:text-brand-green transition-all shadow-sm flex items-center gap-2"
+                        >
+                          <Plus size={16} /> 
+                          Saisir une écriture
+                        </button>
                       </div>
                     </td>
                   </motion.tr>
@@ -2425,7 +2560,15 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
       {/* Modal Saisie */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xl z-50 flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-300">
+        <div 
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xl z-50 flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-300"
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
+        >
           <div className="bg-white/95 dark:bg-slate-900/95 rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-5xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden flex flex-col md:flex-row border border-white/20 dark:border-slate-800 transition-all duration-500">
             
             {/* Left Panel: Inputs */}
@@ -2483,6 +2626,30 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     >
                       Expert
                     </button>
+                    {mode === 'expert' && (
+                      <label 
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-1.5 ml-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all cursor-pointer border",
+                          isAiAssistEnabled 
+                            ? "bg-brand-gold/10 border-brand-gold/30 text-brand-gold shadow-sm"
+                            : "bg-transparent border-slate-200 dark:border-slate-700 text-slate-400 hover:text-brand-gold hover:border-brand-gold/30"
+                        )}
+                        title="Activer la saisie assistée par l'IA pour trouver les bons comptes automatiquement"
+                      >
+                        <Wand2 size={12} className={cn(isAiAssistEnabled && "animate-pulse")} />
+                        <span>IA Auto</span>
+                        <div className="relative inline-block w-6 h-3 align-middle select-none ml-1">
+                          <input 
+                            type="checkbox" 
+                            checked={isAiAssistEnabled}
+                            onChange={(e) => setIsAiAssistEnabled(e.target.checked)}
+                            className="absolute opacity-0 w-0 h-0"
+                          />
+                          <div className={cn("block overflow-hidden h-3 rounded-full transition-colors duration-300", isAiAssistEnabled ? "bg-brand-gold/50" : "bg-slate-300 dark:bg-slate-600")}></div>
+                          <div className={cn("absolute top-[1px] left-[1px] w-2.5 h-2.5 rounded-full bg-white transition-transform duration-300 shadow", isAiAssistEnabled ? "translate-x-3" : "translate-x-0")}></div>
+                        </div>
+                      </label>
+                    )}
                   </div>
                   <button 
                     onClick={() => handleModalClose()}
@@ -2495,9 +2662,41 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                 </div>
               </div>
 
-              <div className="space-y-8">
-                {/* Common Fields */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {mode === 'guided' && (
+                  <div className="mb-8">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Type d'opération</label>
+                    <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                      {allOperationTypes.map((type) => (
+                        <button
+                          key={type.id}
+                          onClick={() => setOperationType(type.id)}
+                          className={cn(
+                            "flex-none flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all group",
+                            operationType === type.id 
+                              ? "border-brand-green bg-brand-green text-white shadow-md shadow-brand-green/20" 
+                              : "border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:border-brand-green/30"
+                          )}
+                        >
+                          <span className={cn(
+                            "text-sm transition-transform group-hover:scale-110",
+                            operationType === type.id ? "grayscale-0" : "grayscale opacity-70"
+                          )}>{type.icon}</span>
+                          <span className="whitespace-nowrap">{type.label}</span>
+                        </button>
+                      ))}
+                      <button 
+                        onClick={() => setIsCustomOpModalOpen(true)}
+                        className="flex-none flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-500 hover:border-brand-green hover:text-brand-green transition-all"
+                      >
+                       <Settings size={14} /> <span className="text-xs font-bold">Gérer</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-8">
+                  {/* Common Fields */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="space-y-2">
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Date d'opération</label>
                     <input 
@@ -2643,6 +2842,20 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                         amountInputRef.current?.focus();
                       }
                     }}
+                    onBlur={() => {
+                      if (mode === 'guided' && description && !selectedThirdParty) {
+                        const descLower = description.toLowerCase();
+                        const type = ['vente_marchandises', 'vente_services', 'encaissement_client'].includes(operationType) ? 'client' :
+                                    ['achat_marchandises', 'achat_services', 'frais_generaux', 'paiement_fournisseur', 'charges_a_payer'].includes(operationType) ? 'supplier' : null;
+                        
+                        if (type) {
+                          const match = thirdParties.find(tp => tp.type === type && !!tp.name && descLower.includes(tp.name.toLowerCase()));
+                          if (match) {
+                            setSelectedThirdParty(match.account_code);
+                          }
+                        }
+                      }
+                    }}
                     onChange={(e) => {
                       setDescription(e.target.value);
                       if (errors.description) setErrors(prev => ({ ...prev, description: '' }));
@@ -2781,39 +2994,6 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
                 {mode === 'guided' ? (
                   <>
-                    {/* Operation Type Selection */}
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center ml-1">
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Type d'opération</label>
-                        <button 
-                          onClick={() => setIsCustomOpModalOpen(true)}
-                          className="text-[10px] text-brand-green dark:text-brand-green-light font-black uppercase tracking-widest hover:underline flex items-center gap-1.5"
-                        >
-                          <Settings size={12} /> Gérer les types
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
-                        {allOperationTypes.map((type) => (
-                          <button
-                            key={type.id}
-                            onClick={() => setOperationType(type.id)}
-                            className={cn(
-                              "flex items-center gap-4 px-5 py-4 rounded-2xl border text-sm font-bold transition-all text-left group",
-                              operationType === type.id 
-                                ? "border-brand-green bg-brand-green/5 dark:bg-brand-green/10 text-brand-green dark:text-brand-green-light ring-2 ring-brand-green/20" 
-                                : "border-slate-100 dark:border-slate-800 hover:border-brand-green/30 dark:hover:border-brand-green/40 hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-600 dark:text-slate-400"
-                            )}
-                          >
-                            <span className={cn(
-                              "text-2xl transition-transform group-hover:scale-110 duration-300",
-                              operationType === type.id ? "grayscale-0" : "grayscale opacity-50"
-                            )}>{type.icon}</span>
-                            <span className="flex-1">{type.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
                     {/* Third Party Selection */}
                     {(() => {
                       const type = ['vente_marchandises', 'vente_services', 'encaissement_client'].includes(operationType) ? 'client' :
@@ -2831,7 +3011,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                               </label>
                               <div className="flex gap-3">
                                 <select
-                                  value={selectedThirdParty}
+                                  value={selectedThirdParty || ''}
                                   onChange={(e) => {
                                     const val = e.target.value;
                                     setSelectedThirdParty(val);
@@ -2997,7 +3177,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                     </button>
                                   ))
                                 ) : (
-                                  <p className="text-[10px] text-slate-400 italic ml-1">Aucun historique pour ce tiers. Utilisez la suggestion IA.</p>
+                                  <p className="text-[10px] text-slate-400 italic ml-1">Aucune suggestion disponible. Utilisez la suggestion IA.</p>
                                 )}
                                 
                                 {selectedAccountOverride && (
@@ -3123,6 +3303,26 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       )}
                     </div>
 
+                    {/* Amount Breakdown (HT / TVA / TTC) */}
+                    {formConfig.hasVAT && amountHT > 0 && (
+                      <div className="flex bg-slate-50 dark:bg-slate-800/30 rounded-xl p-3 sm:p-4 text-xs font-medium border border-slate-100 dark:border-slate-800/80 items-center justify-between">
+                        <div className="flex flex-col items-center">
+                          <span className="text-slate-400 dark:text-slate-500 uppercase text-[10px] tracking-wider mb-1 font-bold">Montant HT</span>
+                          <span className="text-slate-700 dark:text-slate-300 font-mono">{formatCurrency(amountHT, transactionCurrency)}</span>
+                        </div>
+                        <div className="text-slate-300 dark:text-slate-600 font-black px-2">+</div>
+                        <div className="flex flex-col items-center">
+                          <span className="text-slate-400 dark:text-slate-500 uppercase text-[10px] tracking-wider mb-1 font-bold">TVA ({vatRate}%)</span>
+                          <span className="text-amber-600 dark:text-amber-500 font-mono">{formatCurrency(amountHT * (vatRate / 100), transactionCurrency)}</span>
+                        </div>
+                        <div className="text-slate-300 dark:text-slate-600 font-black px-2">=</div>
+                        <div className="flex flex-col items-center">
+                          <span className="text-brand-green/80 uppercase text-[10px] tracking-wider mb-1 font-bold">Montant TTC</span>
+                          <span className="text-brand-green font-mono font-black text-sm">{formatCurrency(amountHT * (1 + vatRate / 100), transactionCurrency)}</span>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Payment Mode */}
                     {formConfig.hasPayment && (
                       <div className="space-y-4">
@@ -3155,7 +3355,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                               Compte de Trésorerie (Optionnel)
                             </label>
                             <select
-                              value={selectedTreasuryAccount}
+                              value={selectedTreasuryAccount || ''}
                               onChange={(e) => setSelectedTreasuryAccount(e.target.value)}
                               className="w-full px-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold"
                             >
@@ -3337,6 +3537,11 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                 )}
                                 value={entry.account_code}
                                 onKeyDown={(e) => handleEntryKeyDown(e, idx, 'account')}
+                                onBlur={() => {
+                                  if (isAiAssistEnabled && entry.account_code && !/^\d+$/.test(entry.account_code)) {
+                                    handleSuggestAccountHead(idx, entry.account_code);
+                                  }
+                                }}
                                 onChange={(e) => {
                                   const newEntries = [...entries];
                                   newEntries[idx].account_code = e.target.value;
@@ -3352,7 +3557,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                 type="button"
                                 onClick={() => handleSuggestAccountHead(idx)}
                                 disabled={suggestingAccount !== null || (!description && !entry.description)}
-                                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-brand-gold/10 text-brand-gold rounded-lg hover:bg-brand-gold/20 transition-all opacity-0 group-hover/account:opacity-100 disabled:opacity-0"
+                                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-brand-gold/10 text-brand-gold rounded-lg hover:bg-brand-gold/20 transition-all shadow-sm"
                                 title="Suggérer un compte via l'IA"
                               >
                                 {suggestingAccount === idx ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
@@ -3621,10 +3826,11 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                 <button 
                   onClick={handleSave}
                   disabled={submitting || !isBalanced}
-                  className="w-full bg-brand-green text-white py-5 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-xl shadow-brand-green/20 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3"
+                  className="w-full bg-brand-green text-white py-5 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-xl shadow-brand-green/20 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3 relative"
                 >
                   {submitting ? <Loader2 className="animate-spin" size={20} /> : <Check size={20} />}
                   {editingId ? "Enregistrer les modifications" : "Valider l'écriture"}
+                  <span className="absolute right-6 text-[10px] bg-black/10 px-2 py-1 rounded font-mono hidden sm:inline-block">Ctrl+Enter</span>
                 </button>
                 
                 <div className="grid grid-cols-2 gap-3">
@@ -3975,7 +4181,17 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             </div>
 
             {/* Footer */}
-            <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex justify-end gap-3">
+            <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex justify-end gap-3 flex-wrap">
+              <button 
+                onClick={() => {
+                  setIsDetailOpen(false);
+                  handleDuplicate(selectedTransactionDetail.id);
+                }}
+                className="px-6 py-2.5 rounded-xl text-sm font-bold text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-all flex items-center gap-2 border border-purple-200 dark:border-purple-800/50"
+              >
+                <Copy size={16} />
+                Dupliquer
+              </button>
               <button 
                 onClick={() => {
                   setIsDetailOpen(false);

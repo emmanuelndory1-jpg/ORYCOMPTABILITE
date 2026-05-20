@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -669,7 +670,7 @@ export function PayrollManager() {
             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">Filtrer par Employé</label>
             <select 
               className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-              value={advanceFilter.employeeId}
+              value={advanceFilter.employeeId || ''}
               onChange={e => setAdvanceFilter({...advanceFilter, employeeId: Number(e.target.value)})}
             >
               <option value={0}>Tous les employés</option>
@@ -682,7 +683,7 @@ export function PayrollManager() {
             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">Statut</label>
             <select 
               className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-              value={advanceFilter.status}
+              value={advanceFilter.status || ''}
               onChange={e => setAdvanceFilter({...advanceFilter, status: e.target.value as any})}
             >
               <option value="all">Tous</option>
@@ -1013,7 +1014,7 @@ export function PayrollManager() {
               {formatCurrency(payslips.reduce((sum, p) => {
                 let employerCharges = 0;
                 try {
-                  const details = p.details ? JSON.parse(p.details) : {};
+                  const details = p.details ? parseSafeJSON(p.details) : {};
                   employerCharges = details?.employerCharges || 0;
                 } catch (e) {
                   console.error("Error parsing payslip details", e);
@@ -1049,7 +1050,12 @@ export function PayrollManager() {
                 <tr><td colSpan={6} className="p-8 text-center text-slate-500">Aucun bulletin généré pour cette période.</td></tr>
               ) : (
                 payslips.map((slip) => {
-                  const details = JSON.parse(slip.details || '{}') || {};
+                  let details: any = {};
+                  try {
+                    details = parseSafeJSON(slip.details || '{}') || {};
+                  } catch (e) {
+                    console.error("Error parsing Payslip Details:", e);
+                  }
                   const employerTotal = details.employerDetails 
                     ? Object.values(details.employerDetails).reduce((a: any, b: any) => a + b, 0) as number
                     : (details.employerCharges || 0);
@@ -1059,7 +1065,14 @@ export function PayrollManager() {
                       <td className="px-6 py-4 font-medium text-slate-900 dark:text-white">
                         {slip.last_name} {slip.first_name}
                         <div className="text-xs text-slate-500 dark:text-slate-400 font-normal">{slip.position}</div>
-                        <div className="text-xs text-slate-400 dark:text-slate-500 font-mono mt-1">Parts: {details.parts || 1}</div>
+                        <div className="flex gap-2 items-center mt-1">
+                          <div className="text-xs text-slate-400 dark:text-slate-500 font-mono">Parts: {details.parts || 1}</div>
+                          {details.prorataFactor && details.prorataFactor < 1 && (
+                            <span className="text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/20 px-2 rounded-full">
+                              Prorata ({details.activeDays}j)
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-right font-mono text-slate-600 dark:text-slate-400">{formatCurrency(slip.base_salary)}</td>
                       <td className="px-6 py-4 text-right font-mono text-slate-600 dark:text-slate-400">{formatCurrency(slip.bonuses)}</td>
@@ -1094,7 +1107,7 @@ export function PayrollManager() {
                               onClick={() => {
                                 let details = {};
                                 try {
-                                  details = slip.details ? JSON.parse(slip.details) : {};
+                                  details = slip.details ? parseSafeJSON(slip.details) : {};
                                 } catch (e) {
                                   console.error("Error parsing slip details for edit", e);
                                 }
@@ -1163,7 +1176,12 @@ export function PayrollManager() {
     let totalFDFP_FPC = 0;
 
     payslips.forEach(p => {
-      const details = JSON.parse(p.details || '{}') || {};
+      let details: any = {};
+      try {
+        details = parseSafeJSON(p.details || '{}') || {};
+      } catch (e) {
+        console.error("Error parsing details", e);
+      }
       totalGross += (p.base_salary + p.bonuses);
       totalCnpsEmployee += (details.cnpsEmployee || 0);
       totalIS += (details.taxes?.is || 0);
@@ -1447,7 +1465,7 @@ export function PayrollManager() {
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">Employé</label>
                 <select 
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white disabled:opacity-50"
-                  value={newAdvance.employee_id}
+                  value={newAdvance.employee_id || ''}
                   onChange={e => setNewAdvance({...newAdvance, employee_id: Number(e.target.value)})}
                   required
                   disabled={!!editingAdvanceId}

@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
@@ -72,8 +73,8 @@ export function AuditLogViewer() {
       const res = await apiFetch(`/api/audit-logs?limit=${limit}&offset=${offset}`);
       if (res.ok) {
         const data = await res.json();
-        setLogs(data.logs);
-        setTotal(data.total);
+        setLogs(data.logs || (Array.isArray(data) ? data : []));
+        setTotal(data.total || (Array.isArray(data) ? data.length : 0));
       }
     } catch (err) {
       console.error("Failed to fetch audit logs:", err);
@@ -322,7 +323,12 @@ export function AuditLogViewer() {
                 <p className="text-[10px] text-slate-400 uppercase font-bold ml-1">Données techniques</p>
                 <div className="bg-slate-50 dark:bg-slate-800/30 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 overflow-auto max-h-[400px]">
                   {(() => {
-                    const details = JSON.parse(selectedLog.details || '{}');
+                    let details: any = {};
+                    try {
+                      details = parseSafeJSON(selectedLog.details || '{}');
+                    } catch (e) {
+                      console.error("Failed to parse log details:", e);
+                    }
                     if (details.previous && details.current) {
                       return (
                         <div className="space-y-4">

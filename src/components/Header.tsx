@@ -232,6 +232,7 @@ export function Header({ logoUrl }: { logoUrl?: string | null }) {
 
   const deleteNotification = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
+    if (!window.confirm("Voulez-vous vraiment supprimer cette notification ? Cette action est irréversible.")) return;
     try {
       await apiFetch(`/api/notifications/${id}`, { method: 'DELETE' });
       fetchNotifications();

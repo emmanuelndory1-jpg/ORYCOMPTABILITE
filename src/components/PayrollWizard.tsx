@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
@@ -373,11 +374,20 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                      {payslips.map((slip) => (
+                      {payslips.map((slip) => {
+                        const details = parseSafeJSON(slip.details || '{}') || {};
+                        const isProrated = details.prorataFactor && details.prorataFactor < 1;
+                        
+                        return (
                         <tr key={slip.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                           <td className="px-6 py-4">
                             <div className="font-bold text-slate-900 dark:text-white">{slip.last_name} {slip.first_name}</div>
                             <div className="text-xs text-slate-500">{employees.find(e => e.id === slip.employee_id)?.position}</div>
+                            {isProrated && (
+                              <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">
+                                Prorata ({details.activeDays}j)
+                              </span>
+                            )}
                           </td>
                           <td className="px-6 py-4 text-right font-mono text-slate-600 dark:text-slate-400">{formatCurrency(slip.base_salary)}</td>
                           <td className="px-6 py-4 text-right font-mono text-emerald-600 dark:text-emerald-400">+{formatCurrency(slip.bonuses)}</td>
@@ -386,7 +396,12 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                           <td className="px-6 py-4 text-center">
                             <button 
                               onClick={async () => {
-                                const details = JSON.parse(slip.details || '{}') || {};
+                                let details: any = {};
+                                try {
+                                  details = parseSafeJSON(slip.details || '{}') || {};
+                                } catch (e) {
+                                  console.error("Error parsing details", e);
+                                }
                                 setEditingPayslip({
                                   id: slip.id,
                                   employee_id: slip.employee_id,
@@ -412,7 +427,8 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -445,7 +461,13 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                   <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
                     <p className="text-xs font-bold text-slate-400 uppercase mb-2">Charges Patronales</p>
                     <p className="text-2xl font-bold text-slate-900 dark:text-white">
-                      {formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details || '{}')?.employerCharges || 0), 0))}
+                      {formatCurrency(payslips.reduce((sum, p) => {
+                        let employerCharges = 0;
+                        try {
+                          employerCharges = parseSafeJSON(p.details || '{}')?.employerCharges || 0;
+                        } catch (e) {}
+                        return sum + employerCharges;
+                      }, 0))}
                     </p>
                   </div>
                   <div className="bg-brand-green/5 p-6 rounded-2xl border border-brand-green/20">
@@ -469,7 +491,13 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                       </div>
                       <div className="flex justify-between text-slate-500">
                         <span>Débit 664 (Charges Soc.)</span>
-                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details || '{}')?.employerCharges || 0), 0))}</span>
+                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => {
+                          let employerCharges = 0;
+                          try {
+                            employerCharges = parseSafeJSON(p.details || '{}')?.employerCharges || 0;
+                          } catch (e) {}
+                          return sum + employerCharges;
+                        }, 0))}</span>
                       </div>
                     </div>
                     <div className="space-y-2">
@@ -479,7 +507,13 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
                       </div>
                       <div className="flex justify-between text-slate-500">
                         <span>Crédit 431/447 (Org. Soc/Etat)</span>
-                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => sum + (JSON.parse(p.details || '{}')?.employerCharges || 0) + (payslips.reduce((sum, p) => sum + p.deductions, 0)), 0))}</span>
+                        <span className="font-mono">{formatCurrency(payslips.reduce((sum, p) => {
+                          let employerCharges = 0;
+                          try {
+                            employerCharges = parseSafeJSON(p.details || '{}')?.employerCharges || 0;
+                          } catch (e) {}
+                          return sum + employerCharges;
+                        }, 0) + (payslips.reduce((sum, p) => sum + p.deductions, 0)))}</span>
                       </div>
                     </div>
                   </div>

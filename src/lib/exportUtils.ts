@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -399,11 +400,17 @@ export function generatePayslipPDF(payslip: any, period: any, settings: CompanyS
   y += 35;
 
   // Details Table
-  const details = typeof payslip.details === 'string' ? JSON.parse(payslip.details) : payslip.details;
+  const details = typeof payslip.details === 'string' ? parseSafeJSON(payslip.details) : payslip.details;
   
-  const body: any[] = [
-    ['Salaire de base', '', '', formatCurrencyPDF(payslip.base_salary)],
-  ];
+  const body: any[] = [];
+  
+  if (details.prorataFactor && details.prorataFactor < 1) {
+    const originalBase = Math.round(payslip.base_salary / details.prorataFactor);
+    body.push(['Salaire de base', '', '', formatCurrencyPDF(originalBase)]);
+    body.push([`Prorata temporis (${details.activeDays} jrs)`, `${(details.prorataFactor * 100).toFixed(2)}%`, '', formatCurrencyPDF(payslip.base_salary)]);
+  } else {
+    body.push(['Salaire de base', '', '', formatCurrencyPDF(payslip.base_salary)]);
+  }
 
   if (details.bonusDetails && details.bonusDetails.length > 0) {
     details.bonusDetails.forEach((b: any) => {

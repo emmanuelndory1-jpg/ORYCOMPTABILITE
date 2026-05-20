@@ -222,7 +222,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
         accounting: true,
         invoicing: true,
         third_parties: true,
-        payroll: false,
+        payroll: true,
         vat: true,
         assets: true,
         bankRec: true

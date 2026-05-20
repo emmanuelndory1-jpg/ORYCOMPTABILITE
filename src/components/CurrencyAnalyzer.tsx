@@ -1,10 +1,11 @@
+import { parseSafeJSON } from "@/lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, TrendingUp, TrendingDown, AlertCircle, CheckCircle2, Loader2, Globe, Clock, Save } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { apiFetch as fetch } from '@/lib/api';
 import { useCurrency } from '@/hooks/useCurrency';
-import { cn } from '@/lib/utils';
+import { cn } from '../lib/utils';
 
 interface MarketRate {
   from: string;
@@ -33,26 +34,31 @@ export function CurrencyAnalyzer() {
   const analyzeCurrencies = async () => {
     setAnalyzing(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
       // Filter out base currency from analysis
       const targets = currenciesToAnalyze.filter(c => c !== baseCurrency);
-      
+
       const prompt = `Provide the current exchange rates for the following currencies relative to ${baseCurrency}: ${targets.join(', ')}. 
       Return the data as a JSON array of objects with "from", "to", and "rate" (number) properties. 
       Example: [{"from": "USD", "to": "${baseCurrency}", "rate": 605.50}].
       Only return the JSON array, no other text.`;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json"
-        },
+      const response = await apiFetch('/api/gemini/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: "gemini-3-flash-preview",
+          contents: prompt,
+          config: {
+            tools: [{ googleSearch: {} }],
+            responseMimeType: "application/json"
+          }
+        })
       });
+      
+      if (!response.ok) throw new Error('Failed to analyze currencies');
+      const data = await response.json();
 
-      const marketRates: MarketRate[] = JSON.parse(response.text || "[]");
+      const marketRates: MarketRate[] = parseSafeJSON(data.text || "[]");
       
       const analysisResults: AnalysisResult[] = marketRates.map(mr => {
         const systemRate = exchangeRates.find(r => r.from_currency === mr.from && r.to_currency === mr.to)?.rate || 0;

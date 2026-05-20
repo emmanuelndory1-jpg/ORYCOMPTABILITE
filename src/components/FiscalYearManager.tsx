@@ -1,6 +1,6 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { Calendar, Check, Plus, Lock, Unlock, AlertCircle, Loader2 } from 'lucide-react';
+import { Calendar, Check, Plus, Lock, Unlock, Archive, RotateCcw, AlertCircle, Loader2 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useDialog } from './DialogProvider';
@@ -11,7 +11,7 @@ interface FiscalYear {
   name: string;
   start_date: string;
   end_date: string;
-  status: 'open' | 'closed';
+  status: 'open' | 'closed' | 'archived';
   is_active: number; // 0 or 1
 }
 
@@ -90,6 +90,39 @@ export function FiscalYearManager() {
     
     try {
       await apiFetch(`/api/fiscal-years/${id}/close`, { method: 'PUT' });
+      fetchYears();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleArchiveYear = async (year: FiscalYear) => {
+    if (year.is_active) {
+      dialogAlert("Impossible d'archiver un exercice actif. Veuillez d'abord activer un autre exercice.", "error");
+      return;
+    }
+    const confirmed = await confirm(`Voulez-vous vraiment archiver l'exercice ${year.name} ? Cette action le masquera des vues par défaut.`);
+    if (!confirmed) return;
+    
+    try {
+      const res = await apiFetch(`/api/fiscal-years/${year.id}/archive`, { method: 'PUT' });
+      if (res.ok) {
+        fetchYears();
+      } else {
+        const errData = await res.json();
+        dialogAlert(errData.error || "Une erreur est survenue", "error");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+  
+  const handleReopenYear = async (id: number) => {
+    const confirmed = await confirm("Voulez-vous rouvrir cet exercice ?");
+    if (!confirmed) return;
+    
+    try {
+      await apiFetch(`/api/fiscal-years/${id}/reopen`, { method: 'PUT' });
       fetchYears();
     } catch (err) {
       console.error(err);
@@ -194,35 +227,56 @@ export function FiscalYearManager() {
                         "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold capitalize",
                         year.status === 'open' 
                           ? "bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-900/40" 
-                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700"
+                          : year.status === 'archived'
+                          ? "bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-300 dark:border-slate-700"
+                          : "bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-900/40"
                       )}>
-                        {year.status === 'open' ? <Unlock size={12} className="mr-1" /> : <Lock size={12} className="mr-1" />}
-                        {year.status === 'open' ? 'Ouvert' : 'Clôturé'}
+                        {year.status === 'open' ? <Unlock size={12} className="mr-1" /> : year.status === 'archived' ? <Archive size={12} className="mr-1" /> : <Lock size={12} className="mr-1" />}
+                        {year.status === 'open' ? 'Ouvert' : year.status === 'archived' ? 'Archivé' : 'Clôturé'}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-center">
                       {year.is_active ? (
-                        <span className="inline-flex items-center justify-center w-8 h-8 bg-brand-green/10 dark:bg-brand-green/20 text-brand-green rounded-full">
+                        <span className="inline-flex items-center justify-center w-8 h-8 bg-brand-green/10 dark:bg-brand-green/20 text-brand-green rounded-full shadow-sm">
                           <Check size={16} />
                         </span>
                       ) : (
                         <button 
                           onClick={() => handleActivate(year.id)}
-                          className="text-slate-400 dark:text-slate-500 hover:text-brand-green dark:hover:text-brand-green font-medium text-sm underline"
+                          disabled={year.status === 'archived'}
+                          className="text-slate-400 dark:text-slate-500 hover:text-brand-green dark:hover:text-brand-green font-medium text-sm underline disabled:opacity-30 disabled:hover:text-slate-400 disabled:cursor-not-allowed"
                         >
                           Activer
                         </button>
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      {year.status === 'open' && (
-                        <button 
-                          onClick={() => handleCloseYear(year.id)}
-                          className="text-rose-500 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300 text-sm font-medium hover:bg-rose-50 dark:hover:bg-rose-900/20 px-3 py-1 rounded-lg transition-colors"
-                        >
-                          Clôturer
-                        </button>
-                      )}
+                      <div className="flex justify-end gap-2">
+                        {year.status === 'open' && (
+                          <button 
+                            onClick={() => handleCloseYear(year.id)}
+                            className="text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300 text-sm font-medium hover:bg-orange-50 dark:hover:bg-orange-900/20 px-3 py-1 rounded-lg transition-colors flex items-center gap-1"
+                          >
+                            <Lock size={14} /> Clôturer
+                          </button>
+                        )}
+                        {(year.status === 'closed' || year.status === 'archived') && (
+                          <button 
+                            onClick={() => handleReopenYear(year.id)}
+                            className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-sm font-medium hover:bg-blue-50 dark:hover:bg-blue-900/20 px-3 py-1 rounded-lg transition-colors flex items-center gap-1"
+                          >
+                            <Unlock size={14} /> Rouvrir
+                          </button>
+                        )}
+                        {year.status !== 'archived' && !year.is_active && (
+                          <button 
+                            onClick={() => handleArchiveYear(year)}
+                            className="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300 text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-800 px-3 py-1 rounded-lg transition-colors flex items-center gap-1"
+                          >
+                            <Archive size={14} /> Archiver
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))

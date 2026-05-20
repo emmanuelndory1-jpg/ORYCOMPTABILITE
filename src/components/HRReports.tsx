@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 import React, { useState, useEffect } from 'react';
 import { Users, FileText, Download, Loader2, PieChart, TrendingUp, BarChart, Calendar } from 'lucide-react';
 import { apiFetch } from '../lib/api';
@@ -64,7 +65,7 @@ export function HRReports() {
         body: data.employeeBonuses.map((b: any) => {
           let detailsText = '';
           try {
-            const parsed = JSON.parse(b.details);
+            const parsed = parseSafeJSON(b.details);
             if (parsed.bonusDetails) {
               detailsText = parsed.bonusDetails.map((db: any) => `${db.label}: ${formatCurrencyPDF(db.amount)}`).join(', ');
             }
@@ -198,7 +199,7 @@ export function HRReports() {
                 {data.employeeBonuses.map((b: any, i: number) => {
                   let detailsList = [];
                   try {
-                     const parsed = JSON.parse(b.details);
+                     const parsed = parseSafeJSON(b.details);
                      if (parsed.bonusDetails) detailsList = parsed.bonusDetails;
                   } catch(e) {}
 

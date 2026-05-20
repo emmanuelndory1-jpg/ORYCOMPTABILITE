@@ -1,10 +1,16 @@
+import { BudgetDashboard } from './BudgetDashboard';
+import { BudgetCategoriesSetup } from './BudgetCategoriesSetup';
 import { apiFetch } from '../lib/api';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PageHeader } from './ui/PageHeader';
-import { Target, Save, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, History, BarChart3, Plus, FileText } from 'lucide-react';
+import { Target, Save, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, History, BarChart3, Plus, FileText, Trash2, LayoutDashboard, Settings2, Upload, Download } from 'lucide-react';
 import { useFiscalYear } from '@/context/FiscalYearContext';
 import { useCurrency } from '@/hooks/useCurrency';
 import { cn } from '@/lib/utils';
+import Papa from 'papaparse';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+
 
 interface ExpenseAccount {
   code: string;
@@ -44,7 +50,8 @@ interface Revision {
 export function BudgetManager() {
   const { formatCurrency, currency } = useCurrency();
   const { activeYear } = useFiscalYear();
-  const [activeTab, setActiveTab] = useState<'elaboration' | 'monitoring' | 'engagements' | 'reporting'>('monitoring');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'categories' | 'elaboration' | 'monitoring' | 'engagements' | 'reporting'>('dashboard');
+
   const [accounts, setAccounts] = useState<ExpenseAccount[]>([]);
   const [budgetStatus, setBudgetStatus] = useState<BudgetStatus[]>([]);
   const [engagements, setEngagements] = useState<Engagement[]>([]);
@@ -172,6 +179,23 @@ export function BudgetManager() {
     }
   };
 
+  const handleDeleteEngagement = async (id: number) => {
+    if (!window.confirm("Voulez-vous vraiment supprimer cet engagement ? Cette action est irréversible.")) return;
+    try {
+      const res = await apiFetch(`/api/budgets/engagements/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchData();
+        setMessage({ type: 'success', text: 'Engagement supprimé avec succès.' });
+      } else {
+        const errorData = await res.json();
+        setMessage({ type: 'error', text: errorData.error || 'Erreur lors de la suppression.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage({ type: 'error', text: 'Erreur réseau.' });
+    }
+  };
+
   const prevMonth = () => {
     if (currentMonth === 1) {
       setCurrentMonth(12);
@@ -179,6 +203,81 @@ export function BudgetManager() {
     } else {
       setCurrentMonth(prev => prev - 1);
     }
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        try {
+          const entries = results.data.map((row: any) => ({
+            account_code: row['Compte'] || row['compte'] || row['Account'],
+            category: row['Catégorie'] || row['Categorie'] || row['Category'],
+            amount: parseFloat(row['Montant'] || row['montant'] || row['Amount']) || 0
+          })).filter(entry => (entry.account_code || entry.category) && entry.amount > 0);
+
+          if (entries.length === 0) {
+            setMessage({ type: 'error', text: 'Aucune donnée valide trouvée dans le fichier. Veuillez vérifier que les colonnes soient "Compte" (ou "Catégorie") et "Montant".' });
+            return;
+          }
+
+          const res = await apiFetch('/api/budgets/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entries, period_month: currentMonth, period_year: currentYear })
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            setMessage({ type: 'success', text: `${data.count} budgets importés avec succès.` });
+            if (activeTab === 'dashboard') {
+              // Dashboard reloads via its own effect, but let's toggle active tab to force a reload if needed or assume it's there
+            } else {
+              fetchData();
+            }
+          } else {
+            setMessage({ type: 'error', text: 'Erreur lors de l\'import.' });
+          }
+        } catch (err) {
+          console.error(err);
+          setMessage({ type: 'error', text: 'Une erreur est survenue.' });
+        } finally {
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      }
+    });
+  };
+
+  const handleExportPDF = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.text(`Suivi Budgétaire - ${months[currentMonth - 1]} ${currentYear}`, 14, 22);
+    
+    const tableData = budgetStatus.map(s => [
+      s.account_code,
+      s.account_name,
+      formatCurrency(s.budget),
+      formatCurrency(s.engaged),
+      formatCurrency(s.actual),
+      formatCurrency(s.available)
+    ]);
+
+    (doc as any).autoTable({
+      startY: 30,
+      head: [['Compte', 'Description', 'Budget', 'Engagé', 'Réalisé', 'Disponible']],
+      body: tableData,
+      theme: 'grid',
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [16, 185, 129] }
+    });
+
+    doc.save(`budget_${currentYear}_${currentMonth}.pdf`);
   };
 
   return (
@@ -194,6 +293,53 @@ export function BudgetManager() {
               <div className="min-w-[140px] text-center font-bold text-xs uppercase tracking-widest px-2">{months[currentMonth - 1]} {currentYear}</div>
               <button onClick={nextMonth} className="p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors"><ChevronRight size={20} /></button>
             </div>
+            
+            <input 
+              type="file" 
+              accept=".csv" 
+              className="hidden" 
+              ref={fileInputRef} 
+              onChange={handleImportCSV} 
+            />
+            
+            {activeTab === 'elaboration' && (
+              <>
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+                >
+                  <Upload size={18} />
+                  Importer CSV
+                </button>
+                <button 
+                  onClick={() => {
+                    const csvContent = "data:text/csv;charset=utf-8,Catégorie,Compte,Montant\nAchats & Approvisionnements,601000,150000\nServices Extérieurs,,20000";
+                    const encodedUri = encodeURI(csvContent);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", encodedUri);
+                    link.setAttribute("download", "modele_budget.csv");
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  }}
+                  className="p-2 text-slate-500 hover:text-slate-700 bg-white border border-slate-200 rounded-xl"
+                  title="Télécharger le modèle CSV"
+                >
+                  <Download size={18} />
+                </button>
+              </>
+            )}
+
+            {(activeTab === 'monitoring' || activeTab === 'elaboration') && (
+              <button 
+                onClick={handleExportPDF}
+                className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+              >
+                <Download size={18} />
+                Exporter PDF
+              </button>
+            )}
+
             {activeTab === 'engagements' && (
               <button 
                 onClick={() => setShowEngagementForm(true)}
@@ -207,7 +353,27 @@ export function BudgetManager() {
         }
       />
 
-      <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800/50 rounded-xl w-fit">
+      <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800/50 rounded-xl w-fit flex-wrap">
+        <button 
+          onClick={() => setActiveTab('dashboard')}
+          className={cn(
+            "px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2", 
+            activeTab === 'dashboard' ? "bg-white dark:bg-slate-900 shadow-sm text-brand-green" : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          <LayoutDashboard size={16} />
+          Tableau de Bord
+        </button>
+        <button 
+          onClick={() => setActiveTab('categories')}
+          className={cn(
+            "px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2", 
+            activeTab === 'categories' ? "bg-white dark:bg-slate-900 shadow-sm text-brand-green" : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          <Settings2 size={16} />
+          Catégories
+        </button>
         <button 
           onClick={() => setActiveTab('monitoring')}
           className={cn(
@@ -216,7 +382,7 @@ export function BudgetManager() {
           )}
         >
           <BarChart3 size={16} />
-          Suivi Budgétaire
+          Suivi Détaillé (Comptes)
         </button>
         <button 
           onClick={() => setActiveTab('elaboration')}
@@ -227,6 +393,16 @@ export function BudgetManager() {
         >
           <History size={16} />
           Élaboration / Révisions
+        </button>
+        <button 
+          onClick={() => setActiveTab('engagements')}
+          className={cn(
+            "px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2", 
+            activeTab === 'engagements' ? "bg-white dark:bg-slate-900 shadow-sm text-brand-green" : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          <Target size={16} />
+          Engagements
         </button>
         <button 
           onClick={() => setActiveTab('reporting')}
@@ -247,6 +423,14 @@ export function BudgetManager() {
           {message.type === 'success' ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
           <span className="text-sm font-medium">{message.text}</span>
         </div>
+      )}
+
+      {activeTab === 'dashboard' && (
+        <BudgetDashboard year={currentYear} month={currentMonth} />
+      )}
+
+      {activeTab === 'categories' && (
+        <BudgetCategoriesSetup />
       )}
 
       {activeTab === 'monitoring' && (
@@ -376,17 +560,18 @@ export function BudgetManager() {
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Compte</th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Montant</th>
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center">Statut</th>
+                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i} className="animate-pulse">
-                    <td colSpan={5} className="px-6 py-4"><div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-full" /></td>
+                    <td colSpan={6} className="px-6 py-4"><div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-full" /></td>
                   </tr>
                 ))
               ) : engagements.length === 0 ? (
-                <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500 italic">Aucun engagement enregistré.</td></tr>
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500 italic">Aucun engagement enregistré.</td></tr>
               ) : engagements.map((e) => (
                 <tr key={e.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <td className="px-6 py-4 text-sm text-slate-500">{new Date(e.engagement_date).toLocaleDateString()}</td>
@@ -404,6 +589,15 @@ export function BudgetManager() {
                     )}>
                       {e.status}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <button 
+                      onClick={() => handleDeleteEngagement(e.id)}
+                      className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
+                      title="Supprimer l'engagement"
+                    >
+                      <Trash2 size={16} />
+                    </button>
                   </td>
                 </tr>
               ))}

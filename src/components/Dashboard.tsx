@@ -1,3 +1,4 @@
+import { parseSafeJSON } from "../lib/utils";
 import React, { useEffect, useState } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -90,7 +91,13 @@ export function Dashboard() {
 
   const [widgets, setWidgets] = useState<WidgetConfig[]>(() => {
     const saved = localStorage.getItem('dashboard_widgets');
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      try {
+        return parseSafeJSON(saved);
+      } catch (e) {
+        console.error("Error parsing dashboard widgets", e);
+      }
+    }
     return [
       { id: 'summary', label: 'Résumé de Performance', visible: true },
       { id: 'investment', label: 'Capacité d\'Investissement', visible: true },

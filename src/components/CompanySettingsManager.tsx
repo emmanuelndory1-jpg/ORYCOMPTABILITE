@@ -1,7 +1,9 @@
 import { apiFetch } from '../lib/api';
-import React, { useState, useEffect } from 'react';
-import { Building, Save, Loader2, CreditCard, ShieldCheck, Users, Briefcase } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Building, Save, Loader2, CreditCard, ShieldCheck, Users, Briefcase, MapPin, Receipt, Landmark, UploadCloud, Building2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
+import { useModules } from '@/context/ModuleContext';
+import { useOutletContext } from 'react-router-dom';
 
 interface CompanySettings {
   id: number;
@@ -37,9 +39,6 @@ interface CompanySettings {
   logo_url?: string | null;
 }
 
-import { useModules } from '@/context/ModuleContext';
-import { useOutletContext } from 'react-router-dom';
-
 export function CompanySettingsManager() {
   const { isActive, refreshModules } = useModules();
   const { refreshCompanySettings } = useOutletContext<{ refreshCompanySettings: () => Promise<void> }>();
@@ -49,6 +48,8 @@ export function CompanySettingsManager() {
   const [activatingPayroll, setActivatingPayroll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchSettings();
@@ -82,6 +83,7 @@ export function CompanySettingsManager() {
       
       await refreshModules();
       setSuccess("Module Paie activé avec succès !");
+      setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur lors de l\'activation');
     } finally {
@@ -138,6 +140,7 @@ export function CompanySettingsManager() {
       if (res.ok) {
         setSuccess("Paramètres mis à jour avec succès.");
         await refreshCompanySettings();
+        setTimeout(() => setSuccess(null), 3000);
       } else {
         const data = await res.json();
         setError(data.error || "Erreur lors de la sauvegarde.");
@@ -150,471 +153,555 @@ export function CompanySettingsManager() {
     }
   };
 
+  const processImageFile = (file: File) => {
+    if (file.size > 1024 * 1024 * 5) {
+      setError("Le logo ne doit pas dépasser 5 Mo.");
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_DIM = 512;
+        let { width, height } = img;
+        
+        if (width > height && width > MAX_DIM) {
+          height *= MAX_DIM / width;
+          width = MAX_DIM;
+        } else if (height > MAX_DIM) {
+          width *= MAX_DIM / height;
+          height = MAX_DIM;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL(file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.85);
+          setSettings(prev => prev ? { ...prev, logo_url: dataUrl } : prev);
+        }
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 1024 * 1024) {
-        setError("Le logo ne doit pas dépasser 1 Mo.");
-        return;
-      }
-      
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (settings) {
-          setSettings({ ...settings, logo_url: reader.result as string });
-        }
-      };
-      reader.readAsDataURL(file);
+      processImageFile(file);
+      // Reset input so the same file could be selected again if deleted
+      e.target.value = '';
     }
   };
 
-  if (loading) return <div className="p-8 text-center"><Loader2 className="animate-spin mx-auto text-brand-green" /></div>;
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      processImageFile(file);
+    }
+  };
+
+  if (loading) return <div className="p-8 text-center flex flex-col items-center justify-center min-h-[50vh]"><Loader2 className="animate-spin text-brand-green mb-4" size={32} /><p className="text-slate-500">Chargement des paramètres...</p></div>;
   if (!settings) return <div className="p-8 text-center text-slate-500">Aucun paramètre trouvé.</div>;
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-colors duration-300">
-      <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg">
-            <Building size={20} />
+    <div className="space-y-6 max-w-6xl mx-auto pb-12">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Centre d'Information</h1>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Gérez le profil, l'identité et la configuration de votre entreprise.</p>
+        </div>
+        <button 
+          onClick={handleSave}
+          disabled={saving}
+          className="bg-brand-green hover:bg-brand-green-dark text-white px-6 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-all transform active:scale-95 disabled:opacity-50 shadow-sm"
+        >
+          {saving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
+          Enregistrer les modifications
+        </button>
+      </div>
+
+      {error && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-xl text-sm border border-red-200 dark:border-red-900/40 flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+          <AlertCircle size={18} />
+          {error}
+        </div>
+      )}
+      {success && (
+        <div className="p-4 bg-brand-green/10 dark:bg-brand-green/20 text-brand-green-dark dark:text-brand-green-light rounded-xl text-sm border border-brand-green/20 dark:border-brand-green/30 flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+          <CheckCircle2 size={18} />
+          {success}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        {/* Left Column - Core Info & Logo */}
+        <div className="xl:col-span-1 space-y-6">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 p-5 flex items-center gap-3">
+              <Building2 className="text-brand-green" size={20} />
+              <h2 className="font-bold text-slate-900 dark:text-white">Identité Visuelle</h2>
+            </div>
+            <div className="p-6 flex flex-col items-center">
+              <div 
+                className={`relative w-48 h-48 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden transition-all group cursor-pointer ${settings.logo_url ? 'border-brand-green/30 bg-brand-green/5' : 'border-slate-300 dark:border-slate-700 hover:border-brand-green/50 hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                onClick={() => logoInputRef.current?.click()}
+              >
+                {settings.logo_url ? (
+                  <>
+                    <img src={settings.logo_url} alt="Logo preview" className="w-full h-full object-contain p-2" />
+                    <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <span className="text-white text-sm font-medium flex items-center gap-2"><UploadCloud size={16}/> Remplacer</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center p-6">
+                    <div className="w-12 h-12 bg-brand-green/10 text-brand-green rounded-full flex items-center justify-center mx-auto mb-3">
+                      <UploadCloud size={24} />
+                    </div>
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Cliquer ou glisser</p>
+                    <p className="text-xs text-slate-400 mt-1">PNG, JPG (Max 1Mo)</p>
+                  </div>
+                )}
+                <input ref={logoInputRef} type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+              </div>
+              {settings.logo_url && (
+                <button 
+                  type="button" 
+                  onClick={() => setSettings({...settings, logo_url: null})}
+                  className="mt-4 text-rose-500 text-sm font-medium hover:text-rose-600 transition-colors"
+                >
+                  Supprimer le logo
+                </button>
+              )}
+            </div>
           </div>
-          <div>
-            <h2 className="font-bold text-slate-900 dark:text-slate-100">Informations de l'Entreprise</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Modifiez les détails de votre société</p>
+
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 p-5 flex items-center gap-3">
+               <Briefcase className="text-indigo-500" size={20} />
+               <h2 className="font-bold text-slate-900 dark:text-white">Informations Générales</h2>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Nom de l'entreprise</label>
+                <input 
+                  type="text" 
+                  required
+                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                  value={settings.name ?? ''}
+                  onChange={e => setSettings({...settings, name: e.target.value})}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Forme Juridique</label>
+                  <select 
+                    className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                    value={settings.legal_form ?? 'SARL'}
+                    onChange={e => setSettings({...settings, legal_form: e.target.value})}
+                  >
+                    <option value="SARL">SARL</option>
+                    <option value="SA">SA</option>
+                    <option value="SAS">SAS</option>
+                    <option value="EI">EI</option>
+                    <option value="SUARL">SUARL</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Devise</label>
+                  <select 
+                    className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                    value={settings.currency ?? 'FCFA'}
+                    onChange={e => setSettings({...settings, currency: e.target.value})}
+                  >
+                    <option value="FCFA">XOF (FCFA)</option>
+                    <option value="EUR">EUR (€)</option>
+                    <option value="USD">USD ($)</option>
+                    <option value="GNF">GNF</option>
+                    <option value="CDF">CDF</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Activité Principale</label>
+                <input 
+                  type="text" 
+                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                  value={settings.activity ?? ''}
+                  onChange={e => setSettings({...settings, activity: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Capital Social</label>
+                <input 
+                  type="number" 
+                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                  value={settings.capital ?? 0}
+                  onChange={e => setSettings({...settings, capital: Number(e.target.value)})}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column - Details */}
+        <div className="xl:col-span-2 space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+               <div className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 p-5 flex items-center gap-3">
+                 <MapPin className="text-amber-500" size={20} />
+                 <h2 className="font-bold text-slate-900 dark:text-white">Contact & Localisation</h2>
+               </div>
+               <div className="p-6 space-y-4 flex-1">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Nom du Gérant</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                      value={settings.manager_name ?? ''}
+                      onChange={e => setSettings({...settings, manager_name: e.target.value})}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Téléphone</label>
+                      <input 
+                        type="tel" 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.phone ?? ''}
+                        onChange={e => setSettings({...settings, phone: e.target.value})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Email</label>
+                      <input 
+                        type="email" 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.email ?? ''}
+                        onChange={e => setSettings({...settings, email: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Adresse Complète</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                      value={settings.address ?? ''}
+                      onChange={e => setSettings({...settings, address: e.target.value})}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Ville</label>
+                      <input 
+                        type="text" 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.city ?? ''}
+                        onChange={e => setSettings({...settings, city: e.target.value})}
+                      />
+                    </div>
+                     <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Pays</label>
+                      <input 
+                        type="text" 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.country ?? 'Côte d\'Ivoire'}
+                        onChange={e => setSettings({...settings, country: e.target.value})}
+                      />
+                    </div>
+                  </div>
+               </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+               <div className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 p-5 flex items-center gap-3">
+                 <Receipt className="text-teal-500" size={20} />
+                 <h2 className="font-bold text-slate-900 dark:text-white">Administration & Impôts</h2>
+               </div>
+               <div className="p-6 space-y-4 flex-1">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">N° Contribuable (NCC)</label>
+                      <input 
+                        type="text" 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.fiscal_id ?? ''}
+                        onChange={e => setSettings({...settings, fiscal_id: e.target.value})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Registre Commerce</label>
+                      <input 
+                        type="text" 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.rccm ?? ''}
+                        onChange={e => setSettings({...settings, rccm: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Système Comptable SYSCOHADA</label>
+                    <select 
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                      value={settings.syscohada_system ?? 'normal'}
+                      onChange={e => setSettings({...settings, syscohada_system: e.target.value})}
+                    >
+                      <option value="normal">Système Normal</option>
+                      <option value="simplifie">Système Minimal de Trésorerie (SMT)</option>
+                    </select>
+                  </div>
+                   <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Régime Fiscal</label>
+                      <select 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.tax_regime ?? 'Régime du Réel Normal'}
+                        onChange={e => setSettings({...settings, tax_regime: e.target.value})}
+                      >
+                        <option value="Régime du Réel Normal">Régime du Réel Normal</option>
+                        <option value="Régime du Réel Simplifié">Régime du Réel Simplifié</option>
+                        <option value="Régime de l'Entreprenant">Régime de l'Entreprenant</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Régime TVA</label>
+                      <select 
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                        value={settings.vat_regime ?? 'Assujetti'}
+                        onChange={e => setSettings({...settings, vat_regime: e.target.value})}
+                      >
+                        <option value="Assujetti">Assujetti</option>
+                        <option value="Non Assujetti">Non Assujetti</option>
+                        <option value="Exonéré">Exonéré</option>
+                      </select>
+                    </div>
+                  </div>
+                   <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Taux TVA (%)</label>
+                    <input 
+                      type="number" 
+                      step="0.1"
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                      value={settings.vat_rate ?? 18}
+                      onChange={e => setSettings({...settings, vat_rate: Number(e.target.value)})}
+                    />
+                  </div>
+               </div>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+             <div className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+               <div className="flex items-center gap-3">
+                 <Landmark className="text-blue-500" size={20} />
+                 <h2 className="font-bold text-slate-900 dark:text-white">Coordonnées Bancaires & Paiements</h2>
+               </div>
+             </div>
+             <div className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Nom de la Banque</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                      value={settings.bank_name ?? ''}
+                      onChange={e => setSettings({...settings, bank_name: e.target.value})}
+                      placeholder="Ex: NSIA Banque"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Code SWIFT / BIC</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                      value={settings.bank_swift ?? ''}
+                      onChange={e => setSettings({...settings, bank_swift: e.target.value})}
+                      placeholder="Ex: NSIACIAB"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Numéro de Compte / IBAN</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm font-mono"
+                      value={settings.bank_iban ?? settings.bank_account_number ?? ''}
+                      onChange={e => setSettings({...settings, bank_iban: e.target.value, bank_account_number: e.target.value})}
+                      placeholder="Ex: CI01 01234 567890123456 78"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-sm flex items-center gap-2 font-bold text-slate-900 dark:text-white uppercase tracking-wider title-font"><CreditCard size={16}/> Méthodes de Paiement Actives</h3>
+                  
+                  {/* Virement Bancaire */}
+                  <div className={`p-4 rounded-xl border transition-colors ${settings.payment_bank_enabled ? 'bg-blue-50/50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800/50' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700'}`}>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          id="payment_bank_enabled"
+                          checked={settings.payment_bank_enabled !== false && Number(settings.payment_bank_enabled) !== 0}
+                          onChange={e => setSettings({...settings, payment_bank_enabled: e.target.checked})}
+                          className="w-5 h-5 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                        />
+                        <label htmlFor="payment_bank_enabled" className={`font-semibold ${settings.payment_bank_enabled ? 'text-blue-900 dark:text-blue-100' : 'text-slate-700 dark:text-slate-300'}`}>
+                          Virement Bancaire
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-medium text-slate-500 uppercase tracking-widest whitespace-nowrap">Compte Lié</label>
+                        <input
+                          type="text"
+                          value={settings.payment_bank_account ?? '521'}
+                          onChange={e => setSettings({...settings, payment_bank_account: e.target.value})}
+                          className="w-24 px-3 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm text-center font-mono"
+                          disabled={!settings.payment_bank_enabled}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Espèces */}
+                  <div className={`p-4 rounded-xl border transition-colors ${settings.payment_cash_enabled ? 'bg-emerald-50/50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800/50' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700'}`}>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          id="payment_cash_enabled"
+                          checked={settings.payment_cash_enabled !== false && Number(settings.payment_cash_enabled) !== 0}
+                          onChange={e => setSettings({...settings, payment_cash_enabled: e.target.checked})}
+                          className="w-5 h-5 text-emerald-600 border-slate-300 rounded focus:ring-emerald-500"
+                        />
+                        <label htmlFor="payment_cash_enabled" className={`font-semibold ${settings.payment_cash_enabled ? 'text-emerald-900 dark:text-emerald-100' : 'text-slate-700 dark:text-slate-300'}`}>
+                          Caisse / Espèces
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-medium text-slate-500 uppercase tracking-widest whitespace-nowrap">Compte Lié</label>
+                        <input
+                          type="text"
+                          value={settings.payment_cash_account ?? '571'}
+                          onChange={e => setSettings({...settings, payment_cash_account: e.target.value})}
+                          className="w-24 px-3 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm text-center font-mono"
+                          disabled={!settings.payment_cash_enabled}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Mobile Money */}
+                  <div className={`p-4 rounded-xl border transition-colors ${settings.payment_mobile_enabled ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800/50' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700'}`}>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          id="payment_mobile_enabled"
+                          checked={settings.payment_mobile_enabled !== false && Number(settings.payment_mobile_enabled) !== 0}
+                          onChange={e => setSettings({...settings, payment_mobile_enabled: e.target.checked})}
+                          className="w-5 h-5 text-orange-600 border-slate-300 rounded focus:ring-orange-500"
+                        />
+                        <label htmlFor="payment_mobile_enabled" className={`font-semibold ${settings.payment_mobile_enabled ? 'text-orange-900 dark:text-orange-100' : 'text-slate-700 dark:text-slate-300'}`}>
+                          Mobile Money (Wave, Orange, MTN...)
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-medium text-slate-500 uppercase tracking-widest whitespace-nowrap">Compte Lié</label>
+                        <input
+                          type="text"
+                          value={settings.payment_mobile_account ?? '585'}
+                          onChange={e => setSettings({...settings, payment_mobile_account: e.target.value})}
+                          className="w-24 px-3 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm text-center font-mono"
+                          disabled={!settings.payment_mobile_enabled}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+             </div>
+          </div>
+
+          {/* Modules Addons */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden mt-6">
+             <div className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 p-5 flex items-center gap-3">
+               <ShieldCheck className="text-purple-500" size={20} />
+               <h2 className="font-bold text-slate-900 dark:text-white">Modules & Extensions</h2>
+             </div>
+             <div className="p-6">
+                {!isActive('payroll') ? (
+                  <div className="bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 rounded-2xl border border-purple-100 dark:border-purple-800/30 p-6 flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 p-4 opacity-10">
+                      <Briefcase size={80} />
+                    </div>
+                    <div className="relative z-10 flex-1">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 text-xs font-bold uppercase tracking-widest mb-3">
+                        Module Extensible
+                      </div>
+                      <h4 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Gestion de la Paie & RH</h4>
+                      <p className="text-sm text-slate-600 dark:text-slate-400 max-w-md">Débloquez la gestion complète de vos employés : génération automatique des bulletins de salaire, calcul des cotisations sociales (CNPS), et déclarations fiscales simplifiées.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleModule('payroll')}
+                      disabled={activatingPayroll}
+                      className="relative z-10 px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold shadow-lg shadow-purple-500/25 transition-all flex items-center gap-2 whitespace-nowrap active:scale-95 disabled:opacity-50"
+                    >
+                      {activatingPayroll ? <Loader2 size={18} className="animate-spin" /> : <Briefcase size={18} />}
+                      Activer le module
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-emerald-50 dark:bg-emerald-900/10 rounded-xl border border-emerald-100 dark:border-emerald-800/30">
+                       <span className="flex items-center gap-2 font-bold text-emerald-700 dark:text-emerald-400">
+                         <span className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-200 dark:bg-emerald-800 text-emerald-600 dark:text-emerald-300">
+                           <CheckCircle2 size={14} />
+                         </span>
+                         Module Paie & RH Activé
+                       </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">N° Employeur CNPS</label>
+                        <input 
+                          type="text" 
+                          className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                          value={settings.cnps_employer_number ?? ''}
+                          onChange={e => setSettings({...settings, cnps_employer_number: e.target.value})}
+                          placeholder="Ex: 012345678"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Centre des Impôts (Rattachement)</label>
+                        <input 
+                          type="text" 
+                          className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all shadow-sm"
+                          value={settings.tax_office ?? ''}
+                          onChange={e => setSettings({...settings, tax_office: e.target.value})}
+                          placeholder="Ex: CDI Cocody"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+             </div>
           </div>
         </div>
       </div>
-
-      <form onSubmit={handleSave} className="p-6 space-y-6">
-        {error && (
-          <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg text-sm border border-red-200 dark:border-red-900/40">
-            {error}
-          </div>
-        )}
-        {success && (
-          <div className="p-4 bg-brand-green/10 dark:bg-brand-green/20 text-brand-green-dark dark:text-brand-green-light rounded-lg text-sm border border-brand-green/20 dark:border-brand-green/30">
-            {success}
-          </div>
-        )}
-
-        <div className="flex flex-col md:flex-row gap-8 pb-6 border-b border-slate-100 dark:border-slate-800">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-32 h-32 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center overflow-hidden bg-slate-50 dark:bg-slate-800/50">
-              {settings.logo_url ? (
-                <img src={settings.logo_url} alt="Logo preview" className="w-full h-full object-contain" />
-              ) : (
-                <div className="text-center p-4">
-                  <Building className="mx-auto text-slate-400 mb-1" size={24} />
-                  <p className="text-[10px] text-slate-400 uppercase font-bold">Logo</p>
-                </div>
-              )}
-            </div>
-            <label className="cursor-pointer bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition-all transform active:scale-95 shadow-sm">
-              {settings.logo_url ? "Modifier le logo" : "Importer un logo"}
-              <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
-            </label>
-            {settings.logo_url && (
-              <button 
-                type="button" 
-                onClick={() => setSettings({...settings, logo_url: null})}
-                className="text-rose-500 text-[10px] font-bold uppercase hover:underline"
-              >
-                Supprimer
-              </button>
-            )}
-          </div>
-
-          <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nom de l'entreprise</label>
-              <input 
-                type="text" 
-                required
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                value={settings.name ?? ''}
-                onChange={e => setSettings({...settings, name: e.target.value})}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Forme Juridique</label>
-              <select 
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                value={settings.legal_form ?? 'SARL'}
-                onChange={e => setSettings({...settings, legal_form: e.target.value})}
-              >
-                <option value="SARL">SARL</option>
-                <option value="SA">SA</option>
-                <option value="SAS">SAS</option>
-                <option value="EI">Entreprise Individuelle</option>
-                <option value="SUARL">SUARL</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Activité</label>
-            <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.activity ?? ''}
-              onChange={e => setSettings({...settings, activity: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Devise</label>
-            <select 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.currency ?? 'FCFA'}
-              onChange={e => setSettings({...settings, currency: e.target.value})}
-            >
-              <option value="FCFA">FCFA (XOF)</option>
-              <option value="EUR">Euro (€)</option>
-              <option value="USD">Dollar ($)</option>
-              <option value="GNF">Franc Guinéen (GNF)</option>
-              <option value="CDF">Franc Congolais (CDF)</option>
-            </select>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">La devise utilisée pour tous les affichages.</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Numéro Contribuable (NCC)</label>
-            <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.fiscal_id ?? ''}
-              onChange={e => setSettings({...settings, fiscal_id: e.target.value})}
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Registre de Commerce (RCCM)</label>
-            <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.rccm ?? ''}
-              onChange={e => setSettings({...settings, rccm: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Système Comptable</label>
-            <select 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.syscohada_system ?? 'normal'}
-              onChange={e => setSettings({...settings, syscohada_system: e.target.value})}
-            >
-              <option value="normal">Système Normal</option>
-              <option value="simplifie">Système Minimal de Trésorerie (SMT)</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Régime Fiscal</label>
-            <select 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.tax_regime ?? 'Régime du Réel Normal'}
-              onChange={e => setSettings({...settings, tax_regime: e.target.value})}
-            >
-              <option value="Régime du Réel Normal">Régime du Réel Normal</option>
-              <option value="Régime du Réel Simplifié">Régime du Réel Simplifié</option>
-              <option value="Régime de l'Entreprenant">Régime de l'Entreprenant</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Régime TVA</label>
-            <select 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.vat_regime ?? 'Assujetti'}
-              onChange={e => setSettings({...settings, vat_regime: e.target.value})}
-            >
-              <option value="Assujetti">Assujetti</option>
-              <option value="Non Assujetti">Non Assujetti</option>
-              <option value="Exonéré">Exonéré</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Taux TVA (%)</label>
-            <input 
-              type="number" 
-              step="0.1"
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.vat_rate ?? 18}
-              onChange={e => setSettings({...settings, vat_rate: Number(e.target.value)})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nom du Gérant</label>
-            <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.manager_name ?? ''}
-              onChange={e => setSettings({...settings, manager_name: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Capital Social</label>
-            <input 
-              type="number" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.capital ?? 0}
-              onChange={e => setSettings({...settings, capital: Number(e.target.value)})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Téléphone</label>
-            <input 
-              type="tel" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.phone ?? ''}
-              onChange={e => setSettings({...settings, phone: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email de l'entreprise</label>
-            <input 
-              type="email" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.email ?? ''}
-              onChange={e => setSettings({...settings, email: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Pays</label>
-            <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.country ?? 'Côte d\'Ivoire'}
-              onChange={e => setSettings({...settings, country: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Adresse</label>
-            <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.address ?? ''}
-              onChange={e => setSettings({...settings, address: e.target.value})}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Ville</label>
-            <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-              value={settings.city ?? ''}
-              onChange={e => setSettings({...settings, city: e.target.value})}
-            />
-          </div>
-        </div>
-
-        <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
-          <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">Coordonnées Bancaires</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nom de la Banque</label>
-              <input 
-                type="text" 
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                value={settings.bank_name ?? ''}
-                onChange={e => setSettings({...settings, bank_name: e.target.value})}
-                placeholder="Ex: NSIA Banque"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Numéro de Compte</label>
-              <input 
-                type="text" 
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                value={settings.bank_account_number ?? ''}
-                onChange={e => setSettings({...settings, bank_account_number: e.target.value})}
-                placeholder="Ex: 0123456789"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IBAN</label>
-              <input 
-                type="text" 
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                value={settings.bank_iban ?? ''}
-                onChange={e => setSettings({...settings, bank_iban: e.target.value})}
-                placeholder="Ex: CI01 01234 567890123456 78"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Code SWIFT / BIC</label>
-              <input 
-                type="text" 
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                value={settings.bank_swift ?? ''}
-                onChange={e => setSettings({...settings, bank_swift: e.target.value})}
-                placeholder="Ex: NSIACIAB"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Activation Module Paie (Shortcut) */}
-        {!isActive('payroll') && (
-          <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
-            <div className="p-6 bg-amber-50 dark:bg-amber-900/10 rounded-2xl border border-amber-100 dark:border-amber-900/20 flex flex-col md:flex-row items-center justify-between gap-6">
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-amber-100 dark:bg-amber-800/20 text-amber-600 dark:text-amber-400 rounded-xl">
-                  <Briefcase size={24} />
-                </div>
-                <div>
-                  <h4 className="font-bold text-slate-900 dark:text-white">Désirez-vous gérer la Paie ?</h4>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">Activez le module de paie pour gérer vos salariés, générer des bulletins et suivre les cotisations sociales.</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleToggleModule('payroll')}
-                disabled={activatingPayroll}
-                className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2 whitespace-nowrap active:scale-95 disabled:opacity-50"
-              >
-                {activatingPayroll ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} />}
-                Activer le module Paie
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Informations Sociales (Module Paie) */}
-        {isActive('payroll') && (
-          <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
-            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">Informations Sociales & Paie</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">N° Employeur CNPS</label>
-                <input 
-                  type="text" 
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                  value={settings.cnps_employer_number ?? ''}
-                  onChange={e => setSettings({...settings, cnps_employer_number: e.target.value})}
-                  placeholder="Ex: 012345678"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Centre des Impôts (Rattachement)</label>
-                <input 
-                  type="text" 
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-                  value={settings.tax_office ?? ''}
-                  onChange={e => setSettings({...settings, tax_office: e.target.value})}
-                  placeholder="Ex: CDI Cocody"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
-          <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">Modes de Paiement (Factures)</h3>
-          <div className="space-y-6">
-            {/* Virement Bancaire */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
-              <div className="flex items-center gap-3 mb-4 md:mb-0">
-                <input
-                  type="checkbox"
-                  id="payment_bank_enabled"
-                  checked={settings.payment_bank_enabled !== false && Number(settings.payment_bank_enabled) !== 0}
-                  onChange={e => setSettings({...settings, payment_bank_enabled: e.target.checked})}
-                  className="w-4 h-4 text-brand-green border-slate-300 rounded focus:ring-brand-green"
-                />
-                <label htmlFor="payment_bank_enabled" className="font-medium text-slate-900 dark:text-slate-100">
-                  Virement Bancaire
-                </label>
-              </div>
-              <div className="flex items-center gap-3">
-                <label className="text-sm text-slate-600 dark:text-slate-400 whitespace-nowrap">Compte Comptable :</label>
-                <input
-                  type="text"
-                  value={settings.payment_bank_account ?? '521'}
-                  onChange={e => setSettings({...settings, payment_bank_account: e.target.value})}
-                  className="w-32 px-3 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
-                  placeholder="Ex: 521"
-                />
-              </div>
-            </div>
-
-            {/* Espèces */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
-              <div className="flex items-center gap-3 mb-4 md:mb-0">
-                <input
-                  type="checkbox"
-                  id="payment_cash_enabled"
-                  checked={settings.payment_cash_enabled !== false && Number(settings.payment_cash_enabled) !== 0}
-                  onChange={e => setSettings({...settings, payment_cash_enabled: e.target.checked})}
-                  className="w-4 h-4 text-brand-green border-slate-300 rounded focus:ring-brand-green"
-                />
-                <label htmlFor="payment_cash_enabled" className="font-medium text-slate-900 dark:text-slate-100">
-                  Espèces
-                </label>
-              </div>
-              <div className="flex items-center gap-3">
-                <label className="text-sm text-slate-600 dark:text-slate-400 whitespace-nowrap">Compte Comptable :</label>
-                <input
-                  type="text"
-                  value={settings.payment_cash_account ?? '571'}
-                  onChange={e => setSettings({...settings, payment_cash_account: e.target.value})}
-                  className="w-32 px-3 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
-                  placeholder="Ex: 571"
-                />
-              </div>
-            </div>
-
-            {/* Mobile Money */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
-              <div className="flex items-center gap-3 mb-4 md:mb-0">
-                <input
-                  type="checkbox"
-                  id="payment_mobile_enabled"
-                  checked={settings.payment_mobile_enabled !== false && Number(settings.payment_mobile_enabled) !== 0}
-                  onChange={e => setSettings({...settings, payment_mobile_enabled: e.target.checked})}
-                  className="w-4 h-4 text-brand-green border-slate-300 rounded focus:ring-brand-green"
-                />
-                <label htmlFor="payment_mobile_enabled" className="font-medium text-slate-900 dark:text-slate-100">
-                  Mobile Money
-                </label>
-              </div>
-              <div className="flex items-center gap-3">
-                <label className="text-sm text-slate-600 dark:text-slate-400 whitespace-nowrap">Compte Comptable :</label>
-                <input
-                  type="text"
-                  value={settings.payment_mobile_account ?? '585'}
-                  onChange={e => setSettings({...settings, payment_mobile_account: e.target.value})}
-                  className="w-32 px-3 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green outline-none bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
-                  placeholder="Ex: 585"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-slate-800">
-          <button 
-            type="submit" 
-            disabled={saving}
-            className="bg-brand-green hover:bg-brand-green-dark text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
-            Enregistrer les modifications
-          </button>
-        </div>
-      </form>
     </div>
   );
 }

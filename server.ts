@@ -14,6 +14,16 @@ import multer from 'multer';
 import fs from 'fs';
 import { z } from 'zod';
 import * as schemas from './server/validation.ts';
+import { GoogleGenAI } from "@google/genai";
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY || "",
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
 
 declare global {
   namespace Express {
@@ -707,15 +717,57 @@ db.exec(`
   )
 `);
 
-// --- Audit Logs ---
-app.get('/api/audit-logs', (req, res) => {
-  try {
-    const logs = db.prepare('SELECT * FROM audit_logs ORDER BY date DESC LIMIT 100').all();
-    res.json(logs);
-  } catch (err) {
-    console.error(err);
-    handleApiError(res, new AppError("Erreur lors de la récupération des logs" , 500, "server_error"));
+
+
+// --- Gemini Proxy Route ---
+app.post('/api/gemini/generate', async (req, res) => {
+  const { model, contents, config } = req.body;
+  const maxRetries = 3;
+  let lastErr: any;
+
+  // Fallback models if the requested one is experiencing high demand
+  const fallbackModels = [model, "gemini-2.5-flash", "gemini-2.5-pro"];
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Try current model, then fallback if we are on later attempts
+    const currentModelToTry = fallbackModels[Math.min(attempt, fallbackModels.length - 1)] || model;
+    
+    try {
+      if (attempt > 0) {
+        // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000 + Math.random() * 500));
+        console.warn(`Gemini API: Retrying (Attempt ${attempt}/${maxRetries}) using model: ${currentModelToTry}`);
+      }
+
+      const response = await ai.models.generateContent({ model: currentModelToTry, contents, config });
+      return res.json({ text: response.text, candidates: response.candidates });
+    } catch (err: any) {
+      lastErr = err;
+      const errorString = err.message || String(err);
+      
+      const isTransient = errorString.includes('429') || 
+                          errorString.includes('503') || 
+                          errorString.includes('quota') || 
+                          errorString.includes('RESOURCE_EXHAUSTED') || 
+                          errorString.includes('UNAVAILABLE');
+
+      if (!isTransient || attempt === maxRetries) {
+        break;
+      }
+    }
   }
+
+  console.error("Gemini API Error (exhausted retries):", lastErr);
+  let statusCode = 500;
+  const finalErrString = lastErr?.message || String(lastErr);
+  
+  if (finalErrString.includes('429') || finalErrString.includes('quota') || finalErrString.includes('RESOURCE_EXHAUSTED')) {
+     statusCode = 429;
+  } else if (finalErrString.includes('503') || finalErrString.includes('UNAVAILABLE')) {
+     statusCode = 503;
+  }
+  
+  res.status(statusCode).json({ error: finalErrString });
 });
 
 // --- Auth Routes ---
@@ -1019,16 +1071,7 @@ app.delete("/api/journals/:id", (req, res) => {
   }
 });
 
-// --- Audit API ---
-app.get("/api/audit-logs", (req, res) => {
-  try {
-    const stmt = db.prepare("SELECT * FROM audit_logs ORDER BY date DESC LIMIT 100");
-    const logs = stmt.all();
-    res.json(logs);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+
 
 // --- Fiscal Years API ---
 app.get("/api/fiscal-years", (req, res) => {
@@ -1094,6 +1137,32 @@ app.put("/api/fiscal-years/:id/close", (req, res) => {
   try {
     db.prepare("UPDATE fiscal_years SET status = 'closed' WHERE id = ?").run(id);
     logAction(req.user?.email || 'Admin', 'CLOSE', 'FiscalYear', id);
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.put("/api/fiscal-years/:id/archive", (req, res) => {
+  const { id } = req.params;
+  try {
+    const year = db.prepare("SELECT is_active FROM fiscal_years WHERE id = ?").get(id);
+    if (year && year.is_active) {
+      return res.status(400).json({ error: "Impossible d'archiver un exercice actif." });
+    }
+    db.prepare("UPDATE fiscal_years SET status = 'archived' WHERE id = ?").run(id);
+    logAction(req.user?.email || 'Admin', 'ARCHIVE', 'FiscalYear', id);
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.put("/api/fiscal-years/:id/reopen", (req, res) => {
+  const { id } = req.params;
+  try {
+    db.prepare("UPDATE fiscal_years SET status = 'open' WHERE id = ?").run(id);
+    logAction(req.user?.email || 'Admin', 'REOPEN', 'FiscalYear', id);
     res.json({ success: true });
   } catch (err) {
     handleApiError(res, err);
@@ -2399,6 +2468,19 @@ app.get("/api/treasury", (req, res) => {
       })),
       forecastData: dailyBalances
     });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.get("/api/treasury/accounts/:code/balance", (req, res) => {
+  const { code } = req.params;
+  try {
+    const acc = db.prepare(`
+      SELECT COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) as balance
+      FROM journal_entries WHERE account_code = ?
+    `).get(code) as any;
+    res.json({ balance: acc?.balance || 0 });
   } catch (err) {
     handleApiError(res, err);
   }
@@ -3725,7 +3807,7 @@ app.delete("/api/accounts/:code", (req, res) => {
 // Get transactions (with optional filters)
 // --- Journal Suggestions API ---
 app.get("/api/journal/suggestions", (req, res) => {
-  const { thirdPartyId, operationType } = req.query;
+  const { thirdPartyId, operationType, description } = req.query;
   try {
     let suggestions = [];
     
@@ -3738,8 +3820,53 @@ app.get("/api/journal/suggestions", (req, res) => {
     ];
     const excludeClause = excludedAccounts.map(code => `je.account_code NOT LIKE '${code}'`).join(' AND ');
 
-    if (thirdPartyId && operationType) {
-      // Try specific combination first
+    // 1. Try with Description, Third Party, and Operation Type
+    if (description && thirdPartyId && operationType) {
+      suggestions = db.prepare(`
+        SELECT je.account_code, a.name as account_name, COUNT(*) as count
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id
+        JOIN accounts a ON je.account_code = a.code
+        WHERE t.third_party_id = ? AND t.operation_type = ? AND LOWER(t.description) LIKE LOWER(?)
+        AND (${excludeClause})
+        GROUP BY je.account_code
+        ORDER BY count DESC
+        LIMIT 5
+      `).all(thirdPartyId, operationType, `%${description}%`);
+    }
+    
+    // 2. Try with Description and Third Party
+    if (suggestions.length === 0 && description && thirdPartyId) {
+      suggestions = db.prepare(`
+        SELECT je.account_code, a.name as account_name, COUNT(*) as count
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id
+        JOIN accounts a ON je.account_code = a.code
+        WHERE t.third_party_id = ? AND LOWER(t.description) LIKE LOWER(?)
+        AND (${excludeClause})
+        GROUP BY je.account_code
+        ORDER BY count DESC
+        LIMIT 5
+      `).all(thirdPartyId, `%${description}%`);
+    }
+
+    // 3. Try with Description alone
+    if (suggestions.length === 0 && description) {
+      suggestions = db.prepare(`
+        SELECT je.account_code, a.name as account_name, COUNT(*) as count
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id
+        JOIN accounts a ON je.account_code = a.code
+        WHERE LOWER(t.description) LIKE LOWER(?)
+        AND (${excludeClause})
+        GROUP BY je.account_code
+        ORDER BY count DESC
+        LIMIT 5
+      `).all(`%${description}%`);
+    }
+
+    // 4. Try with Third Party and Operation Type
+    if (suggestions.length === 0 && thirdPartyId && operationType) {
       suggestions = db.prepare(`
         SELECT je.account_code, a.name as account_name, COUNT(*) as count
         FROM journal_entries je
@@ -3753,8 +3880,8 @@ app.get("/api/journal/suggestions", (req, res) => {
       `).all(thirdPartyId, operationType);
     }
 
+    // 5. Try with just Third Party
     if (suggestions.length === 0 && thirdPartyId) {
-      // Fallback to just third party
       suggestions = db.prepare(`
         SELECT je.account_code, a.name as account_name, COUNT(*) as count
         FROM journal_entries je
@@ -3768,8 +3895,8 @@ app.get("/api/journal/suggestions", (req, res) => {
       `).all(thirdPartyId);
     }
 
+    // 6. Try with just Operation Type
     if (suggestions.length === 0 && operationType) {
-      // Fallback to just operation type history across all third parties
       suggestions = db.prepare(`
         SELECT je.account_code, a.name as account_name, COUNT(*) as count
         FROM journal_entries je
@@ -3781,6 +3908,42 @@ app.get("/api/journal/suggestions", (req, res) => {
         ORDER BY count DESC
         LIMIT 5
       `).all(operationType);
+    }
+
+    // 7. SYSCOHADA Fallback if fewer than 5 suggestions
+    if (suggestions.length < 5 && operationType) {
+      let likeClauses = [];
+      if (operationType === 'vente_marchandises') likeClauses = ["701100", "707100", "701%", "707%"];
+      else if (operationType === 'vente_services') likeClauses = ["706100", "706%"];
+      else if (operationType === 'achat_marchandises') likeClauses = ["601100", "602100", "607100", "601%", "602%", "607%"];
+      else if (operationType === 'achat_services') likeClauses = ["605100", "621100", "622100", "62%", "63%"];
+      else if (operationType === 'frais_generaux') likeClauses = ["605%", "61%", "62%", "63%", "64%"];
+      else if (operationType === 'paiement_fournisseur') likeClauses = ["401100", "401%"];
+      else if (operationType === 'encaissement_client') likeClauses = ["411100", "411%"];
+      else if (operationType === 'paiement_salaire') likeClauses = ["422100", "421100", "42%"];
+      else if (operationType === 'paiement_impot') likeClauses = ["44%", "64%"];
+      
+      if (likeClauses.length > 0) {
+        const whereClause = likeClauses.map(c => `code LIKE '${c}'`).join(' OR ');
+        const baselineAccounts = db.prepare(`
+          SELECT code as account_code, name as account_name 
+          FROM accounts 
+          WHERE ${whereClause}
+          LIMIT 10
+        `).all();
+
+        const existingCodes = new Set(suggestions.map(s => s.account_code));
+        for (const ba of baselineAccounts) {
+          if (!existingCodes.has(ba.account_code) && suggestions.length < 5) {
+            suggestions.push({
+              account_code: ba.account_code,
+              account_name: ba.account_name,
+              count: 0 // baseline indicator
+            });
+            existingCodes.add(ba.account_code);
+          }
+        }
+      }
     }
 
     res.json(suggestions);
@@ -4861,6 +5024,80 @@ app.get("/api/accounts/expenses", (req, res) => {
   }
 });
 
+app.get("/api/budgets/categories", (req, res) => {
+  try {
+    const categories = db.prepare("SELECT * FROM budget_categories ORDER BY name").all();
+    const mappings = db.prepare("SELECT * FROM budget_category_accounts").all();
+    
+    const result = categories.map((c: any) => ({
+      ...c,
+      accounts: mappings.filter((m: any) => m.category_id === c.id).map((m: any) => m.account_code)
+    }));
+    
+    res.json(result);
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post("/api/budgets/categories", (req, res) => {
+  const { name, color, type, accounts } = req.body;
+  try {
+    const result = db.transaction(() => {
+      const stmt = db.prepare(`INSERT INTO budget_categories (name, color, type) VALUES (?, ?, ?)`);
+      const insertResult = stmt.run(name, color || '#94a3b8', type || 'expense');
+      const categoryId = insertResult.lastInsertRowid;
+      
+      if (accounts && Array.isArray(accounts)) {
+        const mapStmt = db.prepare(`INSERT INTO budget_category_accounts (category_id, account_code) VALUES (?, ?)`);
+        for (const code of accounts) {
+           mapStmt.run(categoryId, code);
+        }
+      }
+      return { id: categoryId };
+    })();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.put("/api/budgets/categories/:id", (req, res) => {
+  const { id } = req.params;
+  const { name, color, type, accounts } = req.body;
+  try {
+    db.transaction(() => {
+      const stmt = db.prepare(`UPDATE budget_categories SET name = ?, color = ?, type = ? WHERE id = ?`);
+      stmt.run(name, color, type || 'expense', id);
+      
+      if (accounts && Array.isArray(accounts)) {
+        db.prepare('DELETE FROM budget_category_accounts WHERE category_id = ?').run(id);
+        const mapStmt = db.prepare(`INSERT INTO budget_category_accounts (category_id, account_code) VALUES (?, ?)`);
+        for (const code of accounts) {
+           mapStmt.run(id, code);
+        }
+      }
+    })();
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.delete("/api/budgets/categories/:id", (req, res) => {
+  const { id } = req.params;
+  try {
+    db.transaction(() => {
+      db.prepare('DELETE FROM budget_category_accounts WHERE category_id = ?').run(id);
+      const result = db.prepare('DELETE FROM budget_categories WHERE id = ?').run(id);
+      if (result.changes === 0) throw new Error("Catégorie introuvable");
+    })();
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 app.get("/api/budgets/status", (req, res) => {
   const { year, month } = req.query;
   const periodYear = parseInt(year as string) || new Date().getFullYear();
@@ -4919,6 +5156,65 @@ app.get("/api/budgets/status", (req, res) => {
     });
 
     res.json(results);
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post("/api/budgets/import", (req, res) => {
+  const { entries, period_month, period_year } = req.body;
+  const userEmail = (req as any).user?.email || 'system';
+
+  try {
+    const transaction = db.transaction(() => {
+      let importedCount = 0;
+      for (const entry of entries) {
+        let accountCode = entry.account_code;
+
+        if (!accountCode && entry.category) {
+           const categoryRow = db.prepare(`
+              SELECT c.id, m.account_code 
+              FROM budget_categories c 
+              JOIN budget_category_accounts m ON c.id = m.category_id 
+              WHERE LOWER(c.name) = LOWER(?)
+              LIMIT 1
+           `).get(entry.category);
+           if (categoryRow) {
+             accountCode = categoryRow.account_code;
+           }
+        }
+
+        if (!accountCode || typeof entry.amount !== 'number') continue;
+        
+        // Simple verification that account exists and is an expense account
+        const account = db.prepare("SELECT code FROM accounts WHERE code = ? AND class_code = '6'").get(accountCode);
+        if (!account) continue;
+
+        const current = db.prepare("SELECT * FROM budgets WHERE account_code = ? AND period_year = ? AND period_month = ?").get(accountCode, period_year, period_month);
+        
+        const stmt = db.prepare(`
+          INSERT INTO budgets (account_code, amount, period_month, period_year, last_revised_at)
+          VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(account_code, period_month, period_year) DO UPDATE SET 
+            amount = excluded.amount,
+            last_revised_at = CURRENT_TIMESTAMP
+        `);
+        const result = stmt.run(accountCode, entry.amount, period_month, period_year);
+        const budgetId = current ? current.id : result.lastInsertRowid;
+
+        if (current && current.amount !== entry.amount) {
+          db.prepare(`
+            INSERT INTO budget_revisions (budget_id, old_amount, new_amount, reason, revised_by)
+            VALUES (?, ?, ?, ?, ?)
+          `).run(budgetId, current.amount, entry.amount, "Import CSV en masse", userEmail);
+        }
+        importedCount++;
+      }
+      return importedCount;
+    });
+    
+    const count = transaction();
+    res.json({ success: true, count });
   } catch (err) {
     handleApiError(res, err);
   }
@@ -5030,6 +5326,107 @@ app.post("/api/budgets/engagements", (req, res) => {
     if (err.message.includes('Budget insuffisant')) {
       return res.status(400).json({ error: err.message });
     }
+    handleApiError(res, err);
+  }
+});
+
+app.delete("/api/budgets/engagements/:id", (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = db.prepare("DELETE FROM budget_engagements WHERE id = ?").run(id);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Engagement non trouvé" });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.get("/api/budgets/insights", (req, res) => {
+  const { year, month } = req.query;
+  const periodYear = parseInt(year as string) || new Date().getFullYear();
+  const periodMonth = parseInt(month as string) || (new Date().getMonth() + 1);
+  const monthStr = `${periodYear}-${String(periodMonth).padStart(2, '0')}%`;
+
+  try {
+    const insights: any[] = [];
+    
+    // 1. Dépenses récurrentes / Abonnements
+    // On cherche les transactions ayant des montants identiques sur plusieurs mois consécutifs sur le même compte
+    const potentialSubs = db.prepare(`
+      SELECT je.account_code, a.name as account_name, t.description, ABS(je.debit - je.credit) as amount, COUNT(*) as occurrences
+      FROM journal_entries je
+      JOIN transactions t ON t.id = je.transaction_id
+      JOIN accounts a ON a.code = je.account_code
+      WHERE je.account_code LIKE '6%' AND t.deleted_at IS NULL
+      GROUP BY je.account_code, ABS(je.debit - je.credit)
+      HAVING occurrences >= 2
+      ORDER BY occurrences DESC
+      LIMIT 10
+    `).all();
+
+    if (potentialSubs.length > 0) {
+      insights.push({
+        type: 'recurring',
+        title: "Dépenses récurrentes détectées",
+        description: `Nous avons détecté ${potentialSubs.length} dépenses qui semblent être des abonnements ou charges fixes (ex: ${potentialSubs[0].description} pour ${potentialSubs[0].amount} F CFA).`,
+        priority: 'medium'
+      });
+    }
+
+    // 2. Dépenses inhabituelles ou élevées ce mois-ci par rapport au mois précédent
+    // Calculate previous month string
+    const prevMonth = periodMonth === 1 ? 12 : periodMonth - 1;
+    const prevYear = periodMonth === 1 ? periodYear - 1 : periodYear;
+    const prevMonthStr = `${prevYear}-${String(prevMonth).padStart(2, '0')}%`;
+
+    const currentActuals = db.prepare(`
+      SELECT je.account_code, a.name as account_name, SUM(je.debit - je.credit) as total
+      FROM journal_entries je
+      JOIN transactions t ON t.id = je.transaction_id
+      JOIN accounts a ON a.code = je.account_code
+      WHERE t.date LIKE ? AND je.account_code LIKE '6%' AND t.deleted_at IS NULL
+      GROUP BY je.account_code
+    `).all(monthStr);
+
+    const prevActuals = db.prepare(`
+      SELECT je.account_code, SUM(je.debit - je.credit) as total
+      FROM journal_entries je
+      JOIN transactions t ON t.id = je.transaction_id
+      WHERE t.date LIKE ? AND je.account_code LIKE '6%' AND t.deleted_at IS NULL
+      GROUP BY je.account_code
+    `).all(prevMonthStr);
+
+    const prevMap = prevActuals.reduce((acc: any, row: any) => {
+      acc[row.account_code] = row.total;
+      return acc;
+    }, {});
+
+    let unusualExpenses = 0;
+    currentActuals.forEach((curr: any) => {
+      const prev = prevMap[curr.account_code] || 0;
+      if (prev > 0 && curr.total > prev * 1.5 && curr.total > 10000) {
+         // > 50% increase
+         insights.push({
+           type: 'anomaly',
+           title: "Hausse inhabituelle des dépenses",
+           description: `La catégorie "${curr.account_name}" a augmenté de ${Math.round((curr.total - prev) / prev * 100)}% par rapport au mois précédent.`,
+           priority: 'high'
+         });
+         unusualExpenses++;
+      } else if (prev === 0 && curr.total > 50000) {
+         insights.push({
+           type: 'anomaly',
+           title: "Nouvelle dépense importante",
+           description: `Dépense élevée sur "${curr.account_name}" (${curr.total} F CFA) qui n'était pas présente le mois dernier.`,
+           priority: 'medium'
+         });
+      }
+    });
+
+    res.json(insights);
+  } catch (err) {
     handleApiError(res, err);
   }
 });
@@ -6565,9 +6962,12 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
   const { id } = req.params;
   
   const generate = db.transaction(() => {
+    const period = db.prepare("SELECT * FROM payroll_periods WHERE id = ?").get(id) as any;
+    if (!period) throw new Error("Période introuvable");
+
     // 1. Get all active employees and tax rules
-    const employees = db.prepare("SELECT * FROM employees WHERE status = 'active'").all();
-    const rules = db.prepare("SELECT * FROM tax_rules WHERE is_active = 1").all();
+    const employees = db.prepare("SELECT * FROM employees WHERE status = 'active'").all() as any[];
+    const rules = db.prepare("SELECT * FROM tax_rules WHERE is_active = 1").all() as any[];
     
     // Helper to get rule by code
     const getRule = (code) => rules.find(r => r.code === code);
@@ -6582,8 +6982,28 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
 
     let totalAmount = 0;
 
+    const periodStart = new Date(period.year, period.month - 1, 1);
+    const periodEnd = new Date(period.year, period.month, 0);
+
     for (const emp of employees) {
-      const base = emp.base_salary;
+      let base = emp.base_salary;
+      const empStart = new Date(emp.start_date);
+      
+      // Filter out employees who haven't started yet relative to this period
+      if (empStart > periodEnd) {
+        continue;
+      }
+      
+      // Prorata temporis (standard 30 days calculation)
+      let prorataFactor = 1;
+      let activeDays = 30;
+      if (empStart > periodStart && empStart <= periodEnd) {
+         const startDay = Math.min(30, empStart.getDate());
+         activeDays = 30 - startDay + 1;
+         prorataFactor = activeDays / 30;
+         base = Math.round(emp.base_salary * prorataFactor);
+      }
+
       const bonuses = 0; // Placeholder
       const gross = base + bonuses;
       
@@ -6623,6 +7043,8 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
 
       const details = {
         gross,
+        activeDays,
+        prorataFactor,
         cnpsEmployee,
         taxes: {
           is: isTax,

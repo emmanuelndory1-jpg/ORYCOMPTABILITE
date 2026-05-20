@@ -76,7 +76,7 @@ export function TeamManager() {
       
       if (logsRes.ok) {
         const data = await logsRes.json();
-        setLogs(data);
+        setLogs(Array.isArray(data) ? data : (data.logs || []));
       }
     } catch (err) {
       console.error(err);
@@ -102,7 +102,7 @@ export function TeamManager() {
       const res = await apiFetch('/api/audit-logs');
       if (res.ok) {
         const data = await res.json();
-        setLogs(data);
+        setLogs(Array.isArray(data) ? data : (data.logs || []));
       }
     } catch (err) {
       console.error(err);

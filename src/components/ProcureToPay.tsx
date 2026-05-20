@@ -253,6 +253,7 @@ export function ProcureToPay() {
   };
 
   const removeReqItem = (index: number) => {
+    if (!window.confirm("Voulez-vous vraiment supprimer cet article ? Cette action est irréversible.")) return;
     const newItems = reqItems.filter((_, i) => i !== index);
     setReqItems(newItems);
     const total = newItems.reduce((sum, item) => sum + item.total, 0);
