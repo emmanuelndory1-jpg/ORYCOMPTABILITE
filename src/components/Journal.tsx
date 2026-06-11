@@ -142,7 +142,6 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [transactionCurrency, setTransactionCurrency] = useState('FCFA');
   const [transactionExchangeRate, setTransactionExchangeRate] = useState(1);
-  const [additionalCurrencies, setAdditionalCurrencies] = useState<string[]>(['EUR', 'USD']);
   const [isCustomOpModalOpen, setIsCustomOpModalOpen] = useState(false);
   const [isThirdPartyModalOpen, setIsThirdPartyModalOpen] = useState(false);
   const [thirdPartyModalType, setThirdPartyModalType] = useState<'client' | 'supplier'>('client');
@@ -348,7 +347,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
   useEffect(() => {
     if (isModalOpen) {
       setTimeout(() => {
-        descriptionInputRef.current?.focus();
+        descriptionInputRef.current?.focus({ preventScroll: true });
       }, 150);
     }
   }, [isModalOpen]);
@@ -363,10 +362,10 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
           return;
         }
         const next = row?.querySelector('input[placeholder="Débit"]') as HTMLInputElement;
-        next?.focus();
+        next?.focus({ preventScroll: true });
       } else if (field === 'debit') {
         const next = row?.querySelector('input[placeholder="Crédit"]') as HTMLInputElement;
-        next?.focus();
+        next?.focus({ preventScroll: true });
       } else if (field === 'credit') {
         if (idx === entries.length - 1 && !isBalanced) {
           setEntries([...entries, { account_code: '', debit: 0, credit: 0, description: '' }]);
@@ -375,7 +374,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
           const allRows = row?.parentElement?.children;
           if (allRows && allRows[idx+1]) {
             const nextAccount = (allRows[idx+1] as HTMLElement).querySelector('input[placeholder="Cpt"]') as HTMLInputElement;
-            nextAccount?.focus();
+            nextAccount?.focus({ preventScroll: true });
           }
         }, 0);
       }
@@ -411,7 +410,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
       // Ctrl+K to focus Magic Input
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        magicInputRef.current?.focus();
+        magicInputRef.current?.focus({ preventScroll: true });
       }
 
       // Ctrl+B to balance
@@ -1723,7 +1722,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
     setSelectedTreasuryAccount('');
     setIsModalOpen(true);
     setTimeout(() => {
-      descriptionInputRef.current?.focus();
+      descriptionInputRef.current?.focus({ preventScroll: true });
     }, 100);
   };
 
@@ -2350,7 +2349,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
             </div>
             <div>
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Débit (Période)</p>
-              <p className="text-2xl font-black text-slate-900 dark:text-white font-display">
+              <p className="text-xl font-black text-slate-900 dark:text-white font-display">
                 {formatCurrency(transactions.reduce((acc, tx) => acc + tx.total_amount, 0), baseCurrency)}
               </p>
             </div>
@@ -2363,7 +2362,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
             </div>
             <div>
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nombre d'opérations</p>
-              <p className="text-2xl font-black text-slate-900 dark:text-white font-display">{transactions.length}</p>
+              <p className="text-xl font-black text-slate-900 dark:text-white font-display">{transactions.length}</p>
             </div>
           </div>
         </div>
@@ -2844,7 +2843,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
       {/* Modal Saisie */}
       {isModalOpen && (
         <div 
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xl z-50 flex justify-center p-2 sm:p-4 animate-in fade-in duration-300 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex p-4 sm:p-6 lg:p-12 animate-in fade-in duration-200 overflow-y-auto"
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
               e.preventDefault();
@@ -2852,17 +2851,17 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
             }
           }}
         >
-          <div className="bg-white/95 dark:bg-slate-900/95 rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-5xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden flex flex-col md:flex-row border border-white/20 dark:border-slate-800 transition-all duration-500 overflow-y-auto">
+          <div className="m-auto bg-white/95 dark:bg-slate-900/95 rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-4xl max-h-[95vh] overflow-hidden flex flex-col md:flex-row border border-slate-200 dark:border-slate-800/80 transition-all duration-300 relative">
             
             {/* Left Panel: Inputs */}
-            <div className="flex-1 p-5 sm:p-10 overflow-y-auto border-b md:border-b-0 md:border-r border-slate-100 dark:border-slate-800">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-10 gap-4">
+            <div className="flex-1 p-5 sm:p-6 lg:p-8 overflow-y-auto border-b md:border-b-0 md:border-r border-slate-100 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4">
                 <div className="flex items-center gap-4">
                   <div className="p-3 sm:p-4 bg-brand-green/10 text-brand-green rounded-2xl">
                     {analyzing ? <Loader2 className="animate-spin" size={24} /> : editingId ? <Pencil size={24} /> : <Calculator size={24} />}
                   </div>
                   <div>
-                    <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight font-display">
+                    <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight font-display">
                       {analyzing ? "Analyse IA..." : editingId ? "Modifier l'écriture" : "Saisie Intelligente"}
                     </h2>
                     <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Conformité SYSCOHADA</p>
@@ -2954,7 +2953,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                           key={type.id}
                           onClick={() => setOperationType(type.id)}
                           className={cn(
-                            "flex-none flex items-center gap-2 px-5 py-3 rounded-2xl border text-xs font-bold transition-all group",
+                            "flex-none flex items-center gap-2 px-4 py-2.5 rounded-xl border text-[11px] font-bold transition-all group",
                             operationType === type.id 
                               ? "border-brand-green bg-brand-green text-white shadow-md shadow-brand-green/20 scale-105" 
                               : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-600 dark:text-slate-400 hover:border-brand-green/30 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm"
@@ -2969,7 +2968,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                       ))}
                       <button 
                         onClick={() => setIsCustomOpModalOpen(true)}
-                        className="flex-none flex items-center gap-2 px-5 py-3 rounded-2xl border border-dashed border-slate-300 dark:border-slate-600 bg-transparent text-slate-500 hover:border-brand-green hover:text-brand-green hover:bg-brand-green/5 transition-all shadow-sm"
+                        className="flex-none flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-600 bg-transparent text-slate-500 hover:border-brand-green hover:text-brand-green hover:bg-brand-green/5 transition-all shadow-sm"
                       >
                        <Settings size={14} /> <span className="text-xs font-bold uppercase tracking-widest">Gérer</span>
                       </button>
@@ -2977,10 +2976,10 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                   </div>
                 )}
 
-                <div className="space-y-8">
+                <div className="space-y-6">
                   {/* Common Fields */}
-                  <div className="bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800 space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-slate-50/50 dark:bg-slate-800/30 p-4 sm:p-5 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-2">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Date d'opération</label>
                         <input 
@@ -2991,7 +2990,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                             if (errors.date) setErrors(prev => ({ ...prev, date: '' }));
                           }}
                           className={cn(
-                            "w-full px-5 py-3.5 rounded-2xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-bold shadow-sm",
+                            "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-bold shadow-sm text-sm",
                             errors.date ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-200 dark:border-slate-700"
                           )}
                         />
@@ -3036,7 +3035,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                             value={reference}
                             onChange={(e) => setReference(e.target.value)}
                             placeholder="Générée auto..."
-                            className="w-full px-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold shadow-sm"
+                            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold shadow-sm text-sm"
                           />
                           <button 
                             type="button"
@@ -3048,96 +3047,8 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                           </button>
                         </div>
                       </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center ml-1">
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Devise & Change</label>
-                          {transactionCurrency !== baseCurrency && (
-                            <button 
-                              type="button"
-                              onClick={() => setTransactionExchangeRate(getExchangeRate(transactionCurrency, baseCurrency))}
-                              className="text-[10px] text-brand-green font-black uppercase tracking-widest flex items-center gap-1 hover:underline"
-                              title="Utiliser le taux actuel du marché"
-                            >
-                              <Zap size={10} /> Taux Marché: {getExchangeRate(transactionCurrency, baseCurrency).toFixed(4)}
-                            </button>
-                          )}
-                        </div>
-                        <div className="flex gap-3">
-                          <div className="relative flex-1">
-                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
-                              {getCurrencyIcon(16, transactionCurrency)}
-                            </div>
-                            <select 
-                              value={transactionCurrency}
-                              onChange={(e) => handleCurrencyChange(e.target.value)}
-                              className="w-full pl-12 pr-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-black appearance-none shadow-sm"
-                            >
-                              <option value="FCFA">FCFA (XOF)</option>
-                              <option value="EUR">Euro (€)</option>
-                              <option value="USD">Dollar ($)</option>
-                              <option value="GNF">Franc Guinéen</option>
-                              <option value="CDF">Franc Congolais</option>
-                            </select>
-                          </div>
-                          {transactionCurrency !== baseCurrency && (
-                            <div className="relative w-32">
-                              <input 
-                                type="number"
-                                step="0.000001"
-                                value={transactionExchangeRate}
-                                onChange={(e) => setTransactionExchangeRate(parseFloat(e.target.value) || 1)}
-                                className="w-full px-4 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-mono font-bold text-center shadow-sm"
-                                title={`1 ${transactionCurrency} = ? ${baseCurrency}`}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
 
-                    {/* Multi-Currency Selection & Display */}
-                    {(additionalCurrencies.length > 0 || transactionCurrency !== baseCurrency) && (
-                      <div className="pt-4 border-t border-slate-200/50 dark:border-slate-700/50">
-                        <div className="flex justify-between items-center mb-3">
-                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Conversions Multi-Devises</span>
-                          <div className="flex gap-1">
-                            {['EUR', 'USD', 'FCFA', 'GNF', 'CDF'].filter(c => c !== transactionCurrency).map(c => (
-                              <button
-                                key={c}
-                                type="button"
-                                onClick={() => {
-                                  if (additionalCurrencies.includes(c)) {
-                                    setAdditionalCurrencies(prev => prev.filter(curr => curr !== c));
-                                  } else {
-                                    setAdditionalCurrencies(prev => [...prev, c]);
-                                  }
-                                }}
-                                className={cn(
-                                  "px-2 py-1 rounded-md text-[8px] font-black transition-all",
-                                  additionalCurrencies.includes(c) 
-                                    ? "bg-brand-green text-white" 
-                                    : "bg-slate-200 dark:bg-slate-700 text-slate-500"
-                                )}
-                              >
-                                {c}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {additionalCurrencies.length > 0 && (
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            {additionalCurrencies.map(curr => (
-                              <div key={curr} className="flex flex-col p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
-                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">{curr}</span>
-                                <span className="text-sm font-black text-slate-900 dark:text-white truncate font-mono">
-                                  {formatCurrency(amountHT * (transactionExchangeRate / getExchangeRate(curr, baseCurrency)), curr)}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    </div>
                   </div>
 
                   <div className="space-y-3">
@@ -3175,7 +3086,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          amountInputRef.current?.focus();
+                          amountInputRef.current?.focus({ preventScroll: true });
                         }
                       }}
                       onBlur={() => {
@@ -3199,7 +3110,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                       }}
                       placeholder="Ex: Facture d'achat de marchandises..."
                       className={cn(
-                        "w-full px-5 py-4 rounded-2xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-bold text-lg placeholder:text-slate-300 dark:placeholder:text-slate-600 shadow-sm",
+                        "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-bold text-base placeholder:text-slate-300 dark:placeholder:text-slate-600 shadow-sm",
                         errors.description ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-200 dark:border-slate-700"
                       )}
                     />
@@ -3359,7 +3270,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                                       setOccasionalName('');
                                     }
                                   }}
-                                  className="flex-1 px-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold"
+                                  className="flex-1 px-4 py-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold"
                                 >
                                   <option value="">Sélectionner un {type === 'client' ? 'client' : 'fournisseur'}...</option>
                                   {filteredParties.map(p => (
@@ -3436,7 +3347,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                                   value={occasionalName}
                                   onChange={(e) => setOccasionalName(e.target.value)}
                                   placeholder="Ex: Client de passage, Nom spécifique..."
-                                  className="w-full px-5 py-3.5 rounded-2xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold text-sm"
+                                  className="w-full px-4 py-3 rounded-xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold text-sm"
                                 />
                               </motion.div>
                             )}
@@ -3566,7 +3477,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                     })()}
 
                     {/* Financials */}
-                    <div className="grid grid-cols-2 gap-6 bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                    <div className="grid grid-cols-2 gap-6 bg-slate-50/50 dark:bg-slate-800/30 p-4 sm:p-5 rounded-2xl border border-slate-100 dark:border-slate-800">
                       <div className={cn(!formConfig.hasVAT && "col-span-2", "space-y-3")}>
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">{formConfig.amountLabel}</label>
                         <div className="relative">
@@ -3584,7 +3495,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                                   setAmountHT(evaluated);
                                   setAmountString(String(evaluated));
                                 }
-                                (e.currentTarget.closest('.space-y-8')?.querySelector('button[className*="bg-slate-900"]') as HTMLElement)?.focus();
+                                (e.currentTarget.closest('.space-y-8')?.querySelector('button[className*="bg-slate-900"]') as HTMLElement)?.focus({ preventScroll: true });
                               }
                             }}
                             onBlur={() => {
@@ -3604,11 +3515,11 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                               if (errors.amountHT) setErrors(prev => ({ ...prev, amountHT: '' }));
                             }}
                             className={cn(
-                              "w-full pl-16 pr-5 py-4 rounded-2xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-black text-2xl font-mono shadow-sm",
+                              "w-full pl-16 pr-5 py-3 rounded-xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-black text-xl font-mono shadow-sm",
                               errors.amountHT ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-200 dark:border-slate-700"
                             )}
                           />
-                          <div className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-lg pointer-events-none">
+                          <div className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-base pointer-events-none">
                             {transactionCurrency}
                           </div>
                         </div>
@@ -3625,7 +3536,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                           <select 
                             value={vatRate}
                             onChange={(e) => setVatRate(Number(e.target.value))}
-                            className="w-full px-5 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold text-lg shadow-sm"
+                            className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold text-base shadow-sm"
                           >
                             <option value={18}>18% (Standard)</option>
                             <option value={10}>10% (Réduit)</option>
@@ -3651,7 +3562,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                           <div className="text-slate-300 dark:text-slate-600 font-black">=</div>
                           <div className="flex flex-col items-end min-w-[120px]">
                             <span className="text-brand-green/80 uppercase text-[10px] tracking-[0.15em] mb-1 font-bold">Montant TTC</span>
-                            <span className="text-brand-green font-mono font-black text-lg">{formatCurrency(amountHT * (1 + vatRate / 100), transactionCurrency)}</span>
+                            <span className="text-brand-green font-mono font-black text-base">{formatCurrency(amountHT * (1 + vatRate / 100), transactionCurrency)}</span>
                           </div>
                         </div>
                       )}
@@ -3659,7 +3570,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
 
                     {/* Payment Mode */}
                     {formConfig.hasPayment && (
-                      <div className="space-y-4 bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                      <div className="space-y-4 bg-slate-50/50 dark:bg-slate-800/30 p-4 sm:p-5 rounded-2xl border border-slate-100 dark:border-slate-800">
                         <div className="space-y-3">
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Mode de Règlement</label>
                           <div className="flex gap-2">
@@ -3691,7 +3602,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                             <select
                               value={selectedTreasuryAccount || ''}
                               onChange={(e) => setSelectedTreasuryAccount(e.target.value)}
-                              className="w-full px-5 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold text-sm shadow-sm"
+                              className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold text-sm shadow-sm"
                             >
                               <option value="">Compte par défaut ({paymentMode === 'banque' ? (companySettings?.payment_bank_account || '521') : paymentMode === 'caisse' ? (companySettings?.payment_cash_account || '571') : (companySettings?.payment_mobile_account || '585')})</option>
                               {accounts
@@ -3719,7 +3630,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                               type="date"
                               value={dueDate}
                               onChange={(e) => setDueDate(e.target.value)}
-                              className="w-full px-5 py-4 rounded-2xl border border-brand-gold/30 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-gold/20 focus:border-brand-gold transition-all outline-none font-bold shadow-sm"
+                              className="w-full px-4 py-3 rounded-xl border border-brand-gold/30 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-gold/20 focus:border-brand-gold transition-all outline-none font-bold shadow-sm"
                               min={date}
                             />
                           </div>
@@ -3728,14 +3639,14 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                     )}
 
                     {/* Notes & Documents */}
-                    <div className="space-y-6 bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                    <div className="space-y-6 bg-slate-50/50 dark:bg-slate-800/30 p-4 sm:p-5 rounded-2xl border border-slate-100 dark:border-slate-800">
                       <div className="space-y-3">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Notes & Observations</label>
                         <textarea 
                           value={notes}
                           onChange={(e) => setNotes(e.target.value)}
                           placeholder="Ajoutez des détails supplémentaires sur cette opération..."
-                          className="w-full px-5 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-medium text-sm min-h-[100px] resize-none shadow-sm"
+                          className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-medium text-sm min-h-[100px] resize-none shadow-sm"
                         />
                       </div>
 
@@ -3744,7 +3655,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                         <div className="space-y-3">
                           {/* Existing Attachments from Server */}
                           {existingAttachments.map((att) => (
-                            <div key={att.id} className="flex items-center justify-between px-5 py-4 rounded-2xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10">
+                            <div key={att.id} className="flex items-center justify-between px-4 py-3 rounded-xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10">
                               <div className="flex items-center gap-3 overflow-hidden">
                                 <FileText className="text-brand-green shrink-0" size={20} />
                                 <span className="text-xs font-bold text-brand-green truncate">{att.file_name}</span>
@@ -3772,7 +3683,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
 
                           {/* Pending Files to be Uploaded */}
                           {pendingFiles.map((file, idx) => (
-                            <div key={idx} className="flex items-center justify-between px-5 py-4 rounded-2xl border border-brand-gold/20 bg-brand-gold/5 dark:bg-brand-gold/10">
+                            <div key={idx} className="flex items-center justify-between px-4 py-3 rounded-xl border border-brand-gold/20 bg-brand-gold/5 dark:bg-brand-gold/10">
                               <div className="flex items-center gap-3 overflow-hidden">
                                 <Upload className="text-brand-gold shrink-0" size={20} />
                                 <span className="text-xs font-bold text-brand-gold truncate">{file.name} (En attente)</span>
@@ -3792,7 +3703,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
 
                           {/* Legacy Document URLs (from AI Scan or old data) */}
                           {documentUrls.filter(url => url.startsWith('data:')).map((url, idx) => (
-                            <div key={idx} className="flex items-center justify-between px-5 py-4 rounded-2xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10">
+                            <div key={idx} className="flex items-center justify-between px-4 py-3 rounded-xl border border-brand-green/20 bg-brand-green/5 dark:bg-brand-green/10">
                               <div className="flex items-center gap-3 overflow-hidden">
                                 <Wand2 className="text-brand-green shrink-0" size={20} />
                                 <span className="text-xs font-bold text-brand-green truncate">Scan IA #{idx + 1}</span>
@@ -4046,8 +3957,8 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
             </div>
 
             {/* Right Panel: Summary & Preview */}
-            <div className="w-full md:w-[450px] bg-slate-50 dark:bg-slate-800/30 p-6 sm:p-10 flex flex-col border-l border-slate-100 dark:border-slate-800">
-              <div className="flex-1 space-y-8 overflow-y-auto pr-2 custom-scrollbar">
+            <div className="w-full md:w-[400px] xl:w-[420px] bg-slate-50 dark:bg-slate-800/30 p-5 sm:p-6 lg:p-8 flex flex-col border-l border-slate-100 dark:border-slate-800 overflow-y-auto custom-scrollbar">
+              <div className="flex-1 space-y-6 pr-2">
                 
                 {lastAiImage && showImagePreview ? (
                   <div className="space-y-6 animate-in slide-in-from-right duration-500">
@@ -4162,7 +4073,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                       <div className="space-y-4">
                         <div className="flex justify-between items-center">
                           <span className="text-sm font-bold text-slate-500">Montant HT</span>
-                          <span className="text-lg font-black text-slate-900 dark:text-white font-mono">
+                          <span className="text-base font-black text-slate-900 dark:text-white font-mono">
                             {formatCurrency(amountHT, transactionCurrency)}
                           </span>
                         </div>
@@ -4177,7 +4088,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                         <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
                           <div className="flex justify-between items-center">
                             <span className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Total TTC</span>
-                            <span className="text-3xl font-black text-brand-green font-mono">
+                            <span className="text-2xl font-black text-brand-green font-mono">
                               {formatCurrency(amountTTC, transactionCurrency)}
                             </span>
                           </div>
@@ -4236,7 +4147,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                 <button 
                   onClick={handleSave}
                   disabled={submitting || !isBalanced}
-                  className="w-full bg-brand-green text-white py-5 rounded-[1.5rem] text-sm font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3 relative overflow-hidden group"
+                  className="w-full bg-brand-green text-white py-3.5 rounded-xl text-sm font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3 relative overflow-hidden group"
                 >
                   <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out" />
                   <span className="relative z-10 flex items-center gap-3">
@@ -4249,13 +4160,13 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                 <div className="grid grid-cols-2 gap-3">
                   <button 
                     onClick={clearForm}
-                    className="py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2 shadow-sm"
+                    className="py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2 shadow-sm"
                   >
                     <Trash2 size={16} /> Effacer
                   </button>
                   <button 
                     onClick={() => handleModalClose()}
-                    className="py-4 bg-rose-50 border border-rose-100 dark:border-rose-900/30 dark:bg-rose-900/10 text-rose-500 dark:text-rose-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 dark:hover:bg-rose-900/20 transition-all flex items-center justify-center gap-2 shadow-sm"
+                    className="py-3 bg-rose-50 border border-rose-100 dark:border-rose-900/30 dark:bg-rose-900/10 text-rose-500 dark:text-rose-400 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 dark:hover:bg-rose-900/20 transition-all flex items-center justify-center gap-2 shadow-sm"
                   >
                     <X size={16} /> Abandonner
                   </button>
@@ -4648,7 +4559,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                   <AlertCircle size={28} />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Validation Pré-Import</h2>
+                  <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">Validation Pré-Import</h2>
                   <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">
                     Vérification des données CSV avant import définitif
                   </p>
@@ -4680,16 +4591,16 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                     <div className="grid grid-cols-2 gap-4">
                       <div className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-col gap-2">
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total des écritures</span>
-                        <span className="text-2xl font-black text-slate-900 dark:text-white">{pendingImportEntries.length}</span>
+                        <span className="text-xl font-black text-slate-900 dark:text-white">{pendingImportEntries.length}</span>
                       </div>
                       <div className={cn("p-4 rounded-2xl border flex flex-col gap-2 transition-colors", unbalanced.length > 0 ? "border-rose-200 bg-rose-50 dark:border-rose-900/30 dark:bg-rose-900/10 text-rose-600" : "border-emerald-200 bg-emerald-50 dark:border-emerald-900/30 dark:bg-emerald-900/10 text-emerald-600")}>
                         <span className="text-[10px] font-black uppercase tracking-widest opacity-80">Écritures déséquilibrées</span>
-                        <span className="text-2xl font-black">{unbalanced.length}</span>
+                        <span className="text-xl font-black">{unbalanced.length}</span>
                       </div>
                       <div className={cn("p-4 rounded-2xl border flex flex-col gap-2 transition-colors col-span-2", missingTax.length > 0 ? "border-amber-200 bg-amber-50 dark:border-amber-900/30 dark:bg-amber-900/10 text-amber-600" : "border-emerald-200 bg-emerald-50 dark:border-emerald-900/30 dark:bg-emerald-900/10 text-emerald-600")}>
                         <span className="text-[10px] font-black uppercase tracking-widest opacity-80">Taxes potentielles manquantes</span>
                         <div className="flex items-center justify-between">
-                          <span className="text-2xl font-black">{missingTax.length}</span>
+                          <span className="text-xl font-black">{missingTax.length}</span>
                           {missingTax.length > 0 && <span className="text-xs font-medium opacity-80">Comptes charges/produits sans compte de TVA associé</span>}
                         </div>
                       </div>
@@ -4769,7 +4680,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                   <Zap size={28} />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Génération Rapide</h2>
+                  <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">Génération Rapide</h2>
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Vérifiez les détails avant validation</p>
                 </div>
               </div>
@@ -4846,7 +4757,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                   setIsQuickInvoiceOpen(false);
                   navigate('/invoicing', { state: { prefill: quickInvoiceData.transaction } });
                 }}
-                className="flex-1 px-8 py-5 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-100 dark:border-slate-700 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-3"
+                className="flex-1 px-6 py-4 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-100 dark:border-slate-700 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-3"
               >
                 <Edit size={18} />
                 Éditeur Complet
@@ -4854,7 +4765,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
               <button 
                 onClick={handleConfirmQuickInvoice}
                 disabled={submitting}
-                className="flex-[2] px-8 py-5 bg-brand-green text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-xl shadow-brand-green/20 flex items-center justify-center gap-3 disabled:opacity-50"
+                className="flex-[2] px-6 py-4 bg-brand-green text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-xl shadow-brand-green/20 flex items-center justify-center gap-3 disabled:opacity-50"
               >
                 {submitting ? <Loader2 className="animate-spin" size={18} /> : <Check size={18} />}
                 Confirmer la Génération
