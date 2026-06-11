@@ -6,8 +6,8 @@ import { apiFetch } from '../lib/api';
 
 const ai = {
   models: {
-    generateContent: async (req: any) => {
-      throw new Error("L'utilisation de l'intelligence artificielle a été bloquée volontairement pour économiser l'énergie.");
+    generateContent: async (req: any): Promise<{text: string, candidates?: any[], functionCalls?: any[]}> => {
+      throw new Error("Les fonctionnalités d'intelligence artificielle seront activées très prochainement.");
     }
   }
 };
@@ -169,7 +169,7 @@ export const parseNaturalLanguageEntry = async (text: string): Promise<NaturalLa
       return parseSafeJSON(result) as NaturalLanguageEntry;
     }
   } catch(e) {
-    console.error("Error in parseNaturalLanguageEntry:", e);
+    if (!e?.message?.includes('prochainement')) { console.error("Error in parseNaturalLanguageEntry:", e); }
   }
   return null;
 }
@@ -310,7 +310,7 @@ export const analyzeInvoice = async (
 
     return null;
   } catch (error) {
-    console.error("Error analyzing invoice:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error analyzing invoice:", error); }
     return null;
   }
 };
@@ -343,7 +343,7 @@ export const logOcrFeedback = async (
 
     console.log("OCR Feedback logged successfully for training improvement.");
   } catch (error) {
-    console.error("Error logging OCR feedback:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error logging OCR feedback:", error); }
     // Don't throw here to not block the user flow
   }
 };
@@ -416,7 +416,7 @@ export const suggestJournalEntry = async (
     }
     return null;
   } catch (error) {
-    console.error("Error suggesting journal entry:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error suggesting journal entry:", error); }
     return null;
   }
 };
@@ -487,7 +487,7 @@ export const suggestCorrection = async (
     }
     return null;
   } catch (error) {
-    console.error("Error suggesting correction:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error suggesting correction:", error); }
     return null;
   }
 };
@@ -541,7 +541,7 @@ export const generateComprehensiveDashboardReport = async (dashboardData: any) =
 
     return response.text;
   } catch (error: any) {
-    console.error("Error generating comprehensive dashboard report:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error generating comprehensive dashboard report:", error); }
     return "Désolé, l'analyse exhaustive n'a pas pu être générée. Veuillez réessayer.";
   }
 };
@@ -621,7 +621,7 @@ export const generateAudit = async (auditData: any) => {
 
     return parseSafeJSON(response.text);
   } catch (error) {
-    console.error("Error generating audit:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error generating audit:", error); }
     return null;
   }
 };
@@ -660,7 +660,7 @@ export const getP2PAdvice = async (p2pData: any) => {
     const data = parseSafeJSON(response.text);
     return data.advices as string[];
   } catch (error) {
-    console.error("Error getting P2P advice:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error getting P2P advice:", error); }
     return [];
   }
 };
@@ -743,7 +743,7 @@ export const suggestAccountCode = async (
     }
     return null;
   } catch (error) {
-    console.error("Error suggesting account code:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error suggesting account code:", error); }
     return null;
   }
 };
@@ -888,7 +888,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
     }
     return null;
   } catch (error) {
-    console.error("Error in analyzeTaxDocument:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error in analyzeTaxDocument:", error); }
     return null;
   }
 };
@@ -911,7 +911,7 @@ export const getTaxCompliance = async (message: string, imageBase64?: string | n
 
     return response.text;
   } catch (error) {
-    console.error("Error getting tax compliance:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error getting tax compliance:", error); }
     return "Désolé, je n'ai pas pu traiter votre demande concernant la conformité fiscale.";
   }
 };
@@ -994,7 +994,7 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
 
     return parseSafeJSON(response.text);
   } catch (error) {
-    console.error("Error reconciling bank:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error reconciling bank:", error); }
     return null;
   }
 };
@@ -1059,7 +1059,7 @@ Garde un ton professionnel, précis, rassurant et rigoureux.`;
 
     return text;
   } catch (error) {
-    console.error("Error in askAssistant:", error);
+    if (!error?.message?.includes('prochainement')) { console.error("Error in askAssistant:", error); }
     return "Désolé, je n'ai pas pu traiter votre demande pour le moment. Une erreur s'est produite lors de la connexion pour récupérer vos informations réelles.";
   }
 };
@@ -1174,7 +1174,7 @@ Consignes:
   try {
     return parseSafeJSON(response.text);
   } catch (err) {
-    console.error("Erreur parsing LLM:", err);
+    if (!err?.message?.includes('prochainement')) { console.error("Erreur parsing LLM:", err); }
     throw new Error("Impossible d'analyser les prévisions : " + err);
   }
 };

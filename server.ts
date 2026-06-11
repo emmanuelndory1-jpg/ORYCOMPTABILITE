@@ -896,9 +896,9 @@ async function executeGeminiTool(name: string, args: any) {
 
 app.post('/api/gemini/generate', async (req, res) => {
   try {
-    throw new Error("L'utilisation de l'intelligence artificielle a été bloquée volontairement pour économiser l'énergie.");
+    throw new Error("Les fonctionnalités d'intelligence artificielle seront activées très prochainement.");
   } catch (err: any) {
-    res.status(403).json({ error: err.message, message: "L'IA est désactivée." });
+    res.status(403).json({ error: err.message, message: "IA prochainement disponible." });
   }
 });
 
