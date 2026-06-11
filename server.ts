@@ -896,125 +896,12 @@ async function executeGeminiTool(name: string, args: any) {
 
 app.post('/api/gemini/generate', async (req, res) => {
   try {
-    const { model, contents, config } = req.body;
-    const maxRetries = 1;
-    let lastErr: any;
-
-    let systemInstructionStr = "";
-    if (config?.systemInstruction) {
-      if (typeof config.systemInstruction === "string") systemInstructionStr = config.systemInstruction;
-      else if (config.systemInstruction.parts?.[0]?.text) systemInstructionStr = config.systemInstruction.parts[0].text;
-    }
-
-    // Detect whether this is an assistant request
-    const isAssistantRequest = systemInstructionStr && (
-      systemInstructionStr.includes("ORY") || 
-      systemInstructionStr.includes("OryCompta") || 
-      systemInstructionStr.includes("conseiller") ||
-      systemInstructionStr.includes("comptable")
-    );
-
-    let activeConfig = { ...config };
-    if (isAssistantRequest) {
-      const existingTools = config?.tools || [];
-      activeConfig.tools = [
-        ...existingTools,
-        { functionDeclarations: databaseToolsDeclarations }
-      ];
-      activeConfig.toolConfig = { 
-        includeServerSideToolInvocations: true,
-        ...config?.toolConfig
-      };
-    }
-
-    // Create a mutable copy of contents to allow appending the agent loop's function calls and responses
-    let activeContents = Array.isArray(contents) ? [...contents] : [contents];
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        if (attempt > 0) {
-          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
-          console.warn(`Gemini API: Retrying (${attempt}/${maxRetries})`);
-        }
-
-        let response = await ai.models.generateContent({ 
-          model: model || "gemini-3.5-flash", 
-          contents: activeContents, 
-          config: activeConfig 
-        });
-
-        let functionCalls = response.functionCalls;
-        let loopCount = 0;
-        const maxLoops = 5;
-
-        while (functionCalls && functionCalls.length > 0 && loopCount < maxLoops) {
-          loopCount++;
-          console.log(`[Gemini Tool Execution Loop] Loop ${loopCount}, calls:`, functionCalls.map(c => c.name));
-
-          const assistantContent = response.candidates?.[0]?.content;
-          if (assistantContent) {
-            activeContents.push(assistantContent);
-          }
-
-          const toolParts = [];
-          for (const call of functionCalls) {
-            const toolResult = await executeGeminiTool(call.name, call.args);
-            toolParts.push({
-              functionResponse: {
-                name: call.name,
-                response: toolResult
-              }
-            });
-          }
-
-          activeContents.push({
-            role: 'tool',
-            parts: toolParts
-          });
-
-          response = await ai.models.generateContent({
-            model: model || "gemini-3.5-flash",
-            contents: activeContents,
-            config: activeConfig
-           });
-
-           functionCalls = response.functionCalls;
-        }
-
-        return res.json({ text: response.text, candidates: response.candidates });
-      } catch (err: any) {
-        lastErr = err;
-        const errorString = err.message || String(err);
-        const isTransient = errorString.includes('503') || errorString.includes('UNAVAILABLE') || errorString.includes('429');
-
-        if (!isTransient || attempt === maxRetries) {
-          break;
-        }
-      }
-    }
-
-    const finalErrString = lastErr?.message || String(lastErr);
-    const isTransient = finalErrString.includes('503') || finalErrString.includes('UNAVAILABLE') || finalErrString.includes('429');
-    
-    if (isTransient) {
-      console.warn("Gemini API Transient Error:", finalErrString);
-    } else {
-      console.error("Gemini API Error:", lastErr);
-    }
-    let statusCode = 500;
-    
-    if (finalErrString.includes('429') || finalErrString.includes('quota') || finalErrString.includes('RESOURCE_EXHAUSTED')) {
-       statusCode = 429;
-    } else if (finalErrString.includes('503') || finalErrString.includes('UNAVAILABLE')) {
-       statusCode = 503;
-    }
-    
-    res.status(statusCode).json({ error: finalErrString });
-  } catch (error: any) {
-    console.error("Caught unhandled error in /api/gemini/generate:", error);
-    res.status(500).json({ error: error.message || "Internal server error" });
+    throw new Error("L'utilisation de l'intelligence artificielle a été bloquée volontairement pour économiser l'énergie.");
+  } catch (err: any) {
+    res.status(403).json({ error: err.message, message: "L'IA est désactivée." });
   }
 });
+
 
 // --- Auth Routes ---
 app.post('/api/auth/register', validate(schemas.registerSchema), async (req, res) => {

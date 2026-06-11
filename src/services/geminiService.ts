@@ -7,29 +7,7 @@ import { apiFetch } from '../lib/api';
 const ai = {
   models: {
     generateContent: async (req: any) => {
-      const response = await apiFetch('/api/gemini/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req)
-      });
-      
-      let contentType = response.headers.get('content-type');
-      let isJson = contentType && contentType.includes('application/json');
-      
-      if (!response.ok) {
-        if (isJson) {
-           const errData = await response.json().catch(() => null);
-           throw new Error(errData?.error || 'HTTP ' + response.status + ': ' + (errData?.message || 'Unknown error'));
-        }
-        throw new Error([429, 503].includes(response.status) ? String(response.status) : 'HTTP ' + response.status);
-      }
-      
-      const text = await response.text();
-      try {
-        return JSON.parse(text);
-      } catch (err) {
-        throw new Error("Invalid non-JSON response from server: " + text.substring(0, 50));
-      }
+      throw new Error("L'utilisation de l'intelligence artificielle a été bloquée volontairement pour économiser l'énergie.");
     }
   }
 };
