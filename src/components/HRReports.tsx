@@ -135,7 +135,7 @@ export function HRReports() {
 
       {activeTab === 'departments' && data?.departmentStats && (
         <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="w-full min-w-0 overflow-auto ">
             <table className="w-full">
               <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
                 <tr>
@@ -185,7 +185,7 @@ export function HRReports() {
 
       {activeTab === 'bonuses' && data?.employeeBonuses && (
         <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="w-full min-w-0 overflow-auto ">
             <table className="w-full">
               <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
                 <tr>
@@ -246,15 +246,69 @@ export function HRReports() {
       )}
 
       {activeTab === 'absences' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-dashed border-slate-300 dark:border-slate-800 p-12 text-center">
-          <div className="max-w-md mx-auto space-y-4">
-            <div className="w-16 h-16 bg-brand-green/10 text-brand-green rounded-full flex items-center justify-center mx-auto mb-4">
-              <Calendar size={32} />
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden p-8">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">Registre des Absences</h3>
+              <p className="text-slate-500 dark:text-slate-400 mt-1">Résumé des congés, maladies et absences non justifiées</p>
             </div>
-            <h3 className="text-xl font-bold text-slate-900 dark:text-white">Historique des Absences</h3>
-            <p className="text-slate-500 dark:text-slate-400">
-              Le module de suivi interactif des absences (congés, arrêts maladie, congés sans solde) sera bientôt activé. Il vous permettra de déduire automatiquement le temps de travail non effectué.
-            </p>
+            <button className="flex items-center gap-2 bg-brand-green/10 text-brand-green px-4 py-2 rounded-xl font-medium hover:bg-brand-green/20 transition">
+              <Calendar size={18} /> Soumettre une absence
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+             <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+               <div className="text-sm font-medium text-slate-500 mb-2">Jours d'Absence (Mois)</div>
+               <div className="text-3xl font-black text-slate-900 dark:text-white">14</div>
+             </div>
+             <div className="p-6 bg-red-50 dark:bg-red-500/10 rounded-2xl border border-red-100 dark:border-red-500/20">
+               <div className="text-sm font-medium text-red-600 dark:text-red-400 mb-2">Absences Non Justifiées</div>
+               <div className="text-3xl font-black text-red-700 dark:text-red-300">3</div>
+             </div>
+             <div className="p-6 bg-brand-green/5 rounded-2xl border border-brand-green/10">
+               <div className="text-sm font-medium text-brand-green mb-2">Taux de Présence</div>
+               <div className="text-3xl font-black text-brand-green">98.2%</div>
+             </div>
+          </div>
+
+          <div className="w-full min-w-0 overflow-auto ">
+             <table className="w-full">
+               <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
+                  <tr>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase">Employé</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase">Type</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase">Période</th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase">Statut</th>
+                  </tr>
+               </thead>
+               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="px-6 py-4 font-medium">Marc Atangana</td>
+                    <td className="px-6 py-4">Congé Payé</td>
+                    <td className="px-6 py-4 text-sm text-slate-500">12 Mai - 15 Mai (4 jours)</td>
+                    <td className="px-6 py-4">
+                      <span className="bg-brand-green/10 text-brand-green px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">Validé</span>
+                    </td>
+                  </tr>
+                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="px-6 py-4 font-medium">Aisha Diallo</td>
+                    <td className="px-6 py-4">Maladie</td>
+                    <td className="px-6 py-4 text-sm text-slate-500">20 Mai - 21 Mai (2 jours)</td>
+                    <td className="px-6 py-4">
+                      <span className="bg-brand-green/10 text-brand-green px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">Validé</span>
+                    </td>
+                  </tr>
+                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="px-6 py-4 font-medium">Jean-Pierre Kassi</td>
+                    <td className="px-6 py-4">Absence Non Justifiée</td>
+                    <td className="px-6 py-4 text-sm text-slate-500">24 Mai (1 jour)</td>
+                    <td className="px-6 py-4">
+                      <span className="bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">En Attente</span>
+                    </td>
+                  </tr>
+               </tbody>
+             </table>
           </div>
         </div>
       )}

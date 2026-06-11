@@ -1,7 +1,7 @@
 import { parseSafeJSON } from "../lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
-import { Routes, Route, useLocation, Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
+import { Routes, Route, useLocation, Navigate, Outlet, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { PageHeader } from './ui/PageHeader';
 import { 
   BookOpen, 
@@ -31,7 +31,9 @@ import {
   Pencil,
   Brain,
   Maximize,
-  Copy
+  Copy,
+  Clock,
+  AlertCircle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -63,6 +65,7 @@ import {
 } from '@/services/geminiService';
 
 import * as XLSX from 'xlsx';
+import { ThirdPartyFormModal } from './ThirdPartyFormModal';
 
 interface Transaction {
   id: number;
@@ -106,15 +109,27 @@ interface DetailedTransaction extends Transaction {
 
 type OperationType = string; // Allow dynamic types
 
-export function Journal({ openModal, onModalClose }: { openModal?: boolean; onModalClose?: () => void }) {
+export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerConsumed }: { openModal?: boolean; onModalClose?: () => void; scanTrigger?: boolean; onScanTriggerConsumed?: () => void; }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { confirm, alert: dialogAlert } = useDialog();
   const { t } = useLanguage();
   const { formatCurrency, currency: baseCurrency, exchangeRates, getExchangeRate, getCurrencyIcon } = useCurrency();
   const { activeYear } = useFiscalYear();
   const location = useLocation();
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('search') || '');
+  const [missingCapital, setMissingCapital] = useState(false);
+  
+  useEffect(() => {
+    const q = searchParams.get('search');
+    if (q !== null) {
+      setSearchTerm(q);
+    }
+  }, [searchParams]);
   const [thirdPartyFilter, setThirdPartyFilter] = useState('');
   const [accountFilter, setAccountFilter] = useState('');
   const [minAmount, setMinAmount] = useState('');
@@ -129,6 +144,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [transactionExchangeRate, setTransactionExchangeRate] = useState(1);
   const [additionalCurrencies, setAdditionalCurrencies] = useState<string[]>(['EUR', 'USD']);
   const [isCustomOpModalOpen, setIsCustomOpModalOpen] = useState(false);
+  const [isThirdPartyModalOpen, setIsThirdPartyModalOpen] = useState(false);
+  const [thirdPartyModalType, setThirdPartyModalType] = useState<'client' | 'supplier'>('client');
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
@@ -154,6 +171,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const [lastAiImage, setLastAiImage] = useState<string | null>(null);
   const [showImagePreview, setShowImagePreview] = useState(true);
   const [currentView, setCurrentView] = useState<'active' | 'trash'>('active');
+  const [pendingImportEntries, setPendingImportEntries] = useState<any[]>([]);
+  const [isImportValidationModalOpen, setIsImportValidationModalOpen] = useState(false);
   const magicInputRef = useRef<HTMLInputElement>(null);
   const descriptionInputRef = useRef<HTMLInputElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
@@ -198,12 +217,40 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
   // Form State
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [dueDate, setDueDate] = useState('');
   const [description, setDescription] = useState('');
+  const [isAutoDescription, setIsAutoDescription] = useState<boolean>(true);
+  const [amountString, setAmountString] = useState<string>('');
   const [operationType, setOperationType] = useState<string>('achat_marchandises');
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('caisse');
   const [amountHT, setAmountHT] = useState<number>(0);
   const [vatRate, setVatRate] = useState<number>(18);
-  
+
+  // Helper to safely evaluate simple math expressions in the amount field (ex: 15000 + 4500)
+  const evaluateMathExpression = (val: string): number | null => {
+    const clean = val.replace(/\s+/g, '');
+    if (/^[0-9.+\-*/()]+$/.test(clean)) {
+      try {
+        const fn = new Function(`return (${clean})`);
+        const result = fn();
+        if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
+          return result;
+        }
+      } catch (e) {
+        // ignore parse error
+      }
+    }
+    return null;
+  };
+
+  // Sync amountString with amountHT, unless there is an expression being typed
+  useEffect(() => {
+    const currentParsed = parseFloat(amountString);
+    if (Math.abs(currentParsed - amountHT) > 0.01 || (isNaN(currentParsed) && amountHT !== 0)) {
+      setAmountString(amountHT > 0 ? String(amountHT) : '');
+    }
+  }, [amountHT]);
+
   // Custom Op Form State
   const [newOpLabel, setNewOpLabel] = useState('');
   const [newOpErrors, setNewOpErrors] = useState<Record<string, string>>({});
@@ -224,6 +271,34 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     { account_code: '', debit: 0, credit: 0 },
     { account_code: '', debit: 0, credit: 0 }
   ]);
+
+  const getOperationLabel = (type: string) => {
+    if (type && type.startsWith('custom_')) {
+      const customOpId = parseInt(type.split('_')[1]);
+      const customOp = customOperations.find(op => op.id === customOpId);
+      return customOp?.label || 'Opération';
+    }
+    const standard = DEFAULT_OPERATION_TYPES.find(t => t.id === type);
+    return standard?.label || '';
+  };
+
+  // Automate operation description (libellé) in real-time
+  useEffect(() => {
+    if (isAutoDescription && isModalOpen) {
+      const opLabel = getOperationLabel(operationType);
+      const party = thirdParties.find(p => p.account_code === selectedThirdParty);
+      const partyName = party ? (party.is_occasional && occasionalName ? occasionalName : party.name) : '';
+      
+      let text = opLabel;
+      if (partyName) {
+        text += ` - ${partyName}`;
+      }
+      if (reference) {
+        text += ` (Réf: ${reference})`;
+      }
+      setDescription(text);
+    }
+  }, [operationType, selectedThirdParty, reference, isAutoDescription, customOperations, thirdParties, occasionalName, isModalOpen]);
 
   // Auto-save Draft
   useEffect(() => {
@@ -251,6 +326,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     localStorage.removeItem('journal_draft');
     setIsModalOpen(false);
     setEditingId(null);
+    setDueDate('');
     setReference('');
     setDescription('');
     setNotes('');
@@ -311,7 +387,9 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     if (!proceed) return;
     
     setDescription('');
+    setIsAutoDescription(true);
     setAmountHT(0);
+    setAmountString('');
     setNotes('');
     setDocumentUrls([]);
     setPendingFiles([]);
@@ -348,6 +426,24 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         handleSubmit();
       }
 
+      // Alt+1 to Alt+5 to quickly switch operation types in guided mode
+      if (e.altKey && e.key === '1') {
+        e.preventDefault();
+        setOperationType('vente_marchandises');
+      } else if (e.altKey && e.key === '2') {
+        e.preventDefault();
+        setOperationType('vente_services');
+      } else if (e.altKey && e.key === '3') {
+        e.preventDefault();
+        setOperationType('achat_marchandises');
+      } else if (e.altKey && e.key === '4') {
+        e.preventDefault();
+        setOperationType('achat_services');
+      } else if (e.altKey && e.key === '5') {
+        e.preventDefault();
+        setOperationType('frais_generaux');
+      }
+
       // Escape to close/abandon
       if (e.key === 'Escape' && !isCustomOpModalOpen && !isDetailOpen && !isQuickInvoiceOpen) {
         handleModalClose();
@@ -380,8 +476,6 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     return () => clearTimeout(timeoutId);
   }, [selectedThirdParty, operationType, thirdParties, description]);
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   useEffect(() => {
     fetchTransactions();
     fetchCustomOperations();
@@ -480,6 +574,10 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       const res = await apiFetch(`/api/transactions?${params.toString()}`);
       const data = await res.json();
       setTransactions(data);
+
+      const capRes = await apiFetch('/api/check-capital');
+      const capData = await capRes.json();
+      setMissingCapital(!capData.hasCapital);
     } catch (err) {
       console.error(err);
     } finally {
@@ -594,32 +692,38 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         if (!proceed) return;
       }
 
-      // Check if it's a sale (has 7xx accounts)
-      const saleEntries = data.entries.filter((e: any) => e.account_code.startsWith('7'));
-      const isSale = saleEntries.length > 0;
+      // Check if it's a sale (has 7xx accounts) or purchase (has 6xx accounts)
+      const saleEntries = data.entries?.filter((e: any) => e.account_code?.startsWith('7')) || [];
+      const purchaseEntries = data.entries?.filter((e: any) => e.account_code?.startsWith('6')) || [];
+      const hasSale = saleEntries.length > 0;
+      const hasPurchase = purchaseEntries.length > 0;
       
-      if (!isSale) {
-        const proceed = await confirm("Cette transaction ne semble pas être une vente (pas de compte de classe 7). Voulez-vous quand même créer une facture ?");
+      if (!hasSale && !hasPurchase) {
+        const proceed = await confirm("Cette transaction ne semble pas être une vente ou un achat (pas de compte de classe 6 ou 7). Voulez-vous quand même créer une facture ?");
         if (!proceed) return;
       }
 
       // Prepare quick invoice data
-      const clientEntry = data.entries.find((e: any) => e.account_code.startsWith('411'));
+      const clientEntry = data.entries?.find((e: any) => e.account_code?.startsWith('411'));
+      const supplierEntry = data.entries?.find((e: any) => e.account_code?.startsWith('401'));
+      const partnerEntry = clientEntry || supplierEntry;
+
       let tp = null;
       if (data.third_party_id) {
         tp = thirdParties.find(p => p.id === data.third_party_id);
-      } else if (clientEntry) {
-        tp = thirdParties.find(p => p.account_code === clientEntry.account_code);
+      } else if (partnerEntry) {
+        tp = thirdParties.find(p => p.account_code === partnerEntry.account_code);
       }
 
-      // VAT detection
-      const vatEntry = data.entries.find((e: any) => e.account_code.startsWith('443'));
+      // VAT detection (443 is sales VAT, 445 is purchase VAT)
+      const vatEntry = data.entries?.find((e: any) => e.account_code?.startsWith('443') || e.account_code?.startsWith('445'));
       let detectedVatRate = 18;
-      if (vatEntry && saleEntries.length > 0) {
-        const vatAmount = Math.abs(vatEntry.credit - vatEntry.debit);
-        const htAmount = Math.abs(saleEntries.reduce((acc: number, e: any) => acc + (e.credit - e.debit), 0));
-        if (htAmount > 0) {
-          const rawRate = (vatAmount / htAmount) * 100;
+      if (vatEntry) {
+        const vatAmount = Math.abs((vatEntry.credit || 0) - (vatEntry.debit || 0));
+        const baseEntries = saleEntries.length > 0 ? saleEntries : purchaseEntries;
+        const baseAmount = Math.abs(baseEntries.reduce((acc: number, e: any) => acc + ((e.credit || 0) - (e.debit || 0)), 0));
+        if (baseAmount > 0) {
+          const rawRate = (vatAmount / baseAmount) * 100;
           const commonRates = [0, 2, 5, 10, 18];
           detectedVatRate = commonRates.reduce((prev, curr) => 
             Math.abs(curr - rawRate) < Math.abs(prev - rawRate) ? curr : prev
@@ -627,22 +731,41 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         }
       }
 
-      const items = saleEntries.length > 0 ? saleEntries.map((e: any) => ({
-        description: e.description || data.description,
-        quantity: 1,
-        unit_price: Math.abs(e.credit - e.debit),
-        vat_rate: detectedVatRate,
-        account_code: e.account_code
-      })) : [{
-        description: data.description,
-        quantity: 1,
-        unit_price: data.total_amount,
-        vat_rate: detectedVatRate,
-        account_code: '701'
-      }];
+      let items = [];
+      if (saleEntries.length > 0) {
+        items = saleEntries.map((e: any) => ({
+          description: e.description || data.description,
+          quantity: 1,
+          unit_price: Math.abs((e.credit || 0) - (e.debit || 0)),
+          vat_rate: detectedVatRate,
+          account_code: e.account_code
+        }));
+      } else if (purchaseEntries.length > 0) {
+        items = purchaseEntries.map((e: any) => ({
+          description: e.description || data.description,
+          quantity: 1,
+          unit_price: Math.abs((e.credit || 0) - (e.debit || 0)),
+          vat_rate: detectedVatRate,
+          account_code: e.account_code
+        }));
+      } else {
+        const computedTotal = data.total_amount || 
+                              data.amount_ht || 
+                              (data.entries?.reduce((sum: number, e: any) => sum + (e.debit || 0), 0) || 0);
+        items = [{
+          description: data.description,
+          quantity: 1,
+          unit_price: computedTotal,
+          vat_rate: detectedVatRate,
+          account_code: '701'
+        }];
+      }
 
       setQuickInvoiceData({
-        transaction: data,
+        transaction: {
+          ...data,
+          total_amount: data.total_amount || data.amount_ht || data.entries?.reduce((sum: number, e: any) => sum + (e.debit || 0), 0) || 0
+        },
         thirdParty: tp,
         items,
         total: items.reduce((acc, i) => acc + (i.quantity * i.unit_price * (1 + i.vat_rate/100)), 0)
@@ -660,7 +783,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     
     if (!quickInvoiceData.thirdParty) {
       dialogAlert("Impossible de créer la facture : aucun client détecté. Veuillez utiliser l'éditeur complet.", 'error');
-      navigate('/invoices', { state: { prefill: quickInvoiceData.transaction } });
+      navigate('/invoicing', { state: { prefill: quickInvoiceData.transaction } });
       setIsQuickInvoiceOpen(false);
       return;
     }
@@ -766,6 +889,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         }
       }
       setAmountHT(recoveredAmountHT || 0);
+      setAmountString(recoveredAmountHT ? String(recoveredAmountHT) : '');
 
       if (data.vat_rate !== undefined) setVatRate(data.vat_rate);
       if (data.payment_mode) setPaymentMode(data.payment_mode);
@@ -778,8 +902,13 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           setSelectedThirdParty(party.account_code);
           if (party.is_occasional) {
             setOccasionalName(data.occasional_name || '');
+          } else {
+            setOccasionalName('');
           }
         }
+      } else {
+        setSelectedThirdParty('');
+        setOccasionalName('');
       }
 
       setMode(data.creation_mode || 'expert');
@@ -798,9 +927,11 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       if (data.error) throw new Error(data.error);
 
       setEditingId(id);
-      setDate(data.date);
+      setIsAutoDescription(false);
+      setDate(data.date || new Date().toISOString().split('T')[0]);
+      setDueDate(data.due_date || '');
       setReference(data.reference || '');
-      setDescription(data.description);
+      setDescription(data.description || '');
       setNotes(data.notes || '');
       
       // Parse document URLs if they are stored as JSON array
@@ -837,6 +968,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         }
       }
       setAmountHT(recoveredAmountHT2 || 0);
+      setAmountString(recoveredAmountHT2 ? String(recoveredAmountHT2) : '');
 
       if (data.vat_rate !== undefined) setVatRate(data.vat_rate);
       if (data.payment_mode) setPaymentMode(data.payment_mode);
@@ -849,6 +981,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           setSelectedThirdParty(party.account_code);
           if (party.is_occasional) {
             setOccasionalName(data.occasional_name || '');
+          } else {
+            setOccasionalName('');
           }
         }
       } else {
@@ -872,6 +1006,13 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     setIsScanning(true);
     fileInputRef.current?.click();
   };
+
+  useEffect(() => {
+    if (scanTrigger) {
+      handleScanButtonClick();
+      if (onScanTriggerConsumed) onScanTriggerConsumed();
+    }
+  }, [scanTrigger]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -921,7 +1062,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       const base64 = (reader.result as string).split(',')[1];
       const newUrl = `data:${file.type};base64,${base64}`;
       setDocumentUrls(prev => [...prev, newUrl]);
-      await performAIAnalysis(base64, sType, file.type);
+      await performAIAnalysis(base64, newUrl, sType, file.type);
     };
     reader.readAsDataURL(file);
   };
@@ -1011,7 +1152,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         if (match) {
           setSelectedThirdParty(match.account_code);
         } else {
-          setOccasionalName(data.thirdPartyName);
+          setOccasionalName(data.thirdPartyName || '');
           const def = type === 'client' ? defaultOccasional.client : defaultOccasional.supplier;
           if (def) setSelectedThirdParty(def.account_code);
         }
@@ -1064,7 +1205,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         if (match) {
           setSelectedThirdParty(match.account_code);
         } else {
-          setOccasionalName(data.thirdPartyName);
+          setOccasionalName(data.thirdPartyName || '');
           const def = type === 'client' ? defaultOccasional.client : defaultOccasional.supplier;
           if (def) {
             setSelectedThirdParty(def.account_code);
@@ -1085,14 +1226,14 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     }
   };
 
-  const performAIAnalysis = async (base64: string, sType: 'vente' | 'achat', mimeType: string = 'image/jpeg') => {
+  const performAIAnalysis = async (base64: string, dataUrl: string, sType: 'vente' | 'achat', mimeType: string = 'image/jpeg') => {
     try {
       const data = await analyzeInvoice(base64, sType, companySettings?.vat_settings || [], mimeType);
       
       if (!data) throw new Error("L'analyse IA a échoué");
 
       setLastAiPrediction(data);
-      setLastAiImage(base64);
+      setLastAiImage(dataUrl);
 
       if (data.date) setDate(data.date);
       if (data.description) setDescription(data.description);
@@ -1122,7 +1263,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         if (match) {
           setSelectedThirdParty(match.account_code);
         } else {
-          setOccasionalName(data.third_party);
+          setOccasionalName(data.third_party || '');
           const def = sType === 'vente' ? defaultOccasional.client : defaultOccasional.supplier;
           if (def) {
             setSelectedThirdParty(def.account_code);
@@ -1200,7 +1341,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     });
 
     setEntries(newEntries);
-    dialogAlert("Les écritures ont été détaillées par article.", "success");
+    setMode('expert');
+    dialogAlert("Les écritures ont été détaillées par article. Vous êtes maintenant en mode expert.", "success");
   };
 
   const handleDeleteAttachment = async (id: number) => {
@@ -1448,6 +1590,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           date, 
+          due_date: (paymentMode === 'credit' && dueDate) ? dueDate : null,
           description, 
           reference,
           entries: entriesToSave,
@@ -1545,6 +1688,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         setReference(draft.reference || generateReference());
         setDescription(draft.description || '');
         setAmountHT(draft.amountHT || 0);
+        setAmountString(draft.amountHT ? String(draft.amountHT) : '');
         setEntries(draft.entries || [{ account_code: '', debit: 0, credit: 0 }, { account_code: '', debit: 0, credit: 0 }]);
         setSelectedThirdParty(draft.selectedThirdParty || '');
         setOccasionalName(draft.occasionalName || '');
@@ -1563,10 +1707,12 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       return;
     }
     setEditingId(null);
+    setIsAutoDescription(true);
     setDate(new Date().toISOString().split('T')[0]);
     setReference(generateReference());
     setDescription('');
     setAmountHT(0);
+    setAmountString('');
     setEntries([{ account_code: '', debit: 0, credit: 0 }, { account_code: '', debit: 0, credit: 0 }]);
     setMode('guided');
     if (defaultType) {
@@ -1613,23 +1759,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           return;
         }
 
-        const confirmed = await confirm(`Importer ${entries.length} écritures ?`);
-        if (!confirmed) return;
-
-        const res = await apiFetch('/api/import/journal', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entries })
-        });
-
-        if (res.ok) {
-          const result = await res.json();
-          dialogAlert(`${result.success} écritures importées avec succès.`);
-          fetchTransactions();
-        } else {
-          const errorData = await res.json();
-          dialogAlert("Erreur lors de l'import: " + (errorData.error || "Inconnu"));
-        }
+        setPendingImportEntries(entries);
+        setIsImportValidationModalOpen(true);
       } catch (err) {
         console.error(err);
         dialogAlert("Le fichier Excel n'a pas pu être lu. Vérifiez son format.");
@@ -1637,6 +1768,25 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
     };
     reader.readAsBinaryString(file);
     e.target.value = '';
+  };
+
+  const confirmImportJournal = async () => {
+    setIsImportValidationModalOpen(false);
+    const res = await apiFetch('/api/import/journal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: pendingImportEntries })
+    });
+
+    if (res.ok) {
+      const result = await res.json();
+      dialogAlert(`${result.success} écritures importées avec succès.`);
+      fetchTransactions();
+      setPendingImportEntries([]);
+    } else {
+      const errorData = await res.json();
+      dialogAlert("Erreur lors de l'import: " + (errorData.error || "Inconnu"));
+    }
   };
 
   const handleExportExcel = async () => {
@@ -1748,7 +1898,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
       const utils = await import('../lib/exportUtils');
       const finalY = (doc as any).lastAutoTable?.finalY || nextY + 20;
-      utils.addPDFSignature(doc, finalY + 20);
+      utils.addOHADAComplianceSignature(doc, finalY + 20, settings.manager_name || "L'Administrateur");
       addPDFFooter(doc);
       doc.save(`Journal_General_${new Date().toISOString().split('T')[0]}.pdf`);
 
@@ -1768,53 +1918,98 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   ];
 
   const getFormConfig = (type: string) => {
+    const taxesEnabled = companySettings?.taxes_enabled !== false && Number(companySettings?.taxes_enabled) !== 0;
+
+    let hasVAT = false;
+    let hasPayment = false;
+    let amountLabel = 'Montant';
+
     // Custom operations
     if (type.startsWith('custom_')) {
-       const customOpId = parseInt(type.split('_')[1]);
-       const customOp = customOperations.find(op => op.id === customOpId);
-       const hasVAT = customOp?.entries_template.some(t => t.formula === 'tva') ?? false;
-       // Heuristic: if it uses PAYMENT or THIRD_PARTY, it likely needs payment mode
-       const hasPayment = customOp?.entries_template.some(t => t.account_code === 'PAYMENT' || t.account_code === 'THIRD_PARTY') ?? true;
-       return {
-         hasVAT,
-         hasPayment,
-         amountLabel: hasVAT ? 'Montant HT' : 'Montant'
-       };
+      const id = parseInt(type.split('_')[1]);
+      const op = customOperations.find(o => o.id === id);
+      if (op) {
+        hasVAT = op.entries_template.some((t: any) => t.type === 'tva');
+        hasPayment = op.entries_template.some((t: any) => t.type === 'payment');
+      }
+    } else {
+      // Standard operations
+      switch (type) {
+        case 'vente_marchandises':
+        case 'vente_services':
+        case 'achat_marchandises':
+        case 'achat_services':
+        case 'frais_generaux':
+          hasVAT = true;
+          hasPayment = true;
+          amountLabel = 'Montant HT';
+          break;
+        case 'charges_a_payer':
+          hasVAT = true;
+          hasPayment = false;
+          amountLabel = 'Montant HT';
+          break;
+        case 'amortissement':
+        case 'charges_constatees_avance':
+        case 'produits_constates_avance':
+          hasVAT = false;
+          hasPayment = false;
+          amountLabel = 'Montant';
+          break;
+        case 'appel_capital':
+          hasVAT = false;
+          hasPayment = false;
+          amountLabel = 'Montant appelé';
+          break;
+        case 'constitution_capital':
+          hasVAT = false;
+          hasPayment = false;
+          amountLabel = 'Capital Total';
+          break;
+        case 'augmentation_capital':
+          hasVAT = false;
+          hasPayment = false;
+          amountLabel = 'Montant Augmentation';
+          break;
+        case 'liberation_capital':
+          hasVAT = false;
+          hasPayment = true;
+          amountLabel = 'Montant libéré';
+          break;
+        case 'paiement_salaire':
+          hasVAT = false;
+          hasPayment = true;
+          amountLabel = 'Salaire Net';
+          break;
+        case 'paiement_impot':
+          hasVAT = false;
+          hasPayment = true;
+          amountLabel = 'Montant Impôt';
+          break;
+        case 'retrait_banque':
+        case 'depot_banque':
+        case 'pret_bancaire':
+        case 'encaissement_client':
+        case 'paiement_fournisseur':
+          hasVAT = false;
+          hasPayment = true;
+          amountLabel = 'Montant';
+          break;
+        default:
+          hasVAT = true;
+          hasPayment = true;
+          amountLabel = 'Montant';
+      }
     }
 
-    // Standard operations
-    switch (type) {
-      case 'vente_marchandises':
-      case 'vente_services':
-      case 'achat_marchandises':
-      case 'achat_services':
-      case 'frais_generaux':
-        return { hasVAT: true, hasPayment: true, amountLabel: 'Montant HT' };
-      
-      case 'charges_a_payer':
-        return { hasVAT: true, hasPayment: false, amountLabel: 'Montant HT' };
-      
-      case 'amortissement':
-      case 'charges_constatees_avance':
-      case 'produits_constates_avance':
-        return { hasVAT: false, hasPayment: false, amountLabel: 'Montant' };
-        
-      case 'paiement_salaire':
-        return { hasVAT: false, hasPayment: true, amountLabel: 'Salaire Net' };
-
-      case 'paiement_impot':
-        return { hasVAT: false, hasPayment: true, amountLabel: 'Montant Impôt' };
-        
-      case 'retrait_banque':
-      case 'depot_banque':
-      case 'pret_bancaire':
-      case 'encaissement_client':
-      case 'paiement_fournisseur':
-        return { hasVAT: false, hasPayment: true, amountLabel: 'Montant' };
-        
-      default:
-        return { hasVAT: true, hasPayment: true, amountLabel: 'Montant' };
+    if (!taxesEnabled) {
+      hasVAT = false;
+      if (amountLabel === 'Montant HT') {
+        amountLabel = 'Montant TTC';
+      }
     }
+
+    return { hasVAT, hasPayment, amountLabel };
   };
 
   const formConfig = getFormConfig(operationType);
@@ -1846,15 +2041,63 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       });
       
       const data = await res.json();
-      if (res.ok) {
-        dialogAlert(`Facture ${data.number} générée avec succès.`, 'success');
-        fetchTransactions();
-      } else {
+      if (!res.ok) {
         throw new Error(data.error || "Erreur lors de la génération de la facture");
       }
+
+      try {
+        const invRes = await apiFetch(`/api/invoices/${data.id}`);
+        const setRes = await apiFetch('/api/company/settings');
+        
+        if (invRes.ok && setRes.ok) {
+           const invoice = await invRes.json();
+           const settings = await setRes.json();
+           
+           const { buildInvoicePDF } = await import('../lib/exportUtils');
+           const doc = await buildInvoicePDF(invoice, settings);
+           const pdfBlob = doc.output('blob');
+           
+           const formData = new FormData();
+           formData.append('files', pdfBlob, `Facture_${invoice.number}.pdf`);
+           
+           await apiFetch(`/api/transactions/${id}/attachments`, {
+             method: 'POST',
+             body: formData
+           });
+        }
+      } catch (attErr) {
+        console.error('Erreur attachement facture:', attErr);
+      }
+
+      dialogAlert(`Facture ${data.number} générée avec succès et jointe à l'écriture.`, 'success');
+      fetchTransactions();
     } catch (err) {
       console.error(err);
       dialogAlert(err instanceof Error ? err.message : "Erreur lors de la génération de la facture", 'error');
+    }
+  };
+
+  const handleBulkValidate = async () => {
+    const confirmed = await confirm("Voulez-vous vraiment valider ces enregistrements ?");
+    if (!confirmed) return;
+
+    try {
+      const res = await apiFetch('/api/transactions/bulk-validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedIds })
+      });
+      
+      if (res.ok) {
+        fetchTransactions();
+        setSelectedIds([]);
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || "Erreur lors de la validation");
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert(err instanceof Error ? err.message : "Erreur lors de la validation", 'error');
     }
   };
 
@@ -1888,7 +2131,9 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
   const handleSave = handleSubmit;
 
   return (
-    <div 
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1900,7 +2145,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-brand-green/10 backdrop-blur-md flex items-center justify-center p-8 pointer-events-none"
+            className="fixed inset-0 z-[100] bg-brand-green/10 backdrop-blur-md flex justify-center p-8 pointer-events-none items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4"
           >
             <div className="w-full max-w-2xl aspect-video border-4 border-dashed border-brand-green rounded-[3rem] flex flex-col items-center justify-center gap-6 bg-white/80 dark:bg-slate-900/80 shadow-2xl animate-in zoom-in duration-300">
               <div className="p-8 bg-brand-green/20 text-brand-green rounded-full animate-bounce">
@@ -1922,14 +2167,24 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         actions={
           <div className="flex flex-wrap items-center justify-end gap-3">
             {selectedIds.length > 0 && (
-              <button 
-                onClick={handleBulkDelete}
-                className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/40 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
-              >
-                <Trash2 size={18} />
-                <span className="hidden md:inline">Supprimer ({selectedIds.length})</span>
-                <span className="md:hidden">{selectedIds.length}</span>
-              </button>
+              <>
+                <button 
+                  onClick={handleBulkValidate}
+                  className="bg-brand-green/10 dark:bg-brand-green/20 border border-brand-green/20 dark:border-brand-green/30 text-brand-green dark:text-brand-green hover:bg-brand-green/20 dark:hover:bg-brand-green/30 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
+                >
+                  <Check size={18} />
+                  <span className="hidden md:inline">Valider ({selectedIds.length})</span>
+                  <span className="md:hidden">Valider</span>
+                </button>
+                <button 
+                  onClick={handleBulkDelete}
+                  className="bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/40 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
+                >
+                  <Trash2 size={18} />
+                  <span className="hidden md:inline">Supprimer ({selectedIds.length})</span>
+                  <span className="md:hidden">{selectedIds.length}</span>
+                </button>
+              </>
             )}
             <div className="hidden sm:flex bg-white dark:bg-slate-900 rounded-xl p-1 border border-slate-200 dark:border-slate-800 shadow-sm">
               <button 
@@ -1988,6 +2243,30 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           </div>
         }
       />
+
+      {missingCapital && (
+        <motion.div 
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-amber-50 dark:bg-amber-900/20 border-l-4 border-amber-500 p-4 rounded-xl shadow-sm -mt-2 mb-4 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between"
+        >
+          <div className="flex gap-3">
+            <div className="text-amber-500 mt-1"><AlertCircle size={24} /></div>
+            <div>
+              <h3 className="font-bold text-amber-800 dark:text-amber-200">Capital de départ manquant</h3>
+              <p className="text-sm text-amber-700 dark:text-amber-300">
+                Il semble que votre journal ne contienne pas l'enregistrement de votre capital de départ. Il s'agit généralement de la première écriture de votre entreprise.
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={() => openNewModal('constitution_capital')}
+            className="whitespace-nowrap bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors shadow-sm"
+          >
+            Saisir le capital
+          </button>
+        </motion.div>
+      )}
 
       {/* Quick Actions */}
       <div className="flex flex-wrap items-center gap-3 relative z-10">
@@ -2105,7 +2384,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       </div>
 
       {/* View Toggle */}
-      <div className="flex bg-slate-100/50 dark:bg-slate-800/30 p-1 rounded-2xl border border-slate-200 dark:border-slate-800 w-fit">
+      <div className="w-full min-w-0 overflow-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-hide">
+      <div className="flex bg-slate-100/50 dark:bg-slate-800/30 p-1 rounded-2xl border border-slate-200 dark:border-slate-800 w-max sm:w-fit min-w-full sm:min-w-0">
         <button 
           onClick={() => setCurrentView('active')}
           className={cn(
@@ -2130,6 +2410,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
           <Trash2 size={14} />
           Corbeille
         </button>
+      </div>
       </div>
 
       {/* Filters Bar */}
@@ -2175,7 +2456,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             />
           </div>
 
-          <div className="flex bg-slate-50 dark:bg-slate-800/50 p-1 rounded-xl border border-slate-100 dark:border-slate-800 overflow-x-auto no-scrollbar">
+          <div className="w-full min-w-0 overflow-auto flex bg-slate-50 dark:bg-slate-800/50 p-1 rounded-xl border border-slate-100 dark:border-slate-800  no-scrollbar">
             <button 
               onClick={() => {
                 const today = new Date().toISOString().split('T')[0];
@@ -2365,7 +2646,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
       {/* Transaction List */}
       <div className="premium-card overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-auto ">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/50 dark:bg-slate-800/30 border-b border-slate-100 dark:border-slate-800">
@@ -2377,11 +2658,11 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     className="rounded-md border-slate-300 dark:border-slate-700 text-brand-green focus:ring-brand-green bg-white dark:bg-slate-800"
                   />
                 </th>
-                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Date</th>
-                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Libellé</th>
-                <th className="hidden md:table-cell px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Référence</th>
-                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 text-right">Montant</th>
-                <th className="hidden sm:table-cell px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 text-center">Statut</th>
+                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap">Date</th>
+                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap">Libellé</th>
+                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 whitespace-nowrap">Référence</th>
+                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 text-right whitespace-nowrap">Montant</th>
+                <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 text-center whitespace-nowrap">Statut</th>
                 <th className="px-4 sm:px-6 py-5 text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 text-center">Actions</th>
               </tr>
             </thead>
@@ -2427,6 +2708,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                   </motion.tr>
                 ) : (
                   transactions.map((tx) => (
+
                     <motion.tr 
                       key={tx.id}
                       layout
@@ -2445,10 +2727,10 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                           className="rounded-md border-slate-300 dark:border-slate-700 text-brand-green focus:ring-brand-green bg-white dark:bg-slate-800"
                         />
                       </td>
-                      <td className="px-4 sm:px-6 py-5">
+                      <td className="px-4 sm:px-6 py-5 whitespace-nowrap">
                         <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">{tx.date}</span>
                       </td>
-                      <td className="px-4 sm:px-6 py-5">
+                      <td className="px-4 sm:px-6 py-5 min-w-[200px]">
                         <div className="flex flex-col">
                           <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 line-clamp-1">{tx.description}</span>
                           {(tx.occasional_name || tx.third_party_name) && (
@@ -2479,10 +2761,10 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                           </div>
                         </div>
                       </td>
-                      <td className="hidden md:table-cell px-4 sm:px-6 py-5">
+                      <td className="px-4 sm:px-6 py-5 whitespace-nowrap">
                         <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">{tx.reference || '-'}</span>
                       </td>
-                      <td className="px-4 sm:px-6 py-5 text-right">
+                      <td className="px-4 sm:px-6 py-5 text-right whitespace-nowrap">
                         <div className="text-xs sm:text-sm font-black text-slate-900 dark:text-slate-100 font-display">
                           {formatCurrency(tx.total_amount, tx.currency)}
                         </div>
@@ -2492,7 +2774,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                           </div>
                         )}
                       </td>
-                      <td className="hidden sm:table-cell px-4 sm:px-6 py-5 text-center">
+                      <td className="px-4 sm:px-6 py-5 text-center whitespace-nowrap">
                         <span className={cn(
                           "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest",
                           tx.status === 'draft' 
@@ -2523,7 +2805,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                               </button>
                               {tx.status === 'validated' && !tx.invoice_number && (
                                 <button 
-                                  onClick={() => handleGenerateInvoice(tx.id)}
+                                  onClick={() => handleCreateInvoiceFromTransaction(tx.id)}
                                   className="p-1.5 sm:p-2 text-slate-400 dark:text-slate-500 hover:text-brand-gold dark:hover:text-brand-gold hover:bg-brand-gold/10 dark:hover:bg-brand-gold/20 rounded-lg transition-colors"
                                   title="Générer Facture"
                                 >
@@ -2550,7 +2832,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                         </div>
                       </td>
                     </motion.tr>
-                  ))
+
+    ))
                 )}
               </AnimatePresence>
             </tbody>
@@ -2561,7 +2844,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       {/* Modal Saisie */}
       {isModalOpen && (
         <div 
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xl z-50 flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-300"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xl z-50 flex justify-center p-2 sm:p-4 animate-in fade-in duration-300 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4"
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
               e.preventDefault();
@@ -2569,7 +2852,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
             }
           }}
         >
-          <div className="bg-white/95 dark:bg-slate-900/95 rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-5xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden flex flex-col md:flex-row border border-white/20 dark:border-slate-800 transition-all duration-500">
+          <div className="bg-white/95 dark:bg-slate-900/95 rounded-[1.5rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-5xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden flex flex-col md:flex-row border border-white/20 dark:border-slate-800 transition-all duration-500 overflow-y-auto">
             
             {/* Left Panel: Inputs */}
             <div className="flex-1 p-5 sm:p-10 overflow-y-auto border-b md:border-b-0 md:border-r border-slate-100 dark:border-slate-800">
@@ -2663,22 +2946,22 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
               </div>
 
                 {mode === 'guided' && (
-                  <div className="mb-8">
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Type d'opération</label>
-                    <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                  <div className="mb-8 p-4 bg-slate-50/50 dark:bg-slate-800/30 rounded-[2rem] border border-slate-100 dark:border-slate-800 hidden-scrollbar">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-2">Type d'opération</label>
+                    <div className="w-full min-w-0 overflow-x-auto flex gap-3 pb-2 custom-scrollbar">
                       {allOperationTypes.map((type) => (
                         <button
                           key={type.id}
                           onClick={() => setOperationType(type.id)}
                           className={cn(
-                            "flex-none flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all group",
+                            "flex-none flex items-center gap-2 px-5 py-3 rounded-2xl border text-xs font-bold transition-all group",
                             operationType === type.id 
-                              ? "border-brand-green bg-brand-green text-white shadow-md shadow-brand-green/20" 
-                              : "border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:border-brand-green/30"
+                              ? "border-brand-green bg-brand-green text-white shadow-md shadow-brand-green/20 scale-105" 
+                              : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-600 dark:text-slate-400 hover:border-brand-green/30 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm"
                           )}
                         >
                           <span className={cn(
-                            "text-sm transition-transform group-hover:scale-110",
+                            "text-base transition-transform group-hover:scale-110",
                             operationType === type.id ? "grayscale-0" : "grayscale opacity-70"
                           )}>{type.icon}</span>
                           <span className="whitespace-nowrap">{type.label}</span>
@@ -2686,9 +2969,9 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       ))}
                       <button 
                         onClick={() => setIsCustomOpModalOpen(true)}
-                        className="flex-none flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-500 hover:border-brand-green hover:text-brand-green transition-all"
+                        className="flex-none flex items-center gap-2 px-5 py-3 rounded-2xl border border-dashed border-slate-300 dark:border-slate-600 bg-transparent text-slate-500 hover:border-brand-green hover:text-brand-green hover:bg-brand-green/5 transition-all shadow-sm"
                       >
-                       <Settings size={14} /> <span className="text-xs font-bold">Gérer</span>
+                       <Settings size={14} /> <span className="text-xs font-bold uppercase tracking-widest">Gérer</span>
                       </button>
                     </div>
                   </div>
@@ -2696,178 +2979,232 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
                 <div className="space-y-8">
                   {/* Common Fields */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="space-y-2">
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Date d'opération</label>
-                    <input 
-                      type="date" 
-                      value={date}
-                      onChange={(e) => {
-                        setDate(e.target.value);
-                        if (errors.date) setErrors(prev => ({ ...prev, date: '' }));
-                      }}
-                      className={cn(
-                        "w-full px-5 py-3.5 rounded-2xl border focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white transition-all outline-none font-bold",
-                        errors.date ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
-                      )}
-                    />
-                    {errors.date && <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-1 font-bold uppercase tracking-tight">{errors.date}</p>}
+                  <div className="bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="space-y-2">
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Date d'opération</label>
+                        <input 
+                          type="date" 
+                          value={date}
+                          onChange={(e) => {
+                            setDate(e.target.value);
+                            if (errors.date) setErrors(prev => ({ ...prev, date: '' }));
+                          }}
+                          className={cn(
+                            "w-full px-5 py-3.5 rounded-2xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-bold shadow-sm",
+                            errors.date ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-200 dark:border-slate-700"
+                          )}
+                        />
+                        <div className="flex gap-2 mt-1.5 ml-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const d = new Date();
+                              const year = d.getFullYear();
+                              const month = String(d.getMonth() + 1).padStart(2, '0');
+                              const day = String(d.getDate()).padStart(2, '0');
+                              setDate(`${year}-${month}-${day}`);
+                              if (errors.date) setErrors(prev => ({ ...prev, date: '' }));
+                            }}
+                            className="px-2 py-1 text-[9px] font-black uppercase tracking-wider bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-md transition-colors border border-slate-200/50 dark:border-slate-700/50"
+                          >
+                            Aujourd'hui
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const d = new Date();
+                              d.setDate(d.getDate() - 1);
+                              const year = d.getFullYear();
+                              const month = String(d.getMonth() + 1).padStart(2, '0');
+                              const day = String(d.getDate()).padStart(2, '0');
+                              setDate(`${year}-${month}-${day}`);
+                              if (errors.date) setErrors(prev => ({ ...prev, date: '' }));
+                            }}
+                            className="px-2 py-1 text-[9px] font-black uppercase tracking-wider bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 rounded-md transition-colors border border-slate-200/50 dark:border-slate-700/50"
+                          >
+                            Hier
+                          </button>
+                        </div>
+                        {errors.date && <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-1 font-bold uppercase tracking-tight">{errors.date}</p>}
+                      </div>
+                      <div className="space-y-2">
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Référence</label>
+                        <div className="relative">
+                          <input 
+                            type="text" 
+                            value={reference}
+                            onChange={(e) => setReference(e.target.value)}
+                            placeholder="Générée auto..."
+                            className="w-full px-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold shadow-sm"
+                          />
+                          <button 
+                            type="button"
+                            onClick={() => setReference(generateReference())}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-green transition-colors"
+                            title="Régénérer"
+                          >
+                            <Zap size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center ml-1">
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Devise & Change</label>
+                          {transactionCurrency !== baseCurrency && (
+                            <button 
+                              type="button"
+                              onClick={() => setTransactionExchangeRate(getExchangeRate(transactionCurrency, baseCurrency))}
+                              className="text-[10px] text-brand-green font-black uppercase tracking-widest flex items-center gap-1 hover:underline"
+                              title="Utiliser le taux actuel du marché"
+                            >
+                              <Zap size={10} /> Taux Marché: {getExchangeRate(transactionCurrency, baseCurrency).toFixed(4)}
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex gap-3">
+                          <div className="relative flex-1">
+                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                              {getCurrencyIcon(16, transactionCurrency)}
+                            </div>
+                            <select 
+                              value={transactionCurrency}
+                              onChange={(e) => handleCurrencyChange(e.target.value)}
+                              className="w-full pl-12 pr-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-black appearance-none shadow-sm"
+                            >
+                              <option value="FCFA">FCFA (XOF)</option>
+                              <option value="EUR">Euro (€)</option>
+                              <option value="USD">Dollar ($)</option>
+                              <option value="GNF">Franc Guinéen</option>
+                              <option value="CDF">Franc Congolais</option>
+                            </select>
+                          </div>
+                          {transactionCurrency !== baseCurrency && (
+                            <div className="relative w-32">
+                              <input 
+                                type="number"
+                                step="0.000001"
+                                value={transactionExchangeRate}
+                                onChange={(e) => setTransactionExchangeRate(parseFloat(e.target.value) || 1)}
+                                className="w-full px-4 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-mono font-bold text-center shadow-sm"
+                                title={`1 ${transactionCurrency} = ? ${baseCurrency}`}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Multi-Currency Selection & Display */}
+                    {(additionalCurrencies.length > 0 || transactionCurrency !== baseCurrency) && (
+                      <div className="pt-4 border-t border-slate-200/50 dark:border-slate-700/50">
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Conversions Multi-Devises</span>
+                          <div className="flex gap-1">
+                            {['EUR', 'USD', 'FCFA', 'GNF', 'CDF'].filter(c => c !== transactionCurrency).map(c => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => {
+                                  if (additionalCurrencies.includes(c)) {
+                                    setAdditionalCurrencies(prev => prev.filter(curr => curr !== c));
+                                  } else {
+                                    setAdditionalCurrencies(prev => [...prev, c]);
+                                  }
+                                }}
+                                className={cn(
+                                  "px-2 py-1 rounded-md text-[8px] font-black transition-all",
+                                  additionalCurrencies.includes(c) 
+                                    ? "bg-brand-green text-white" 
+                                    : "bg-slate-200 dark:bg-slate-700 text-slate-500"
+                                )}
+                              >
+                                {c}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {additionalCurrencies.length > 0 && (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {additionalCurrencies.map(curr => (
+                              <div key={curr} className="flex flex-col p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">{curr}</span>
+                                <span className="text-sm font-black text-slate-900 dark:text-white truncate font-mono">
+                                  {formatCurrency(amountHT * (transactionExchangeRate / getExchangeRate(curr, baseCurrency)), curr)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Référence</label>
-                    <div className="relative">
-                      <input 
-                        type="text" 
-                        value={reference}
-                        onChange={(e) => setReference(e.target.value)}
-                        placeholder="Générée auto..."
-                        className="w-full px-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold"
-                      />
+
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-end ml-1 mb-2">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Libellé de l'opération</label>
+                        <button
+                          type="button"
+                          onClick={() => setIsAutoDescription(!isAutoDescription)}
+                          className={cn(
+                            "px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-1.5 border w-fit mx-0",
+                            isAutoDescription
+                              ? "bg-brand-green/10 border-brand-green/20 text-brand-green"
+                              : "bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-400"
+                          )}
+                          title="Activer/Désactiver l'automatisation du libellé"
+                        >
+                          <span className={cn("w-1.5 h-1.5 rounded-full", isAutoDescription ? "bg-brand-green animate-pulse" : "bg-slate-400")} />
+                          {isAutoDescription ? "Automatique" : "Manuel"}
+                        </button>
+                      </div>
                       <button 
-                        type="button"
-                        onClick={() => setReference(generateReference())}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-brand-green transition-colors"
-                        title="Régénérer"
+                        onClick={handleAISuggestion}
+                        disabled={suggesting || !description || !amountHT}
+                        className="text-[10px] bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 px-3 py-2 rounded-xl font-black uppercase tracking-widest hover:bg-purple-100 dark:hover:bg-purple-900/40 flex items-center gap-1.5 disabled:opacity-50 transition-colors border border-purple-200/50 dark:border-purple-800/50"
                       >
-                        <Zap size={14} />
+                        {suggesting ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                        Suggestion IA
                       </button>
                     </div>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center ml-1">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Devise & Change</label>
-                      {transactionCurrency !== baseCurrency && (
-                        <button 
-                          type="button"
-                          onClick={() => setTransactionExchangeRate(getExchangeRate(transactionCurrency, baseCurrency))}
-                          className="text-[10px] text-brand-green font-black uppercase tracking-widest flex items-center gap-1 hover:underline"
-                          title="Utiliser le taux actuel du marché"
-                        >
-                          <Zap size={10} /> Taux Marché: {getExchangeRate(transactionCurrency, baseCurrency).toFixed(4)}
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex gap-3">
-                      <div className="relative flex-1">
-                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
-                          {getCurrencyIcon(16, transactionCurrency)}
-                        </div>
-                        <select 
-                          value={transactionCurrency}
-                          onChange={(e) => handleCurrencyChange(e.target.value)}
-                          className="w-full pl-12 pr-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-black appearance-none"
-                        >
-                          <option value="FCFA">FCFA (XOF)</option>
-                          <option value="EUR">Euro (€)</option>
-                          <option value="USD">Dollar ($)</option>
-                          <option value="GNF">Franc Guinéen</option>
-                          <option value="CDF">Franc Congolais</option>
-                        </select>
-                      </div>
-                      {transactionCurrency !== baseCurrency && (
-                        <div className="relative w-32">
-                          <input 
-                            type="number"
-                            step="0.000001"
-                            value={transactionExchangeRate}
-                            onChange={(e) => setTransactionExchangeRate(parseFloat(e.target.value) || 1)}
-                            className="w-full px-4 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-mono font-bold text-center"
-                            title={`1 ${transactionCurrency} = ? ${baseCurrency}`}
-                          />
-                        </div>
-                      )}
-                    </div>
-                    
-                    {/* Multi-Currency Selection & Display */}
-                    <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-800/30 rounded-2xl border border-slate-100 dark:border-slate-800">
-                      <div className="flex justify-between items-center mb-3">
-                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Conversions Multi-Devises</span>
-                        <div className="flex gap-1">
-                          {['EUR', 'USD', 'FCFA', 'GNF', 'CDF'].filter(c => c !== transactionCurrency).map(c => (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => {
-                                if (additionalCurrencies.includes(c)) {
-                                  setAdditionalCurrencies(prev => prev.filter(curr => curr !== c));
-                                } else {
-                                  setAdditionalCurrencies(prev => [...prev, c]);
-                                }
-                              }}
-                              className={cn(
-                                "px-2 py-1 rounded-md text-[8px] font-black transition-all",
-                                additionalCurrencies.includes(c) 
-                                  ? "bg-brand-green text-white" 
-                                  : "bg-slate-200 dark:bg-slate-700 text-slate-500"
-                              )}
-                            >
-                              {c}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        {additionalCurrencies.map(curr => (
-                          <div key={curr} className="flex flex-col p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm">
-                            <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">{curr}</span>
-                            <span className="text-xs font-black text-slate-900 dark:text-white truncate">
-                              {formatCurrency(amountHT * (transactionExchangeRate / getExchangeRate(curr, baseCurrency)), curr)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center ml-1">
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Libellé de l'opération</label>
-                    <button 
-                      onClick={handleAISuggestion}
-                      disabled={suggesting || !description || !amountHT}
-                      className="text-[10px] text-purple-600 dark:text-purple-400 font-black uppercase tracking-widest hover:text-purple-700 dark:hover:text-purple-300 flex items-center gap-1.5 disabled:opacity-50 transition-colors"
-                    >
-                      {suggesting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-                      Suggestion IA
-                    </button>
-                  </div>
-                  <input 
-                    type="text" 
-                    ref={descriptionInputRef}
-                    value={description}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        amountInputRef.current?.focus();
-                      }
-                    }}
-                    onBlur={() => {
-                      if (mode === 'guided' && description && !selectedThirdParty) {
-                        const descLower = description.toLowerCase();
-                        const type = ['vente_marchandises', 'vente_services', 'encaissement_client'].includes(operationType) ? 'client' :
-                                    ['achat_marchandises', 'achat_services', 'frais_generaux', 'paiement_fournisseur', 'charges_a_payer'].includes(operationType) ? 'supplier' : null;
-                        
-                        if (type) {
-                          const match = thirdParties.find(tp => tp.type === type && !!tp.name && descLower.includes(tp.name.toLowerCase()));
-                          if (match) {
-                            setSelectedThirdParty(match.account_code);
+                    <input 
+                      type="text" 
+                      ref={descriptionInputRef}
+                      value={description}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          amountInputRef.current?.focus();
+                        }
+                      }}
+                      onBlur={() => {
+                        if (mode === 'guided' && description && !selectedThirdParty) {
+                          const descLower = description.toLowerCase();
+                          const type = ['vente_marchandises', 'vente_services', 'encaissement_client'].includes(operationType) ? 'client' :
+                                      ['achat_marchandises', 'achat_services', 'frais_generaux', 'paiement_fournisseur', 'charges_a_payer'].includes(operationType) ? 'supplier' : null;
+                          
+                          if (type) {
+                            const match = thirdParties.find(tp => tp.type === type && !!tp.name && descLower.includes(tp.name.toLowerCase()));
+                            if (match) {
+                              setSelectedThirdParty(match.account_code);
+                            }
                           }
                         }
-                      }
-                    }}
-                    onChange={(e) => {
-                      setDescription(e.target.value);
-                      if (errors.description) setErrors(prev => ({ ...prev, description: '' }));
-                    }}
-                    placeholder="Ex: Facture d'achat de marchandises..."
-                    className={cn(
-                      "w-full px-5 py-4 rounded-2xl border focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white transition-all outline-none font-bold placeholder:text-slate-300 dark:placeholder:text-slate-600",
-                      errors.description ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
-                    )}
-                  />
-                  {errors.description && <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-1 font-bold uppercase tracking-tight">{errors.description}</p>}
-                </div>
+                      }}
+                      onChange={(e) => {
+                        setDescription(e.target.value);
+                        setIsAutoDescription(false);
+                        if (errors.description) setErrors(prev => ({ ...prev, description: '' }));
+                      }}
+                      placeholder="Ex: Facture d'achat de marchandises..."
+                      className={cn(
+                        "w-full px-5 py-4 rounded-2xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-bold text-lg placeholder:text-slate-300 dark:placeholder:text-slate-600 shadow-sm",
+                        errors.description ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-200 dark:border-slate-700"
+                      )}
+                    />
+                    {errors.description && <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-1 font-bold uppercase tracking-tight">{errors.description}</p>}
+                  </div>
 
                 {/* OCR Items Display */}
                 {lastAiPrediction?.items && lastAiPrediction.items.length > 0 && (
@@ -2954,8 +3291,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     </div>
                     <p className="text-xs text-purple-600/80 dark:text-purple-400/80 italic font-medium leading-relaxed">"{aiSuggestion.explanation}"</p>
                     
-                    <div className="bg-white/80 dark:bg-slate-900/80 rounded-2xl p-4 border border-purple-100/50 dark:border-purple-900/20 shadow-sm">
-                      <table className="w-full text-[11px]">
+                    <div className="w-full min-w-0 overflow-auto bg-white/80 dark:bg-slate-900/80 rounded-2xl p-4 border border-purple-100/50 dark:border-purple-900/20 shadow-sm ">
+                      <table className="w-full text-[11px] min-w-[500px]">
                         <thead>
                           <tr className="text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-purple-50 dark:border-purple-900/10">
                             <th className="text-left py-2">Compte</th>
@@ -3047,32 +3384,12 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={async () => {
-                                    const name = prompt(`Nom du nouveau ${type === 'client' ? 'client' : 'fournisseur'} occasionnel :`);
-                                    if (name) {
-                                      try {
-                                        const res = await apiFetch('/api/third-parties', {
-                                          method: 'POST',
-                                          headers: { 'Content-Type': 'application/json' },
-                                          body: JSON.stringify({
-                                            name,
-                                            type,
-                                            is_occasional: true
-                                          })
-                                        });
-                                        const newTP = await res.json();
-                                        if (res.ok) {
-                                          await fetchThirdParties();
-                                          setSelectedThirdParty(newTP.account_code);
-                                          setOccasionalName(name);
-                                        }
-                                      } catch (err) {
-                                        console.error(err);
-                                      }
-                                    }
+                                  onClick={() => {
+                                    setThirdPartyModalType(type);
+                                    setIsThirdPartyModalOpen(true);
                                   }}
                                   className="px-5 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center gap-2 shadow-sm"
-                                  title="Créer un nouveau tiers occasionnel spécifique"
+                                  title="Créer un nouveau tiers"
                                 >
                                   <Plus size={14} /> Nouveau
                                 </button>
@@ -3249,49 +3566,66 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     })()}
 
                     {/* Financials */}
-                    <div className="grid grid-cols-2 gap-6">
-                      <div className={cn(!formConfig.hasVAT && "col-span-2", "space-y-2")}>
+                    <div className="grid grid-cols-2 gap-6 bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                      <div className={cn(!formConfig.hasVAT && "col-span-2", "space-y-3")}>
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">{formConfig.amountLabel}</label>
                         <div className="relative">
                           <input 
-                            type="number" 
+                            type="text" 
                             ref={amountInputRef}
                             inputMode="decimal"
-                            value={isNaN(amountHT) ? '' : amountHT}
+                            value={amountString}
+                            placeholder="0 (ex: 25000 + 1250)"
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 e.preventDefault();
-                                // Try to focus first payment mode button or save button
+                                const evaluated = evaluateMathExpression(amountString);
+                                if (evaluated !== null) {
+                                  setAmountHT(evaluated);
+                                  setAmountString(String(evaluated));
+                                }
                                 (e.currentTarget.closest('.space-y-8')?.querySelector('button[className*="bg-slate-900"]') as HTMLElement)?.focus();
                               }
                             }}
+                            onBlur={() => {
+                              const evaluated = evaluateMathExpression(amountString);
+                              if (evaluated !== null) {
+                                setAmountHT(evaluated);
+                                setAmountString(String(evaluated));
+                              }
+                            }}
                             onChange={(e) => {
-                              setAmountHT(Number(e.target.value));
+                              const val = e.target.value;
+                              setAmountString(val);
+                              const parsed = Number(val);
+                              if (!isNaN(parsed)) {
+                                setAmountHT(parsed);
+                              }
                               if (errors.amountHT) setErrors(prev => ({ ...prev, amountHT: '' }));
                             }}
                             className={cn(
-                              "w-full pl-14 pr-5 py-4 rounded-2xl border focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white transition-all outline-none font-black text-lg",
-                              errors.amountHT ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
+                              "w-full pl-16 pr-5 py-4 rounded-2xl border focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none font-black text-2xl font-mono shadow-sm",
+                              errors.amountHT ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-200 dark:border-slate-700"
                             )}
                           />
-                          <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">
+                          <div className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-lg pointer-events-none">
                             {transactionCurrency}
                           </div>
                         </div>
                         {transactionCurrency !== baseCurrency && amountHT > 0 && (
-                          <div className="mt-1 text-[10px] text-slate-400 font-bold uppercase tracking-tight ml-1">
+                          <div className="mt-1 flex items-center justify-end text-[10px] text-slate-400 font-bold uppercase tracking-tight mr-2">
                             ≈ {formatCurrency(amountHT * transactionExchangeRate, baseCurrency)}
                           </div>
                         )}
-                        {errors.amountHT && <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-1 font-bold uppercase tracking-tight">{errors.amountHT}</p>}
+                        {errors.amountHT && <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-2 font-bold uppercase tracking-tight">{errors.amountHT}</p>}
                       </div>
                       {formConfig.hasVAT && (
-                        <div className="space-y-2">
+                        <div className="space-y-3">
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">TVA (%)</label>
                           <select 
                             value={vatRate}
                             onChange={(e) => setVatRate(Number(e.target.value))}
-                            className="w-full px-5 py-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-black text-lg"
+                            className="w-full px-5 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold text-lg shadow-sm"
                           >
                             <option value={18}>18% (Standard)</option>
                             <option value={10}>10% (Réduit)</option>
@@ -3301,32 +3635,32 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                           </select>
                         </div>
                       )}
-                    </div>
 
-                    {/* Amount Breakdown (HT / TVA / TTC) */}
-                    {formConfig.hasVAT && amountHT > 0 && (
-                      <div className="flex bg-slate-50 dark:bg-slate-800/30 rounded-xl p-3 sm:p-4 text-xs font-medium border border-slate-100 dark:border-slate-800/80 items-center justify-between">
-                        <div className="flex flex-col items-center">
-                          <span className="text-slate-400 dark:text-slate-500 uppercase text-[10px] tracking-wider mb-1 font-bold">Montant HT</span>
-                          <span className="text-slate-700 dark:text-slate-300 font-mono">{formatCurrency(amountHT, transactionCurrency)}</span>
+                      {/* Amount Breakdown (HT / TVA / TTC) inline if hasVAT */}
+                      {formConfig.hasVAT && amountHT > 0 && (
+                        <div className="col-span-2 pt-4 border-t border-slate-200/50 dark:border-slate-700/50 flex bg-white/50 dark:bg-slate-900/30 rounded-xl p-4 text-xs font-medium items-center justify-between shadow-inner">
+                          <div className="flex flex-col items-start min-w-[120px]">
+                            <span className="text-slate-400 dark:text-slate-500 uppercase text-[10px] tracking-[0.15em] mb-1 font-bold">Montant HT</span>
+                            <span className="text-slate-700 dark:text-slate-300 font-mono text-base">{formatCurrency(amountHT, transactionCurrency)}</span>
+                          </div>
+                          <div className="text-slate-300 dark:text-slate-600 font-black">+</div>
+                          <div className="flex flex-col items-center min-w-[120px]">
+                            <span className="text-slate-400 dark:text-slate-500 uppercase text-[10px] tracking-[0.15em] mb-1 font-bold">TVA ({vatRate}%)</span>
+                            <span className="text-amber-600 dark:text-amber-500 font-mono text-base">{formatCurrency(amountHT * (vatRate / 100), transactionCurrency)}</span>
+                          </div>
+                          <div className="text-slate-300 dark:text-slate-600 font-black">=</div>
+                          <div className="flex flex-col items-end min-w-[120px]">
+                            <span className="text-brand-green/80 uppercase text-[10px] tracking-[0.15em] mb-1 font-bold">Montant TTC</span>
+                            <span className="text-brand-green font-mono font-black text-lg">{formatCurrency(amountHT * (1 + vatRate / 100), transactionCurrency)}</span>
+                          </div>
                         </div>
-                        <div className="text-slate-300 dark:text-slate-600 font-black px-2">+</div>
-                        <div className="flex flex-col items-center">
-                          <span className="text-slate-400 dark:text-slate-500 uppercase text-[10px] tracking-wider mb-1 font-bold">TVA ({vatRate}%)</span>
-                          <span className="text-amber-600 dark:text-amber-500 font-mono">{formatCurrency(amountHT * (vatRate / 100), transactionCurrency)}</span>
-                        </div>
-                        <div className="text-slate-300 dark:text-slate-600 font-black px-2">=</div>
-                        <div className="flex flex-col items-center">
-                          <span className="text-brand-green/80 uppercase text-[10px] tracking-wider mb-1 font-bold">Montant TTC</span>
-                          <span className="text-brand-green font-mono font-black text-sm">{formatCurrency(amountHT * (1 + vatRate / 100), transactionCurrency)}</span>
-                        </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {/* Payment Mode */}
                     {formConfig.hasPayment && (
-                      <div className="space-y-4">
-                        <div className="space-y-2">
+                      <div className="space-y-4 bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                        <div className="space-y-3">
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Mode de Règlement</label>
                           <div className="flex gap-2">
                             {(['caisse', 'banque', 'mobile_money', 'credit'] as PaymentMode[]).map((pm) => (
@@ -3337,10 +3671,10 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                                   setSelectedTreasuryAccount('');
                                 }}
                                 className={cn(
-                                  "flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all",
+                                  "flex-1 py-3.5 rounded-2xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest border transition-all",
                                   paymentMode === pm
-                                    ? "border-slate-900 dark:border-slate-600 bg-slate-900 dark:bg-slate-700 text-white shadow-lg shadow-slate-900/20"
-                                    : "border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
+                                    ? "border-slate-900 dark:border-slate-600 bg-slate-900 dark:bg-slate-700 text-white shadow-md shadow-slate-900/10"
+                                    : "border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900/50 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm"
                                 )}
                               >
                                 {pm.replace('_', ' ')}
@@ -3350,14 +3684,14 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                         </div>
 
                         {paymentMode !== 'credit' && (
-                          <div className="space-y-2">
+                          <div className="space-y-3 pt-2">
                             <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">
                               Compte de Trésorerie (Optionnel)
                             </label>
                             <select
                               value={selectedTreasuryAccount || ''}
                               onChange={(e) => setSelectedTreasuryAccount(e.target.value)}
-                              className="w-full px-5 py-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-bold"
+                              className="w-full px-5 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-bold text-sm shadow-sm"
                             >
                               <option value="">Compte par défaut ({paymentMode === 'banque' ? (companySettings?.payment_bank_account || '521') : paymentMode === 'caisse' ? (companySettings?.payment_cash_account || '571') : (companySettings?.payment_mobile_account || '585')})</option>
                               {accounts
@@ -3376,22 +3710,36 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                             </select>
                           </div>
                         )}
+                        {paymentMode === 'credit' && (
+                          <div className="space-y-3 pt-2 animate-in slide-in-from-top-2">
+                            <label className="block text-[10px] font-black text-brand-gold uppercase tracking-widest ml-1 flex items-center gap-1.5">
+                              <Clock size={14} /> Date d'échéance (Optionnelle)
+                            </label>
+                            <input
+                              type="date"
+                              value={dueDate}
+                              onChange={(e) => setDueDate(e.target.value)}
+                              className="w-full px-5 py-4 rounded-2xl border border-brand-gold/30 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-gold/20 focus:border-brand-gold transition-all outline-none font-bold shadow-sm"
+                              min={date}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 
                     {/* Notes & Documents */}
-                    <div className="space-y-4 pt-4 border-t border-slate-100 dark:border-slate-800">
-                      <div className="space-y-2">
+                    <div className="space-y-6 bg-slate-50/50 dark:bg-slate-800/30 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                      <div className="space-y-3">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Notes & Observations</label>
                         <textarea 
                           value={notes}
                           onChange={(e) => setNotes(e.target.value)}
                           placeholder="Ajoutez des détails supplémentaires sur cette opération..."
-                          className="w-full px-5 py-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green transition-all outline-none font-medium text-sm min-h-[100px] resize-none"
+                          className="w-full px-5 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all outline-none font-medium text-sm min-h-[100px] resize-none shadow-sm"
                         />
                       </div>
 
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Pièces Jointes</label>
                         <div className="space-y-3">
                           {/* Existing Attachments from Server */}
@@ -3476,7 +3824,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                               setIsScanning(false);
                               fileInputRef.current?.click();
                             }}
-                            className="w-full flex items-center justify-center gap-3 px-5 py-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 hover:border-brand-green hover:bg-brand-green/5 dark:hover:bg-brand-green/10 transition-all group"
+                            className="w-full flex items-center justify-center gap-3 px-5 py-6 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 hover:border-brand-green hover:bg-brand-green/5 dark:hover:bg-brand-green/10 transition-all group shadow-sm"
                           >
                             <Upload className="text-slate-400 group-hover:text-brand-green transition-colors" size={20} />
                             <span className="text-xs font-bold text-slate-500 group-hover:text-brand-green transition-colors uppercase tracking-widest">Ajouter une pièce jointe</span>
@@ -3487,159 +3835,205 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                   </>
                 ) : (
                   /* Expert Mode Manual Entry */
-                  <div className="bg-slate-50/50 dark:bg-slate-800/30 p-8 rounded-[2rem] border border-slate-100 dark:border-slate-800 transition-all">
-                    <div className="flex justify-between items-center mb-6">
-                      <div className="flex items-center gap-3">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Écritures comptables (Expert)</p>
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 transition-all rounded-[2rem] overflow-hidden shadow-sm mt-8">
+                    <div className="bg-slate-50 dark:bg-slate-800/50 p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-slate-900 dark:bg-slate-700 text-white rounded-xl shadow-inner">
+                          <BookOpen size={20} />
+                        </div>
+                        <div>
+                          <p className="text-base font-black text-slate-900 dark:text-white leading-tight font-display">Saisie d'écritures</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Expert Comptable</p>
+                        </div>
                         <div className={cn(
-                          "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-all",
-                          isBalanced ? "bg-brand-green/10 text-brand-green" : "bg-rose-50 text-rose-500 animate-pulse"
+                          "ml-6 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all shadow-sm border",
+                          isBalanced ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/30" : "bg-rose-50 dark:bg-rose-900/20 text-rose-500 border-rose-200 dark:border-rose-900/30 animate-pulse"
                         )}>
-                          <div className={cn("w-1.5 h-1.5 rounded-full", isBalanced ? "bg-brand-green" : "bg-rose-500")} />
-                          {isBalanced ? 'Équilibré' : 'Déséquilibré'}
+                          <div className={cn("w-2 h-2 rounded-full", isBalanced ? "bg-emerald-500" : "bg-rose-500")} />
+                          {isBalanced ? 'Journal Équilibré' : 'Déséquilibré'}
                         </div>
                       </div>
                       <div className="flex gap-2">
                         <button 
                           onClick={handleBalance}
                           disabled={isBalanced}
-                          className="bg-white dark:bg-slate-800 text-amber-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-600 hover:text-white transition-all flex items-center gap-2 border border-amber-200/30 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-all flex items-center gap-2 border border-amber-200/50 dark:border-amber-900/50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                           title="Équilibrer automatiquement l'écriture"
                         >
                           <Zap size={14} /> Équilibrer
-                        </button>
-                        <button 
-                          onClick={() => setEntries([...entries, { account_code: '', debit: 0, credit: 0, description: '' }])}
-                          className="bg-white dark:bg-slate-800 text-brand-green px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-brand-green hover:text-white transition-all flex items-center gap-2 border border-brand-green/20 shadow-sm"
-                        >
-                          <Plus size={14} /> Ligne
                         </button>
                       </div>
                     </div>
                     
                     {errors.balance && (
-                      <div className="mb-6 p-4 bg-rose-50/50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-900/20 rounded-2xl text-[10px] text-rose-600 dark:text-rose-400 font-black uppercase tracking-widest text-center">
+                      <div className="m-4 p-4 bg-rose-50/50 dark:bg-rose-900/10 border border-rose-200 dark:border-rose-900/30 rounded-xl text-[10px] text-rose-600 dark:text-rose-400 font-black uppercase tracking-widest text-center shadow-sm">
                         {errors.balance}
                       </div>
                     )}
                     
-                    <div className="space-y-3">
-                      {entries.map((entry, idx) => (
-                        <div key={idx} className="space-y-1 mb-3">
-                          <div className="flex gap-3 items-center group">
-                            <div className="relative group/account">
-                              <input 
-                                placeholder="Cpt" 
-                                list="expert-account-list"
-                                className={cn(
-                                  "w-24 px-3 py-2.5 rounded-xl border text-sm font-mono font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all outline-none focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green",
-                                  errors[`account_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
+                    <div className="p-0 overflow-x-auto">
+                      {/* Table Header */}
+                      <div className="grid grid-cols-[140px_1fr_140px_140px_50px] gap-3 px-6 py-4 bg-slate-50/50 dark:bg-slate-800/30 border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] min-w-[700px]">
+                        <div>Compte *</div>
+                        <div>Libellé Ligne (Optionnel)</div>
+                        <div className="text-right text-brand-green/80">Débit</div>
+                        <div className="text-right text-brand-gold/80">Crédit</div>
+                        <div></div>
+                      </div>
+                      
+                      {/* Lines */}
+                      <div className="divide-y divide-slate-100 dark:divide-slate-800 min-w-[700px]">
+                        {entries.map((entry, idx) => (
+                          <div key={idx} className="group px-6 py-4 hover:bg-slate-50/30 dark:hover:bg-slate-800/10 transition-colors">
+                            <div className="grid grid-cols-[140px_1fr_140px_140px_50px] gap-3 items-start">
+                              <div className="relative group/account">
+                                <input 
+                                  placeholder="Ex: 4111" 
+                                  list="expert-account-list"
+                                  className={cn(
+                                    "w-full px-4 py-3 rounded-xl border text-sm font-mono font-bold bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green shadow-sm",
+                                    errors[`account_${idx}`] ? "border-rose-500 bg-rose-50/50" : "border-slate-200 dark:border-slate-700"
+                                  )}
+                                  value={entry.account_code || ''}
+                                  onKeyDown={(e) => handleEntryKeyDown(e, idx, 'account')}
+                                  onBlur={() => {
+                                    if (isAiAssistEnabled && entry.account_code && !/^\d+$/.test(entry.account_code)) {
+                                      handleSuggestAccountHead(idx, entry.account_code);
+                                    }
+                                  }}
+                                  onChange={(e) => {
+                                    const newEntries = [...entries];
+                                    newEntries[idx].account_code = e.target.value;
+                                    setEntries(newEntries);
+                                    if (errors[`account_${idx}`]) setErrors(prev => {
+                                      const next = { ...prev };
+                                      delete next[`account_${idx}`];
+                                      return next;
+                                    });
+                                  }}
+                                />
+                                {errors[`account_${idx}`] && <p className="text-[9px] text-rose-500 mt-2 font-bold uppercase tracking-tight">{errors[`account_${idx}`]}</p>}
+                                <button
+                                  type="button"
+                                  onClick={() => handleSuggestAccountHead(idx)}
+                                  disabled={suggestingAccount !== null || (!description && !entry.description)}
+                                  className="absolute -left-10 top-3.5 p-1.5 bg-brand-gold/10 text-brand-gold rounded-lg hover:bg-brand-gold/20 transition-all shadow-sm hidden md:block"
+                                  title="Suggérer un compte via l'IA"
+                                >
+                                  {suggestingAccount === idx ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                                </button>
+                              </div>
+                              
+                              <div>
+                                <input
+                                  placeholder="Libellé spécifique à cette ligne..."
+                                  className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-medium bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green shadow-sm placeholder:text-slate-300 dark:placeholder:text-slate-600"
+                                  value={entry.description || ''}
+                                  onChange={(e) => {
+                                    const newEntries = [...entries];
+                                    newEntries[idx].description = e.target.value;
+                                    setEntries(newEntries);
+                                  }}
+                                />
+                                {accounts.find(a => a.code === entry.account_code) && (
+                                  <div className="flex items-center gap-1.5 mt-2 overflow-hidden px-1">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600 shrink-0" />
+                                    <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest truncate">
+                                      {accounts.find(a => a.code === entry.account_code)?.name}
+                                    </p>
+                                  </div>
                                 )}
-                                value={entry.account_code}
-                                onKeyDown={(e) => handleEntryKeyDown(e, idx, 'account')}
-                                onBlur={() => {
-                                  if (isAiAssistEnabled && entry.account_code && !/^\d+$/.test(entry.account_code)) {
-                                    handleSuggestAccountHead(idx, entry.account_code);
-                                  }
-                                }}
-                                onChange={(e) => {
-                                  const newEntries = [...entries];
-                                  newEntries[idx].account_code = e.target.value;
-                                  setEntries(newEntries);
-                                  if (errors[`account_${idx}`]) setErrors(prev => {
-                                    const next = { ...prev };
-                                    delete next[`account_${idx}`];
-                                    return next;
-                                  });
-                                }}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleSuggestAccountHead(idx)}
-                                disabled={suggestingAccount !== null || (!description && !entry.description)}
-                                className="absolute -left-8 top-1/2 -translate-y-1/2 p-1.5 bg-brand-gold/10 text-brand-gold rounded-lg hover:bg-brand-gold/20 transition-all shadow-sm"
-                                title="Suggérer un compte via l'IA"
-                              >
-                                {suggestingAccount === idx ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
-                              </button>
-                            </div>
-                            <input 
-                              placeholder="Débit" 
-                              type="number"
-                              inputMode="decimal"
-                              className={cn(
-                                "flex-1 px-4 py-2.5 rounded-xl border text-sm font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all outline-none focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green text-right",
-                                errors[`amount_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
-                              )}
-                              value={isNaN(entry.debit) ? '' : entry.debit}
-                              onKeyDown={(e) => handleEntryKeyDown(e, idx, 'debit')}
-                              onChange={(e) => {
-                                const newEntries = [...entries];
-                                const val = Number(e.target.value);
-                                newEntries[idx].debit = val;
-                                // Auto-clear credit if debit is set
-                                if (val > 0) newEntries[idx].credit = 0;
-                                setEntries(newEntries);
-                                if (errors.balance) setErrors(prev => ({ ...prev, balance: '' }));
-                              }}
-                            />
-                            <input 
-                              placeholder="Crédit" 
-                              type="number"
-                              inputMode="decimal"
-                              className={cn(
-                                "flex-1 px-4 py-2.5 rounded-xl border text-sm font-bold bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-all outline-none focus:ring-4 focus:ring-brand-green/10 focus:border-brand-green text-right",
-                                errors[`amount_${idx}`] ? "border-rose-500 bg-rose-50/50 dark:bg-rose-900/10" : "border-slate-100 dark:border-slate-800"
-                              )}
-                              value={isNaN(entry.credit) ? '' : entry.credit}
-                              onKeyDown={(e) => handleEntryKeyDown(e, idx, 'credit')}
-                              onChange={(e) => {
-                                const newEntries = [...entries];
-                                const val = Number(e.target.value);
-                                newEntries[idx].credit = val;
-                                // Auto-clear debit if credit is set
-                                if (val > 0) newEntries[idx].debit = 0;
-                                setEntries(newEntries);
-                                if (errors.balance) setErrors(prev => ({ ...prev, balance: '' }));
-                              }}
-                            />
-                            <button 
-                              onClick={() => {
-                                if (entries.length > 2) {
-                                  setEntries(entries.filter((_, i) => i !== idx));
-                                } else {
-                                  dialogAlert("Une écriture doit avoir au moins 2 lignes.", 'info');
-                                }
-                              }}
-                              className="p-2 text-slate-300 hover:text-rose-500 transition-colors md:opacity-0 md:group-hover:opacity-100"
-                            >
-                              <X size={16} />
-                            </button>
-                          </div>
-                          
-                          {/* Line Description */}
-                          <div className="flex gap-3 px-1">
-                            <div className="w-[10px] h-4 border-l-2 border-b-2 border-slate-100 dark:border-slate-800/50 rounded-bl-lg mt--2" />
-                            <input
-                              placeholder="Libellé spécifique de cette ligne (optionnel)"
-                              className="flex-1 bg-transparent border-none text-[10px] text-slate-500 dark:text-slate-400 focus:ring-0 placeholder:text-slate-300 dark:placeholder:text-slate-600 font-medium py-1"
-                              value={entry.description || ''}
-                              onChange={(e) => {
-                                const newEntries = [...entries];
-                                newEntries[idx].description = e.target.value;
-                                setEntries(newEntries);
-                              }}
-                            />
-                          </div>
+                              </div>
 
-                          {errors[`account_${idx}`] && <p className="text-[9px] text-rose-500 dark:text-rose-400 font-bold uppercase tracking-tight ml-1">{errors[`account_${idx}`]}</p>}
-                          {accounts.find(a => a.code === entry.account_code) && (
-                            <p className="text-[9px] text-slate-400 dark:text-slate-500 ml-1 truncate italic font-medium">
-                              {accounts.find(a => a.code === entry.account_code)?.name}
-                            </p>
-                          )}
+                              <div>
+                                <input 
+                                  placeholder="0" 
+                                  type="number"
+                                  inputMode="decimal"
+                                  className={cn(
+                                    "w-full px-4 py-3 rounded-xl border text-sm font-bold bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green text-right font-mono shadow-sm",
+                                    errors[`amount_${idx}`] ? "border-rose-500 bg-rose-50/50" : "border-slate-200 dark:border-slate-700"
+                                  )}
+                                  value={isNaN(entry.debit) || entry.debit === 0 ? '' : entry.debit}
+                                  onKeyDown={(e) => handleEntryKeyDown(e, idx, 'debit')}
+                                  onChange={(e) => {
+                                    const newEntries = [...entries];
+                                    const val = Number(e.target.value);
+                                    newEntries[idx].debit = val;
+                                    if (val > 0) newEntries[idx].credit = 0;
+                                    setEntries(newEntries);
+                                    if (errors.balance) setErrors(prev => ({ ...prev, balance: '' }));
+                                  }}
+                                />
+                              </div>
+
+                              <div>
+                                <input 
+                                  placeholder="0" 
+                                  type="number"
+                                  inputMode="decimal"
+                                  className={cn(
+                                    "w-full px-4 py-3 rounded-xl border text-sm font-bold bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green text-right font-mono shadow-sm",
+                                    errors[`amount_${idx}`] ? "border-rose-500 bg-rose-50/50" : "border-slate-200 dark:border-slate-700"
+                                  )}
+                                  value={isNaN(entry.credit) || entry.credit === 0 ? '' : entry.credit}
+                                  onKeyDown={(e) => handleEntryKeyDown(e, idx, 'credit')}
+                                  onChange={(e) => {
+                                    const newEntries = [...entries];
+                                    const val = Number(e.target.value);
+                                    newEntries[idx].credit = val;
+                                    if (val > 0) newEntries[idx].debit = 0;
+                                    setEntries(newEntries);
+                                    if (errors.balance) setErrors(prev => ({ ...prev, balance: '' }));
+                                  }}
+                                />
+                              </div>
+
+                              <div className="flex justify-center items-center h-12 pt-1 border-slate-200">
+                                <button 
+                                  onClick={() => {
+                                    if (entries.length > 2) {
+                                      setEntries(entries.filter((_, i) => i !== idx));
+                                    } else {
+                                      dialogAlert("Une écriture doit avoir au moins 2 lignes.", 'info');
+                                    }
+                                  }}
+                                  className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors md:opacity-0 md:group-hover:opacity-100"
+                                >
+                                  <X size={18} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Footer Actions & Totals */}
+                      <div className="p-6 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center min-w-[700px]">
+                        <button 
+                          onClick={() => setEntries([...entries, { account_code: '', debit: 0, credit: 0, description: '' }])}
+                          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-brand-green hover:bg-brand-green/5 dark:hover:bg-brand-green/10 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm"
+                        >
+                          <Plus size={16} /> Ajouter une ligne
+                        </button>
+                        
+                        <div className="flex items-center gap-10 text-sm font-black mr-[70px]">
+                          <div className="text-right flex flex-col gap-1 min-w-[120px]">
+                            <span className="text-[9px] tracking-[0.2em] uppercase text-slate-400">Total Débit</span>
+                            <span className="font-mono text-base text-slate-900 dark:text-white bg-white dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 shadow-inner">
+                              {formatCurrency(entries.reduce((acc, e) => acc + (Number(e.debit) || 0), 0), transactionCurrency)}
+                            </span>
+                          </div>
+                          <div className="text-xl text-slate-300 dark:text-slate-600 font-light translate-y-2">=</div>
+                          <div className="text-right flex flex-col gap-1 min-w-[120px]">
+                            <span className="text-[9px] tracking-[0.2em] uppercase text-slate-400">Total Crédit</span>
+                            <span className="font-mono text-base text-slate-900 dark:text-white bg-white dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 shadow-inner">
+                              {formatCurrency(entries.reduce((acc, e) => acc + (Number(e.credit) || 0), 0), transactionCurrency)}
+                            </span>
+                          </div>
                         </div>
-                      ))}
+                      </div>
+
                     </div>
                     <datalist id="expert-account-list">
                       {accounts.map(acc => (
@@ -3668,17 +4062,27 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                     </div>
                     
                     <div className="relative group rounded-3xl overflow-hidden border-2 border-slate-200 dark:border-slate-700 shadow-2xl bg-white dark:bg-slate-900 group">
-                      <img 
-                        src={lastAiImage} 
-                        alt="Facture" 
-                        className="w-full h-auto object-contain cursor-zoom-in group-hover:scale-[1.02] transition-transform duration-500"
-                        onClick={() => window.open(lastAiImage, '_blank')}
-                      />
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                        <div className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white">
-                          <Maximize size={24} />
-                        </div>
-                      </div>
+                      {lastAiImage.startsWith('data:application/pdf') ? (
+                        <iframe 
+                          src={lastAiImage} 
+                          title="Facture PDF"
+                          className="w-full h-[500px]"
+                        />
+                      ) : (
+                        <>
+                          <img 
+                            src={lastAiImage} 
+                            alt="Facture" 
+                            className="w-full h-auto object-contain cursor-zoom-in group-hover:scale-[1.02] transition-transform duration-500"
+                            onClick={() => window.open(lastAiImage, '_blank')}
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                            <div className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white">
+                              <Maximize size={24} />
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     {lastAiPrediction && (
@@ -3741,43 +4145,45 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                   </div>
                 ) : (
                   <>
-                    <div>
-                      <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Résumé financier</h3>
+                    <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                          <Calculator size={14} /> Résumé financier
+                        </h3>
                         {lastAiImage && (
                           <button 
                             onClick={() => setShowImagePreview(true)}
-                            className="text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline"
+                            className="text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline flex items-center gap-1"
                           >
-                            Voir Facture
+                            Voir Facture <ArrowRight size={12} />
                           </button>
                         )}
                       </div>
                       <div className="space-y-4">
                         <div className="flex justify-between items-center">
                           <span className="text-sm font-bold text-slate-500">Montant HT</span>
-                          <span className="text-lg font-black text-slate-900 dark:text-white font-display">
+                          <span className="text-lg font-black text-slate-900 dark:text-white font-mono">
                             {formatCurrency(amountHT, transactionCurrency)}
                           </span>
                         </div>
                         {formConfig.hasVAT && (
                           <div className="flex justify-between items-center">
                             <span className="text-sm font-bold text-slate-500">TVA ({vatRate}%)</span>
-                            <span className="text-sm font-bold text-slate-900 dark:text-white">
+                            <span className="text-sm font-black text-slate-900 dark:text-white font-mono">
                               {formatCurrency(amountHT * (vatRate / 100), transactionCurrency)}
                             </span>
                           </div>
                         )}
                         <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
                           <div className="flex justify-between items-center">
-                            <span className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight">Total TTC</span>
-                            <span className="text-2xl font-black text-brand-green font-display">
+                            <span className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Total TTC</span>
+                            <span className="text-3xl font-black text-brand-green font-mono">
                               {formatCurrency(amountTTC, transactionCurrency)}
                             </span>
                           </div>
                           {transactionCurrency !== baseCurrency && (
                             <div className="text-right mt-1">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                                 ≈ {formatCurrency(amountTTC * transactionExchangeRate, baseCurrency)}
                               </span>
                             </div>
@@ -3786,18 +4192,22 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       </div>
                     </div>
 
-                    <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
-                      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Aperçu comptable</h3>
-                      <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-6 border border-slate-100 dark:border-slate-800 shadow-xl shadow-slate-200/20 dark:shadow-none space-y-4">
-                        <div className="grid grid-cols-3 gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 dark:border-slate-800 pb-2">
+                    <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+                      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <FileText size={14} /> Aperçu comptable
+                      </h3>
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-3 gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 dark:border-slate-800 pb-2">
                           <span className="col-span-1">Compte</span>
                           <span className="text-right">Débit</span>
                           <span className="text-right">Crédit</span>
                         </div>
                         <div className="space-y-3 max-h-48 overflow-y-auto custom-scrollbar pr-2">
                           {entries.map((e, i) => (
-                            <div key={i} className="grid grid-cols-3 gap-2 text-[11px]">
-                              <span className="col-span-1 font-mono font-bold text-slate-600 dark:text-slate-400">{e.account_code || '---'}</span>
+                            <div key={i} className="grid grid-cols-3 gap-2 text-[11px] items-center">
+                              <span className="col-span-1 font-mono font-bold text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 px-1 py-0.5 rounded text-center w-fit">
+                                {e.account_code || '---'}
+                              </span>
                               <span className="text-right font-black text-slate-900 dark:text-white">{e.debit > 0 ? formatCurrency(e.debit, transactionCurrency) : ''}</span>
                               <span className="text-right font-black text-slate-900 dark:text-white">{e.credit > 0 ? formatCurrency(e.credit, transactionCurrency) : ''}</span>
                             </div>
@@ -3822,33 +4232,36 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                 )}
               </div>
 
-              <div className="mt-10 space-y-4">
+              <div className="mt-8 space-y-4">
                 <button 
                   onClick={handleSave}
                   disabled={submitting || !isBalanced}
-                  className="w-full bg-brand-green text-white py-5 rounded-2xl text-sm font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-xl shadow-brand-green/20 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3 relative"
+                  className="w-full bg-brand-green text-white py-5 rounded-[1.5rem] text-sm font-black uppercase tracking-widest hover:bg-brand-green-dark transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3 relative overflow-hidden group"
                 >
-                  {submitting ? <Loader2 className="animate-spin" size={20} /> : <Check size={20} />}
-                  {editingId ? "Enregistrer les modifications" : "Valider l'écriture"}
-                  <span className="absolute right-6 text-[10px] bg-black/10 px-2 py-1 rounded font-mono hidden sm:inline-block">Ctrl+Enter</span>
+                  <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out" />
+                  <span className="relative z-10 flex items-center gap-3">
+                    {submitting ? <Loader2 className="animate-spin" size={20} /> : <Check size={20} />}
+                    {editingId ? "Enregistrer les modifications" : "Valider l'écriture"}
+                  </span>
+                  <span className="absolute right-6 text-[10px] bg-black/20 px-2.5 py-1.5 rounded-lg font-mono hidden sm:inline-block z-10">Ctrl+Enter</span>
                 </button>
                 
                 <div className="grid grid-cols-2 gap-3">
                   <button 
                     onClick={clearForm}
-                    className="py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2"
+                    className="py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2 shadow-sm"
                   >
-                    <Trash2 size={14} /> Effacer
+                    <Trash2 size={16} /> Effacer
                   </button>
                   <button 
                     onClick={() => handleModalClose()}
-                    className="py-4 bg-rose-50 dark:bg-rose-900/10 text-rose-500 dark:text-rose-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 dark:hover:bg-rose-900/20 transition-all flex items-center justify-center gap-2"
+                    className="py-4 bg-rose-50 border border-rose-100 dark:border-rose-900/30 dark:bg-rose-900/10 text-rose-500 dark:text-rose-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 dark:hover:bg-rose-900/20 transition-all flex items-center justify-center gap-2 shadow-sm"
                   >
-                    <X size={14} /> Abandonner
+                    <X size={16} /> Abandonner
                   </button>
                 </div>
                 
-                <p className="text-[9px] text-center text-slate-400 font-bold uppercase tracking-widest">
+                <p className="text-[9px] text-center text-slate-400 font-bold uppercase tracking-widest pt-2">
                   Raccourcis: <span className="text-slate-500">Ctrl+S</span> pour valider • <span className="text-slate-500">Esc</span> pour quitter
                 </p>
               </div>
@@ -3860,7 +4273,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
 
       {/* Custom Operation Modal */}
       {isCustomOpModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex justify-center p-4 animate-in fade-in duration-200 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto border border-slate-100 dark:border-slate-800 transition-colors">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-slate-900 dark:text-white">Nouveau Type d'Opération</h2>
@@ -4028,8 +4441,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       {/* Detailed Transaction View Modal */}
       {/* Detailed Transaction View Modal */}
       {isDetailOpen && selectedTransactionDetail && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-[60] flex justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all animate-in fade-in duration-200 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
             {/* Header */}
             <div className="px-8 py-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-4">
@@ -4085,7 +4498,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                   Écritures Comptables
                 </h3>
                 <div className="rounded-2xl border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
-                  <table className="w-full text-left border-collapse">
+                  <div className="w-full min-w-0 overflow-auto ">
+                    <table className="w-full text-left border-collapse min-w-[600px]">
                     <thead>
                       <tr className="bg-slate-50 dark:bg-slate-800/50">
                         <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Compte</th>
@@ -4109,6 +4523,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               </div>
 
@@ -4223,10 +4638,131 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
         </div>
       )}
 
+      {/* Pre-Import Validation Modal */}
+      {isImportValidationModalOpen && (
+        <div className="fixed inset-0 z-[70] flex justify-center p-4 bg-slate-900/80 backdrop-blur-md transition-all animate-in fade-in duration-300 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-3xl rounded-[2.5rem] shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+            <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="flex items-center gap-5">
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+                  <AlertCircle size={28} />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Validation Pré-Import</h2>
+                  <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">
+                    Vérification des données CSV avant import définitif
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsImportValidationModalOpen(false);
+                  setPendingImportEntries([]);
+                }}
+                className="p-3 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-all"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-8 overflow-y-auto flex-1 min-h-0 w-full space-y-6">
+              {(() => {
+                const unbalanced = pendingImportEntries.filter(e => Math.abs(e.lines.reduce((acc: number, l: any) => acc + l.debit, 0) - e.lines.reduce((acc: number, l: any) => acc + l.credit, 0)) > 0.01);
+                
+                const missingTax = pendingImportEntries.filter(e => {
+                  const hasClass6or7 = e.lines.some((l: any) => l.account_code?.startsWith('6') || l.account_code?.startsWith('7'));
+                  const hasVAT = e.lines.some((l: any) => l.account_code?.startsWith('445') || l.account_code?.startsWith('443'));
+                  return hasClass6or7 && !hasVAT;
+                });
+
+                return (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-col gap-2">
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total des écritures</span>
+                        <span className="text-2xl font-black text-slate-900 dark:text-white">{pendingImportEntries.length}</span>
+                      </div>
+                      <div className={cn("p-4 rounded-2xl border flex flex-col gap-2 transition-colors", unbalanced.length > 0 ? "border-rose-200 bg-rose-50 dark:border-rose-900/30 dark:bg-rose-900/10 text-rose-600" : "border-emerald-200 bg-emerald-50 dark:border-emerald-900/30 dark:bg-emerald-900/10 text-emerald-600")}>
+                        <span className="text-[10px] font-black uppercase tracking-widest opacity-80">Écritures déséquilibrées</span>
+                        <span className="text-2xl font-black">{unbalanced.length}</span>
+                      </div>
+                      <div className={cn("p-4 rounded-2xl border flex flex-col gap-2 transition-colors col-span-2", missingTax.length > 0 ? "border-amber-200 bg-amber-50 dark:border-amber-900/30 dark:bg-amber-900/10 text-amber-600" : "border-emerald-200 bg-emerald-50 dark:border-emerald-900/30 dark:bg-emerald-900/10 text-emerald-600")}>
+                        <span className="text-[10px] font-black uppercase tracking-widest opacity-80">Taxes potentielles manquantes</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-2xl font-black">{missingTax.length}</span>
+                          {missingTax.length > 0 && <span className="text-xs font-medium opacity-80">Comptes charges/produits sans compte de TVA associé</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {unbalanced.length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <AlertCircle size={16} className="text-rose-500" />
+                          Déséquilibres détectés
+                        </h4>
+                        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
+                          <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50/50 dark:bg-slate-800/50">
+                              <tr>
+                                <th className="px-4 py-3 font-semibold text-slate-500 text-xs">Date</th>
+                                <th className="px-4 py-3 font-semibold text-slate-500 text-xs">Description</th>
+                                <th className="px-4 py-3 font-semibold text-slate-500 text-xs text-right">Différence</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {unbalanced.slice(0, 5).map((e, i) => {
+                                const debit = e.lines.reduce((acc: number, l: any) => acc + l.debit, 0);
+                                const credit = e.lines.reduce((acc: number, l: any) => acc + l.credit, 0);
+                                return (
+                                  <tr key={i} className="border-t border-slate-100 dark:border-slate-800">
+                                    <td className="px-4 py-3">{e.date}</td>
+                                    <td className="px-4 py-3 font-medium">{e.description}</td>
+                                    <td className="px-4 py-3 text-right text-rose-500 font-bold">{Math.abs(debit - credit).toFixed(2)}</td>
+                                  </tr>
+                                );
+                              })}
+                              {unbalanced.length > 5 && (
+                                <tr>
+                                  <td colSpan={3} className="px-4 py-3 text-center text-xs text-slate-500 italic">...et {unbalanced.length - 5} de plus</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 flex items-center justify-end gap-3 rounded-b-[2.5rem]">
+              <button 
+                onClick={() => {
+                  setIsImportValidationModalOpen(false);
+                  setPendingImportEntries([]);
+                }}
+                className="px-6 py-2.5 text-slate-600 dark:text-slate-400 font-bold hover:bg-slate-200 dark:hover:bg-slate-700/50 rounded-xl transition-colors"
+              >
+                Annuler
+              </button>
+              <button 
+                onClick={confirmImportJournal}
+                className="px-8 py-2.5 bg-brand-green text-white rounded-xl font-bold shadow-lg shadow-brand-green/20 hover:bg-brand-green/90 transition-all flex items-center gap-2"
+              >
+                <Check size={18} />
+                Forcer l'importation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Quick Invoice Preview Modal */}
       {isQuickInvoiceOpen && quickInvoiceData && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md transition-all animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+        <div className="fixed inset-0 z-[70] flex justify-center p-4 bg-slate-900/80 backdrop-blur-md transition-all animate-in fade-in duration-300 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col animate-in zoom-in-95 duration-300 flex flex-col">
             <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-5">
                 <div className="w-14 h-14 rounded-2xl bg-brand-green/10 flex items-center justify-center text-brand-green">
@@ -4245,7 +4781,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
               </button>
             </div>
 
-            <div className="p-10 space-y-8 overflow-y-auto max-h-[60vh]">
+            <div className="p-10 space-y-8 overflow-y-auto flex-1 min-h-0 w-full">
               <div className="grid grid-cols-2 gap-8">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">Client Détecté</label>
@@ -4271,7 +4807,8 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">Articles de Facture</label>
                 <div className="rounded-[2rem] border border-slate-100 dark:border-slate-800 overflow-hidden">
-                  <table className="w-full text-left border-collapse">
+                  <div className="w-full min-w-0 overflow-auto ">
+                    <table className="w-full text-left border-collapse min-w-[800px]">
                     <thead>
                       <tr className="bg-slate-50 dark:bg-slate-800/50">
                         <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Description</th>
@@ -4289,6 +4826,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               </div>
 
@@ -4306,7 +4844,7 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
               <button 
                 onClick={() => {
                   setIsQuickInvoiceOpen(false);
-                  navigate('/invoices', { state: { prefill: quickInvoiceData.transaction } });
+                  navigate('/invoicing', { state: { prefill: quickInvoiceData.transaction } });
                 }}
                 className="flex-1 px-8 py-5 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-100 dark:border-slate-700 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-3"
               >
@@ -4327,6 +4865,17 @@ export function Journal({ openModal, onModalClose }: { openModal?: boolean; onMo
       )}
 
       {/* Delete Confirmation Modal removed as it is now handled by DialogProvider */}
-    </div>
+      
+      <ThirdPartyFormModal
+        isOpen={isThirdPartyModalOpen}
+        onClose={() => setIsThirdPartyModalOpen(false)}
+        type={thirdPartyModalType}
+        onSuccess={async (newTP) => {
+          await fetchThirdParties();
+          setSelectedThirdParty(newTP.account_code);
+          setOccasionalName(newTP.name);
+        }}
+      />
+    </motion.div>
   );
 }

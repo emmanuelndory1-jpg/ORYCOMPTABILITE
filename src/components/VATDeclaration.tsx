@@ -5,7 +5,7 @@ import { Calculator, Calendar, Download, FileText, Printer, ArrowLeft, FileDown 
 import { apiFetch as fetch } from '@/lib/api';
 import { useCurrency } from '@/hooks/useCurrency';
 import { cn } from '@/lib/utils';
-import { PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings, formatCurrencyPDF } from '@/lib/exportUtils';
+import { PDF_CONFIG, addPDFHeader, addPDFFooter, addOHADAComplianceSignature, CompanySettings, formatCurrencyPDF } from '@/lib/exportUtils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -140,6 +140,9 @@ export const VATDeclaration = ({ onBack }: { onBack: () => void }) => {
         columnStyles: { 1: { halign: 'right' } },
         margin: { right: 107 }
       });
+
+      const finalY = (doc as any).lastAutoTable?.finalY || 150;
+      addOHADAComplianceSignature(doc, finalY + 20, settings.manager_name || "L'Administrateur");
 
       addPDFFooter(doc);
       doc.save(`Declaration_TVA_${monthName}_${period.year}.pdf`);

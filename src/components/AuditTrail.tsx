@@ -20,6 +20,9 @@ export function AuditTrail() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL');
+  const [userFilter, setUserFilter] = useState('ALL');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   useEffect(() => {
     fetchLogs();
@@ -37,6 +40,8 @@ export function AuditTrail() {
     }
   };
 
+  const uniqueUsers = Array.from(new Set(logs.map(log => log.user))).filter(Boolean);
+
   const filteredLogs = logs.filter(log => {
     const matchesSearch = 
       log.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -44,8 +49,24 @@ export function AuditTrail() {
       log.details.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesAction = actionFilter === 'ALL' || log.action === actionFilter;
+    const matchesUser = userFilter === 'ALL' || log.user === userFilter;
+    
+    let matchesDate = true;
+    if (startDate || endDate) {
+      const logDate = new Date(log.date);
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        if (logDate < start) matchesDate = false;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        if (logDate > end) matchesDate = false;
+      }
+    }
 
-    return matchesSearch && matchesAction;
+    return matchesSearch && matchesAction && matchesUser && matchesDate;
   });
 
   const getActionColor = (action: string) => {
@@ -61,7 +82,7 @@ export function AuditTrail() {
     try {
       const parsed = parseSafeJSON(details);
       return (
-        <div className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-1 bg-slate-50 dark:bg-slate-900/50 p-2 rounded border border-slate-100 dark:border-slate-800 overflow-x-auto transition-colors">
+        <div className="w-full min-w-0 overflow-auto text-xs font-mono text-slate-500 dark:text-slate-400 mt-1 bg-slate-50 dark:bg-slate-900/50 p-2 rounded border border-slate-100 dark:border-slate-800  transition-colors">
           {JSON.stringify(parsed, null, 2)}
         </div>
       );
@@ -81,29 +102,61 @@ export function AuditTrail() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row gap-4 transition-colors">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={18} />
-          <input 
-            type="text" 
-            placeholder="Rechercher (Utilisateur, Entité, Détails...)" 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Filter size={18} className="text-slate-400 dark:text-slate-500" />
-          <select 
-            value={actionFilter}
-            onChange={(e) => setActionFilter(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-colors"
-          >
-            <option value="ALL">Toutes les actions</option>
-            <option value="CREATE">Création</option>
-            <option value="UPDATE">Modification</option>
-            <option value="DELETE">Suppression</option>
-          </select>
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col gap-4 transition-colors">
+        <div className="flex flex-col xl:flex-row gap-4">
+          <div className="flex-1 relative min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={18} />
+            <input 
+              type="text" 
+              placeholder="Rechercher (Utilisateur, Entité, Détails...)" 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green bg-white dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Filter size={18} className="text-slate-400 dark:text-slate-500 hidden sm:block" />
+            
+            <select 
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-colors"
+            >
+              <option value="ALL">Tous les utilisateurs</option>
+              {uniqueUsers.map(user => (
+                <option key={user} value={user}>{user}</option>
+              ))}
+            </select>
+
+            <select 
+              value={actionFilter}
+              onChange={(e) => setActionFilter(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-colors"
+            >
+              <option value="ALL">Toutes les actions</option>
+              <option value="CREATE">Création</option>
+              <option value="UPDATE">Modification</option>
+              <option value="DELETE">Suppression</option>
+            </select>
+
+            <div className="flex items-center gap-2">
+              <input 
+                type="date" 
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-colors"
+                title="Date de début"
+              />
+              <span className="text-slate-400">-</span>
+              <input 
+                type="date" 
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-colors"
+                title="Date de fin"
+              />
+            </div>
+          </div>
         </div>
       </div>
 

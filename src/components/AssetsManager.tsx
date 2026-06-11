@@ -40,13 +40,23 @@ interface ScheduleItem {
   type: 'annual' | 'monthly';
 }
 
+import { useLocation } from 'react-router-dom';
+
 export function AssetsManager() {
+  const location = useLocation();
   const { alert: dialogAlert } = useDialog();
   const { formatCurrency, currency, getCurrencyIcon } = useCurrency();
   const { activeYear } = useFiscalYear();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.action === 'new') {
+      setIsCreating(true);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
   const [submitting, setSubmitting] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [detailedAsset, setDetailedAsset] = useState<Asset | null>(null);
@@ -551,8 +561,8 @@ export function AssetsManager() {
 
       {/* Assets List */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
+        <div className="w-full min-w-0 overflow-auto ">
+          <table className="w-full text-left min-w-[800px]">
             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
               <tr>
                 <th className="px-6 py-4">Actif</th>
@@ -767,8 +777,8 @@ export function AssetsManager() {
                     </div>
 
                     <div className="bg-white dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-                      <div className="max-h-[400px] overflow-y-auto">
-                        <table className="w-full text-left text-xs">
+                      <div className="w-full min-w-0 overflow-auto max-h-[400px] overflow-y-auto ">
+                        <table className="w-full text-left text-xs min-w-[500px]">
                           <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-bold sticky top-0 z-10">
                             <tr className="border-b border-slate-200 dark:border-slate-800">
                               <th className="px-4 py-3">Période</th>
@@ -822,8 +832,8 @@ export function AssetsManager() {
 
       {/* Sale Modal */}
       {sellingAsset && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800 flex flex-col">
             <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
               <h2 className="font-bold text-xl text-slate-900 dark:text-white">Cession d'Immobilisation</h2>
               <p className="text-sm text-slate-500 dark:text-slate-400">Enregistrer la vente de : <span className="font-semibold text-slate-700 dark:text-slate-300">{sellingAsset.name}</span></p>
@@ -910,8 +920,8 @@ export function AssetsManager() {
 
       {/* Depreciation Schedule Modal */}
       {selectedAsset && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
             <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
               <div>
                 <h2 className="font-bold text-xl text-slate-900 dark:text-white">Tableau d'Amortissement</h2>
@@ -983,7 +993,8 @@ export function AssetsManager() {
                   </div>
 
                   <div className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden">
-                    <table className="w-full text-left text-sm">
+                    <div className="w-full min-w-0 overflow-auto ">
+                    <table className="w-full text-left text-sm min-w-[500px]">
                       <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-semibold">
                         <tr>
                           <th className="px-4 py-3">Année</th>
@@ -1022,6 +1033,7 @@ export function AssetsManager() {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   </div>
 
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-100 dark:border-blue-800 flex gap-3">

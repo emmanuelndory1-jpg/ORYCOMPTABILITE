@@ -305,7 +305,7 @@ export function TeamManager() {
               {searchTerm ? "Aucun membre ne correspond à votre recherche." : "Aucun membre d'équipe trouvé."}
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-auto ">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
@@ -371,7 +371,7 @@ export function TeamManager() {
               {logSearchTerm ? "Aucun log ne correspond à votre recherche." : "Aucun historique trouvé."}
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-auto ">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
@@ -421,7 +421,7 @@ export function TeamManager() {
       {/* User Modal */}
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

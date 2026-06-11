@@ -165,7 +165,7 @@ export function CurrencyManager() {
           </button>
         </form>
 
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-auto ">
           <table className="w-full text-left">
             <thead>
               <tr className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">

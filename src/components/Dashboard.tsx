@@ -1,5 +1,5 @@
 import { parseSafeJSON } from "../lib/utils";
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend, ComposedChart, Line, Cell,
@@ -11,7 +11,7 @@ import {
   ArrowUpRight, ArrowDownRight, Wallet, CreditCard, Users, FileText, Plus, FileSpreadsheet,
   Target, ChevronRight, MessageSquareText, PieChart as PieChartIcon, History as HistoryIcon,
   Activity, BarChart3, PieChart, Settings as SettingsIcon, Check, Calculator, Shield, Briefcase, Building2,
-  ShoppingBag, ShieldCheck, Brain, Sparkles, Zap, Mic, MicOff, Repeat, Percent
+  ShoppingBag, ShieldCheck, Brain, Sparkles, Zap, Mic, MicOff, Repeat, Percent, ExternalLink, Download, Maximize2, Minimize2
 } from 'lucide-react';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useFiscalYear } from '@/context/FiscalYearContext';
@@ -19,18 +19,23 @@ import { useLanguage } from '@/context/LanguageContext';
 import { apiFetch } from '../lib/api';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useOutletContext } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { exportToCSV } from '@/lib/exportUtils';
 import { DashboardCustomizer, type WidgetConfig } from './DashboardCustomizer';
-import { getQuickInsight, parseNaturalLanguageEntry } from '../services/geminiService';
+import { getQuickInsight, parseNaturalLanguageEntry, generateComprehensiveDashboardReport } from '../services/geminiService';
+import Markdown from 'react-markdown';
 import { useModules } from '@/context/ModuleContext';
+import { useDialog } from './DialogProvider';
 
 export function Dashboard() {
   const { formatCurrency } = useCurrency();
   const { activeYear } = useFiscalYear();
   const { t } = useLanguage();
   const { isActive } = useModules();
+  const { companySettings } = useOutletContext<any>();
+  const taxesEnabled = companySettings?.taxes_enabled !== false && Number(companySettings?.taxes_enabled) !== 0;
+  const { alert: showToast } = useDialog();
   const navigate = useNavigate();
   const [stats, setStats] = useState({
     turnover: 0,
@@ -43,6 +48,23 @@ export function Dashboard() {
       total: 0,
       employees: 0,
       lastPeriod: null as string | null
+    },
+    trends: {
+      cash: 0,
+      turnover: 0,
+      receivables: 0,
+      payables: 0,
+      net_result: 0,
+      payroll: 0
+    },
+    kpis: {
+      grossMargin: 64.2,
+      ebitda: 0,
+      breakEvenStatus: "J-142",
+      breakEvenSublabel: "Atteint le 22 Mai",
+      investmentCapacity: 0,
+      fixedExpenses: 0,
+      seuilRentabilite: 0
     }
   });
   const [chartData, setChartData] = useState([]);
@@ -61,10 +83,39 @@ export function Dashboard() {
   const [processingQuickEntry, setProcessingQuickEntry] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [pendingRecurringCount, setPendingRecurringCount] = useState(0);
+  const [deadlines, setDeadlines] = useState<{tasks: any[], invoices: any[]}>({ tasks: [], invoices: [] });
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportContent, setReportContent] = useState<string | null>(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
+
+  const [isPdfConfigOpen, setIsPdfConfigOpen] = useState(false);
+  const [pdfConfig, setPdfConfig] = useState({
+    title: 'Rapport Tableau de Bord',
+    headerText: '',
+    footerText: 'Généré par OryCompta - Confidentiel'
+  });
+
+  const [maximizedWidget, setMaximizedWidget] = useState<string | null>(null);
+
+  const maxClasses = (id: string) => maximizedWidget === id 
+    ? "fixed inset-0 sm:inset-4 md:inset-8 z-[100] m-0 !max-w-none !col-span-full shadow-2xl overflow-y-auto !bg-slate-50 dark:!bg-slate-950 !border-slate-200 dark:!border-slate-800 " + (id !== 'health' && id !== 'performance' ? "!rounded-[2.5rem]" : "")
+    : "";
+
+  const MaximizeButton = ({ id }: { id: string }) => (
+    <button
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMaximizedWidget(maximizedWidget === id ? null : id); }}
+      className="absolute top-4 right-4 p-2 sm:p-2.5 rounded-xl bg-slate-200/50 dark:bg-slate-800/50 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-all duration-300 z-[110] opacity-0 group-hover:opacity-100 hover:scale-110 active:scale-95 shadow-sm backdrop-blur-md"
+      aria-label="Plein écran"
+      title="Plein écran"
+    >
+      {maximizedWidget === id ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+    </button>
+  );
+
 
   const startListening = () => {
     if (!('webkitSpeechRecognition' in window)) {
-      alert("La reconnaissance vocale n'est pas supportée par votre navigateur.");
+      showToast("La reconnaissance vocale n'est pas supportée par votre navigateur.", 'error');
       return;
     }
 
@@ -115,12 +166,31 @@ export function Dashboard() {
       { id: 'expenses', label: 'Répartition des Dépenses', visible: true },
       { id: 'activity', label: 'Activité Récente', visible: true },
       { id: 'analysis', label: 'Analyse Stratégique', visible: true },
-      { id: 'payroll_summary', label: 'Résumé de Paie', visible: true },
+      { id: 'payroll_summary', label: 'Résumé RH', visible: true },
       { id: 'asset_summary', label: 'Immobilisations', visible: true },
       { id: 'performance_ratios', label: 'Performance & Ratios', visible: true },
       { id: 'recent_audit_logs', label: 'Modifications Récentes (Audit)', visible: true },
     ];
   });
+
+  const generateFullReport = async () => {
+    setIsReportModalOpen(true);
+    setGeneratingReport(true);
+    try {
+      const report = await generateComprehensiveDashboardReport({
+        stats,
+        ratios,
+        assetStats,
+        deadlines
+      });
+      setReportContent(report);
+    } catch (e) {
+      console.error(e);
+      setReportContent("Une erreur est survenue lors de la génération du rapport.");
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
 
   const isVisible = (id: string) => {
     // Determine module restriction
@@ -137,12 +207,22 @@ export function Dashboard() {
     return widgets.find(w => w.id === id)?.visible ?? true;
   };
 
+  const getGroupOrder = (ids: string[]) => {
+    const indices = ids.map(id => widgets.findIndex(w => w.id === id)).filter(i => i !== -1);
+    return indices.length > 0 ? Math.min(...indices) : 99;
+  };
+
   const toggleWidget = (id: string) => {
     setWidgets(prev => {
       const updated = prev.map(w => w.id === id ? { ...w, visible: !w.visible } : w);
       localStorage.setItem('dashboard_widgets', JSON.stringify(updated));
       return updated;
     });
+  };
+
+  const handleReorderWidgets = (newWidgets: WidgetConfig[]) => {
+    setWidgets(newWidgets);
+    localStorage.setItem('dashboard_widgets', JSON.stringify(newWidgets));
   };
 
   const resetWidgets = () => {
@@ -159,9 +239,38 @@ export function Dashboard() {
   ));
 
   useEffect(() => {
+    let isMounted = true;
+    const cacheKey = `dashboard_cache_${activeYear?.id || 'all'}`;
+
+    const loadCache = () => {
+      const saved = localStorage.getItem(cacheKey);
+      if (saved) {
+        try {
+          const cached = parseSafeJSON(saved);
+          if (cached) {
+            if (cached.stats) setStats(cached.stats);
+            if (cached.chartData) setChartData(cached.chartData);
+            if (cached.cashflowData) setCashflowData(cached.cashflowData);
+            if (cached.breakdownData) setBreakdownData(cached.breakdownData);
+            if (cached.recentTransactions) setRecentTransactions(cached.recentTransactions);
+            if (cached.auditLogs) setAuditLogs(cached.auditLogs);
+            if (cached.budgetVsActual) setBudgetVsActual(cached.budgetVsActual);
+            if (cached.ratios) setRatios(cached.ratios);
+            if (cached.assetStats) setAssetStats(cached.assetStats);
+            if (cached.pendingRecurringCount !== undefined) setPendingRecurringCount(cached.pendingRecurringCount);
+            setLoading(false);
+          }
+        } catch (e) {
+          console.error("Failed to parse dashboard cache", e);
+        }
+      } else {
+        setLoading(true);
+      }
+    };
+
     const fetchData = async () => {
       try {
-        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes] = await Promise.all([
+        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes, deadlinesRes] = await Promise.all([
           apiFetch('/api/dashboard/stats'),
           apiFetch('/api/dashboard/charts'),
           apiFetch('/api/dashboard/cashflow-forecast'),
@@ -171,24 +280,27 @@ export function Dashboard() {
           apiFetch('/api/dashboard/ratios'),
           apiFetch('/api/assets/stats'),
           apiFetch('/api/audit-logs?limit=5'),
-          apiFetch('/api/recurring-transactions/due-count')
+          apiFetch('/api/recurring-transactions/due-count'),
+          apiFetch('/api/dashboard/deadlines?days=7')
         ]);
         
-        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes];
+        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes, deadlinesRes];
         const allOk = responses.every(r => r.ok);
         
         if (!allOk) {
           const failedRes = responses.find(r => !r.ok);
           const text = await failedRes?.text();
           console.error("Dashboard fetch failed:", text || failedRes?.statusText);
-          setLoading(false);
+          if (isMounted) setLoading(false);
           return;
         }
 
-        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData, auditData, recurringData] = await Promise.all(
+        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData, auditData, recurringData, deadlinesData] = await Promise.all(
           responses.map(r => r.json())
         );
         
+        if (!isMounted) return;
+
         setStats(statsData);
         setChartData(chartsData);
         setCashflowData(cfData);
@@ -199,25 +311,70 @@ export function Dashboard() {
         setRatios(ratiosData);
         setAssetStats(assetStatsData);
         setPendingRecurringCount(recurringData.count || 0);
+        setDeadlines(deadlinesData || { tasks: [], invoices: [] });
+        
+        if (deadlinesData && (deadlinesData.tasks?.length > 0 || deadlinesData.invoices?.length > 0)) {
+          const totalDeadlines = (deadlinesData.tasks?.length || 0) + (deadlinesData.invoices?.length || 0);
+          if (!sessionStorage.getItem('deadlinesToastShown')) {
+            setTimeout(() => {
+              showToast(`${totalDeadlines} échéance(s) comptable(s) dans les 7 prochains jours.`, 'info');
+            }, 1000);
+            sessionStorage.setItem('deadlinesToastShown', 'true');
+          }
+        }
+        
         setLoading(false);
 
-        // Fetch AI insight with more context
-        fetchInsight({
-          turnover: statsData.turnover,
-          expenses: statsData.expenses,
-          cash: statsData.cash,
-          receivables: statsData.receivables,
-          payables: statsData.payables,
-          ratios: ratiosData,
-          period: activeYear?.name || 'en cours'
-        });
+        // Update local cache
+        try {
+          const cacheToSave = {
+            stats: statsData,
+            chartData: chartsData,
+            cashflowData: cfData,
+            breakdownData: bData,
+            recentTransactions: recentData,
+            auditLogs: auditData.logs || auditData || [],
+            budgetVsActual: budgetData,
+            ratios: ratiosData,
+            assetStats: assetStatsData,
+            pendingRecurringCount: recurringData.count || 0
+          };
+          localStorage.setItem(cacheKey, JSON.stringify(cacheToSave));
+        } catch (e) {
+          console.error("Failed to save dashboard cache", e);
+        }
+
+        // Fetch AI insight with more context, using a cache
+        const insightCacheKey = `insight_${activeYear?.id}`;
+        const cached = localStorage.getItem(insightCacheKey);
+        const cacheTime = localStorage.getItem(`${insightCacheKey}_time`);
+        
+        if (cached && cacheTime && (Date.now() - parseInt(cacheTime)) < 12 * 60 * 60 * 1000) {
+           setAiInsight(cached);
+        } else {
+           fetchInsight({
+             turnover: statsData.turnover,
+             expenses: statsData.expenses,
+             cash: statsData.cash,
+             receivables: statsData.receivables,
+             payables: statsData.payables,
+             ratios: ratiosData,
+             period: activeYear?.name || 'en cours'
+           });
+        }
       } catch (err) {
-        console.error(err);
-        setLoading(false);
+        console.error("Dashboard background fetch error:", err);
+        if (isMounted) setLoading(false);
       }
     };
     
+    // Load cache instantly, then fetch fresh data silently in the background
+    loadCache();
     fetchData();
+
+    return () => {
+      isMounted = false;
+    };
   }, [activeYear?.id]);
 
   const fetchInsight = async (data: any) => {
@@ -226,6 +383,8 @@ export function Dashboard() {
       const insight = await getQuickInsight(data);
       if (insight) {
         setAiInsight(insight);
+        localStorage.setItem(`insight_${activeYear?.id}`, insight);
+        localStorage.setItem(`insight_${activeYear?.id}_time`, Date.now().toString());
       }
     } catch (err) {
       console.error("Failed to fetch AI insight:", err);
@@ -249,6 +408,31 @@ export function Dashboard() {
     });
   };
 
+  const handleGeneratePdf = async () => {
+    try {
+      const res = await apiFetch('/api/company/settings');
+      let companySettings = { name: 'OryCompta' };
+      if (res.ok) {
+        companySettings = await res.json();
+      }
+
+      const utils = await import('../lib/exportUtils');
+      const dataToExport = {
+        ...stats,
+        kpis: stats.kpis,
+        ratios: ratios,
+        cashflowData: cashflowData,
+        receivables: stats.receivables,
+        payables: stats.payables
+      };
+
+      utils.generateCustomDashboardPDF(dataToExport, pdfConfig, companySettings as any);
+      setIsPdfConfigOpen(false);
+    } catch (err) {
+      console.error("Failed to generate custom PDF", err);
+    }
+  };
+
   const handleQuickEntry = async (e: React.FormEvent, manualValue?: string) => {
     if (e) e.preventDefault();
     const entryValue = manualValue || quickEntry;
@@ -268,74 +452,102 @@ export function Dashboard() {
     }
   };
 
-  const StatCard = ({ title, value, trend, trendValue, icon: Icon, color, delay, path, whiteTrend, colSpan = "col-span-1" }: any) => (
+  const StatCard = ({ title, value, trend, trendValue, icon: Icon, color, delay, path, whiteTrend, colSpan = "col-span-1", style, id }: any) => (
     <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay }}
+      style={style}
+      initial={{ opacity: 0, scale: 0.95, y: 20 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ delay, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
       onClick={() => path && navigate(path)}
       className={cn(
-        "premium-card p-4 sm:p-6 group relative overflow-hidden transition-all duration-500 hover:-translate-y-1.5 border border-slate-200/50 dark:border-white/5 flex flex-col justify-between min-h-[160px] sm:min-h-[180px] md:min-h-[200px] shadow-sm hover:shadow-xl hover:shadow-emerald-500/5",
+        "group relative overflow-hidden backdrop-blur-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/60 rounded-[2rem] flex flex-col justify-between shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.2)] hover:shadow-[0_20px_40px_rgb(0,0,0,0.08)] dark:hover:shadow-[0_20px_40px_rgb(0,0,0,0.3)] transition-all duration-500 hover:-translate-y-1.5 h-full min-h-[160px] sm:min-h-[190px]",
         colSpan,
         path ? "cursor-pointer" : ""
-      )}
+      , maxClasses(id))}
     >
+      {id && <MaximizeButton id={id} />}
+      {/* Dynamic Background Glow */}
       <div className={cn(
-        "absolute -bottom-10 -right-10 w-40 h-40 rounded-full opacity-10 blur-3xl transition-all duration-700 group-hover:scale-150 group-hover:opacity-20",
+        "absolute -bottom-24 -right-24 w-64 h-64 rounded-full opacity-0 blur-3xl transition-opacity duration-700 group-hover:opacity-10 dark:group-hover:opacity-20 pointer-events-none",
         color
       )} />
       
-      <div className="flex justify-between items-start relative z-10 w-full">
-        <div className={cn(
-          "w-12 h-12 rounded-2xl transition-all duration-700 group-hover:scale-110 group-hover:rotate-6 shadow-lg flex items-center justify-center shrink-0 border border-white/20",
-          color,
-          "text-white shadow-lg"
-        )}>
-          <Icon size={22} className="group-hover:animate-pulse" />
-        </div>
-        {trend && (
+      {/* Light Reflection */}
+      <div className="absolute inset-0 bg-gradient-to-br from-white/60 to-transparent dark:from-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+
+      <div className="p-6 sm:p-7 flex flex-col h-full z-10 space-y-6">
+        <div className="flex justify-between items-start w-full">
           <div className={cn(
-            "flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-xl backdrop-blur-md border border-white/10",
-            whiteTrend ? "bg-white/10 text-white" : (trend === 'up' ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-rose-500/10 text-rose-500 border-rose-500/20"),
+            "w-14 h-14 rounded-2xl transition-all duration-500 group-hover:scale-110 group-hover:-rotate-3 flex items-center justify-center shrink-0 border border-white/20 shadow-md relative overflow-hidden",
+            color,
+            "text-white"
           )}>
-            {trend === 'up' ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-            {trendValue}
+            <div className="absolute inset-0 bg-gradient-to-tr from-black/10 to-transparent pointer-events-none" />
+            <Icon size={26} className="relative z-10 group-hover:animate-pulse" strokeWidth={2.5} />
           </div>
-        )}
-      </div>
-      
-      <div className="space-y-1 relative z-10 mb-2">
-        <h3 className="text-slate-500 dark:text-slate-400 text-[10px] sm:text-[11px] font-black uppercase tracking-[0.2em] truncate opacity-70 group-hover:opacity-100 transition-opacity" title={title}>{title}</h3>
-        <div className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-slate-100 tracking-tighter leading-none tabular-nums font-mono transition-all duration-300 group-hover:scale-[1.02] origin-left">
-          {loading ? (
-            <div className="h-10 w-4/5 bg-slate-100 dark:bg-slate-800 animate-pulse rounded-xl" />
-          ) : (
-            <motion.span
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.8, delay: delay + 0.2 }}
-            >
-              {formatCurrency(value)}
-            </motion.span>
+
+          {trend && (
+            <div className={cn(
+              "flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-full border shadow-sm backdrop-blur-md transition-all duration-300",
+              whiteTrend 
+                ? "bg-white text-slate-900 border-slate-200 dark:bg-slate-800 dark:text-white dark:border-slate-700" 
+                : (trend === 'up' 
+                  ? "bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20" 
+                  : "bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/20"),
+            )}>
+              {trend === 'up' ? <ArrowUpRight size={14} strokeWidth={3} /> : <ArrowDownRight size={14} strokeWidth={3} />}
+              {trendValue}
+            </div>
           )}
         </div>
+        
+        <div className="space-y-2 mt-auto">
+          <h3 className="text-slate-500 dark:text-slate-400 text-xs sm:text-[13px] font-semibold uppercase tracking-[0.15em] opacity-80 group-hover:opacity-100 transition-opacity">
+            {title}
+          </h3>
+          <div className="text-3xl sm:text-[36px] font-black text-slate-900 dark:text-white tracking-tight leading-none group-hover:scale-[1.02] origin-left transition-transform duration-300">
+            {loading ? (
+              <div className="h-10 w-2/3 bg-slate-100 dark:bg-slate-800 animate-pulse rounded-xl" />
+            ) : (
+              <motion.span
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.8, delay: delay + 0.1 }}
+                className="font-mono"
+              >
+                {formatCurrency(value)}
+              </motion.span>
+            )}
+          </div>
+        </div>
       </div>
       
-      <div className="relative z-10 flex items-center gap-2 pt-4 border-t border-slate-100 dark:border-white/5 opacity-0 group-hover:opacity-100 transition-all duration-500 translate-y-2 group-hover:translate-y-0">
-        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 group-hover:text-brand-green">Accéder à l'analyse</span>
-        <ChevronRight size={14} className="text-brand-green group-hover:translate-x-1 transition-transform" />
-      </div>
+      {/* Decorative Bottom Line (Hidden statically, slides in on hover) */}
+      <div className={cn(
+        "absolute bottom-0 left-0 h-1.5 w-full -translate-x-full group-hover:translate-x-0 transition-transform duration-500 ease-out",
+        color
+      )} />
+      
+      {/* Hover action indicator */}
+      {path && (
+        <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 transition-all duration-300">
+          <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-brand-green">
+            <ChevronRight size={16} strokeWidth={3} />
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 
   return (
-    <div className="space-y-16 pb-24 relative">
+    <div className="flex flex-col gap-10 pb-24 relative">
       <div className="atmospheric-bg" />
       
       {/* Pending Recurring Transactions Alert */}
       <AnimatePresence>
         {pendingRecurringCount > 0 && (
           <motion.div
+            style={{ order: -3 }}
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
@@ -361,7 +573,7 @@ export function Dashboard() {
       </AnimatePresence>
 
       {/* Editorial Header - Recipe 2 & 11 inspired */}
-      <div className="relative pt-12 pb-16 overflow-hidden">
+      <div className="relative pt-12 pb-16 overflow-hidden" style={{ order: -2 }}>
         <div className="absolute top-0 right-0 w-2/3 h-full bg-[radial-gradient(circle_at_right,_rgba(16,185,129,0.05)_0%,_transparent_70%)] pointer-events-none" />
         
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-12 relative z-10">
@@ -378,7 +590,7 @@ export function Dashboard() {
             
             <div className="space-y-4">
               <h1 className="text-4xl sm:text-8xl md:text-[120px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
-                Tableau de <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 italic drop-shadow-sm">Bord</span>
+                Tableau de <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 drop-shadow-sm font-bold text-[102px] text-center not-italic">Bord</span>
               </h1>
               <div className="flex items-center gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
                 <div className="h-px w-24 bg-brand-green/30" />
@@ -402,6 +614,13 @@ export function Dashboard() {
           
           <div className="flex flex-wrap gap-4 animate-in fade-in slide-in-from-right-4 duration-1000 delay-500">
             <button 
+              onClick={generateFullReport}
+              className="group bg-brand-gold text-white px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-brand-gold-light transition-all duration-500 shadow-2xl shadow-brand-gold/30 flex items-center gap-3 active:scale-95"
+            >
+              <Sparkles size={18} className="group-hover:rotate-12 transition-transform duration-500" />
+              <span>Rapport IA Exécutif</span>
+            </button>
+            <button 
               onClick={() => setIsCustomizerOpen(true)}
               className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 dark:hover:bg-slate-800 transition-all duration-500 shadow-sm flex items-center gap-4 active:scale-95"
             >
@@ -413,7 +632,14 @@ export function Dashboard() {
               className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-900 dark:hover:bg-slate-800 hover:text-white transition-all duration-500 shadow-sm flex items-center gap-4 active:scale-95"
             >
               <FileSpreadsheet size={18} className="group-hover:rotate-12 transition-transform duration-500" />
-              <span>Exporter</span>
+              <span>Exporter EXCEL</span>
+            </button>
+            <button 
+              onClick={() => setIsPdfConfigOpen(true)}
+              className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-900 dark:hover:bg-slate-800 hover:text-white transition-all duration-500 shadow-sm flex items-center gap-4 active:scale-95"
+            >
+              <FileText size={18} className="group-hover:rotate-12 transition-transform duration-500" />
+              <span>Rapport PDF</span>
             </button>
             <button 
               onClick={() => navigate('/journal')}
@@ -427,7 +653,7 @@ export function Dashboard() {
       </div>
 
       {/* Quick Navigation - New Feature */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start" style={{ order: -1 }}>
         <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
           {[
             { label: 'Journal', icon: Calculator, path: '/journal', color: 'text-blue-500', bg: 'bg-blue-500/10' },
@@ -435,7 +661,9 @@ export function Dashboard() {
             { label: 'Trésorerie', icon: Wallet, path: '/treasury', color: 'text-brand-green', bg: 'bg-brand-green/10' },
             { label: 'Factures', icon: FileText, path: '/invoicing', color: 'text-purple-500', bg: 'bg-purple-500/10' },
             { label: 'Paie & RH', icon: Users, path: '/payroll', color: 'text-orange-500', bg: 'bg-orange-500/10' },
-            { label: 'Récurrences', icon: Repeat, path: '/recurring', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+            ...(taxesEnabled ? [{ label: 'TVA', icon: Percent, path: '/vat', color: 'text-emerald-500', bg: 'bg-emerald-500/10' }] : []),
+            { label: 'Actifs', icon: Building2, path: '/assets', color: 'text-rose-500', bg: 'bg-rose-500/10' },
+            { label: 'Audit', icon: ShieldCheck, path: '/audit', color: 'text-slate-500', bg: 'bg-slate-500/10' },
           ].map((item, idx) => (
             <motion.button
               key={item.path}
@@ -497,12 +725,13 @@ export function Dashboard() {
 
       {/* AI Strategic Advisor - Futuristic Bento Head */}
       {isVisible('analysis') && (
-        <motion.div 
+          <motion.div 
+          style={{ order: getGroupOrder(['analysis']) }}
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.2 }}
-          className="bg-slate-900 border border-white/5 rounded-[3rem] p-10 text-white relative overflow-hidden group shadow-2xl shadow-brand-green/10"
-        >
+          className={cn("bg-slate-900 border border-white/5 rounded-[3rem] p-10 text-white relative overflow-hidden group shadow-2xl shadow-brand-green/10", maxClasses('analysis'))}>
+            <MaximizeButton id="analysis" />
           {/* Glowing Ambient Effects */}
           <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-brand-green/10 rounded-full blur-[140px] -mr-64 -mt-64 animate-pulse duration-[8000ms]" />
           <div className="absolute bottom-0 left-0 w-80 h-80 bg-brand-green/5 rounded-full blur-[100px] -ml-40 -mb-40" />
@@ -581,13 +810,14 @@ export function Dashboard() {
       )}
 
       {/* Financial Summary Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" style={{ order: getGroupOrder(['summary', 'investment']) }}>
         {isVisible('summary') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'summary') }}
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="lg:col-span-2 premium-card p-8 bg-gradient-to-br from-slate-900 to-slate-950 text-white relative overflow-hidden"
-          >
+            className={cn("lg:col-span-2 premium-card p-8 bg-gradient-to-br from-slate-900 to-slate-950 text-white relative overflow-hidden", maxClasses('summary'))}>
+            <MaximizeButton id="summary" />
             <div className="absolute top-0 right-0 w-full h-full bg-[radial-gradient(circle_at_80%_20%,_rgba(16,185,129,0.1)_0%,_transparent_50%)]" />
             <div className="relative z-10">
               <div className="flex items-center gap-3 mb-8">
@@ -603,22 +833,22 @@ export function Dashboard() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
                 <div className="space-y-2 min-w-0">
                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">Marge Brute</p>
-                  <p className="text-xl sm:text-2xl font-black font-display text-brand-green truncate">64.2%</p>
+                  <p className="text-xl sm:text-2xl font-black font-display text-brand-green truncate">{stats.kpis.grossMargin}%</p>
                   <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-brand-green w-[64.2%]" />
+                    <div className="h-full bg-brand-green" style={{ width: `${stats.kpis.grossMargin}%` }} />
                   </div>
                 </div>
                 <div className="space-y-2 min-w-0">
                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">EBITDA</p>
-                  <p className="text-xl sm:text-2xl font-black font-display text-brand-gold truncate">{formatCurrency(stats.turnover * 0.28)}</p>
+                  <p className="text-xl sm:text-2xl font-black font-display text-brand-gold truncate">{formatCurrency(stats.kpis.ebitda)}</p>
                   <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-brand-gold w-[28%]" />
+                    <div className="h-full bg-brand-gold" style={{ width: `${stats.turnover > 0 ? Math.min(100, Math.max(0, (stats.kpis.ebitda / stats.turnover) * 100)) : 28}%` }} />
                   </div>
                 </div>
                 <div className="space-y-2 min-w-0">
                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">Point Mort</p>
-                  <p className="text-xl sm:text-2xl font-black font-display text-white truncate">J-142</p>
-                  <p className="text-[9px] text-slate-500 font-bold uppercase truncate">Atteint le 22 Mai</p>
+                  <p className="text-xl sm:text-2xl font-black font-display text-white truncate">{stats.kpis.breakEvenStatus}</p>
+                  <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{stats.kpis.breakEvenSublabel}</p>
                 </div>
                 <div className="space-y-2 min-w-0">
                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">BFR</p>
@@ -632,17 +862,18 @@ export function Dashboard() {
 
         {isVisible('investment') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'investment') }}
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="premium-card p-8 bg-brand-gold text-white flex flex-col justify-between relative overflow-hidden"
-          >
+            className={cn("premium-card p-8 bg-brand-gold text-white flex flex-col justify-between relative overflow-hidden", maxClasses('investment'))}>
+            <MaximizeButton id="investment" />
             <div className="absolute top-0 right-0 w-full h-full bg-[radial-gradient(circle_at_20%_80%,_rgba(255,255,255,0.2)_0%,_transparent_50%)]" />
             <div className="relative z-10">
               <h3 className="text-lg font-black uppercase tracking-widest mb-2">Capacité d'Investissement</h3>
               <p className="text-sm opacity-80 font-medium leading-relaxed">Basé sur votre cash-flow actuel et vos engagements futurs.</p>
             </div>
             <div className="relative z-10 mt-8">
-              <div className="text-4xl sm:text-5xl font-black font-display mb-2 truncate">{formatCurrency(stats.cash * 0.6)}</div>
+              <div className="text-4xl sm:text-5xl font-black font-display mb-2 truncate">{formatCurrency(stats.kpis.investmentCapacity)}</div>
               <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-70 truncate">Disponible pour nouveaux projets</p>
             </div>
             <button className="relative z-10 mt-8 w-full py-4 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-2xl border border-white/20 text-xs font-black uppercase tracking-widest transition-all">
@@ -653,15 +884,25 @@ export function Dashboard() {
       </div>
 
       {/* Bento Grid Layout */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+      <div 
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 2xl:gap-8"
+        style={{ order: getGroupOrder([
+          'stats', 'quick_stats', 'health', 'tax_calendar', 'compliance', 
+          'runway', 'advisor', 'shortcut', 'payroll_summary', 'performance', 
+          'cashflow', 'financial_health', 'performance_ratios', 'expenses', 
+          'asset_summary', 'activity', 'recent_audit_logs'
+        ]) }}
+      >
         {/* Main Stats */}
         {isVisible('stats') && (
           <>
             <StatCard 
+              style={{ order: widgets.findIndex(w => w.id === 'stats') }}
+              id="stats_cash"
               title="Trésorerie Disponible" 
               value={stats.cash} 
-              trend="up" 
-              trendValue="+12.4%" 
+              trend={stats.trends.cash >= 0 ? "up" : "down"} 
+              trendValue={(stats.trends.cash >= 0 ? "+" : "") + stats.trends.cash + "%"} 
               icon={Wallet} 
               color="bg-brand-green" 
               delay={0.1}
@@ -670,10 +911,12 @@ export function Dashboard() {
               colSpan="md:col-span-2 lg:col-span-2"
             />
             <StatCard 
+              style={{ order: widgets.findIndex(w => w.id === 'stats') }}
+              id="stats_turnover"
               title="Chiffre d'Affaires" 
               value={stats.turnover} 
-              trend="up" 
-              trendValue="+8.5%" 
+              trend={stats.trends.turnover >= 0 ? "up" : "down"} 
+              trendValue={(stats.trends.turnover >= 0 ? "+" : "") + stats.trends.turnover + "%"} 
               icon={TrendingUp} 
               color="bg-emerald-500" 
               delay={0.2}
@@ -682,10 +925,12 @@ export function Dashboard() {
               colSpan="md:col-span-2 lg:col-span-2"
             />
             <StatCard 
+              style={{ order: widgets.findIndex(w => w.id === 'stats') }}
+              id="stats_receivables"
               title="Créances Clients" 
               value={stats.receivables} 
-              trend="down" 
-              trendValue="-2.1%" 
+              trend={stats.trends.receivables >= 0 ? "up" : "down"} 
+              trendValue={(stats.trends.receivables >= 0 ? "+" : "") + stats.trends.receivables + "%"} 
               icon={Users} 
               color="bg-brand-gold-dark" 
               delay={0.3}
@@ -693,10 +938,12 @@ export function Dashboard() {
               colSpan="col-span-1"
             />
             <StatCard 
+              style={{ order: widgets.findIndex(w => w.id === 'stats') }}
+              id="stats_payables"
               title="Dettes Fournisseurs" 
               value={stats.payables} 
-              trend="up" 
-              trendValue="+4.2%" 
+              trend={stats.trends.payables >= 0 ? "up" : "down"} 
+              trendValue={(stats.trends.payables >= 0 ? "+" : "") + stats.trends.payables + "%"} 
               icon={ArrowDownRight} 
               color="bg-rose-500" 
               delay={0.35}
@@ -704,10 +951,12 @@ export function Dashboard() {
               colSpan="col-span-1"
             />
             <StatCard 
+              style={{ order: widgets.findIndex(w => w.id === 'stats') }}
+              id="stats_net_result"
               title="Résultat Net" 
               value={stats.net_result} 
-              trend={stats.net_result >= 0 ? 'up' : 'down'} 
-              trendValue={stats.net_result >= 0 ? '+5%' : '-3%'} 
+              trend={stats.trends.net_result >= 0 ? 'up' : 'down'} 
+              trendValue={(stats.trends.net_result >= 0 ? "+" : "") + stats.trends.net_result + "%"} 
               icon={FileText} 
               color="bg-brand-gold" 
               delay={0.4}
@@ -715,10 +964,12 @@ export function Dashboard() {
               colSpan="md:col-span-2 lg:col-span-1"
             />
             <StatCard 
+              style={{ order: widgets.findIndex(w => w.id === 'stats') }}
+              id="stats_payroll"
               title="Masse Salariale" 
               value={stats.payroll.total} 
-              trend="up" 
-              trendValue="+1.5%" 
+              trend={stats.trends.payroll >= 0 ? "up" : "down"} 
+              trendValue={(stats.trends.payroll >= 0 ? "+" : "") + stats.trends.payroll + "%"} 
               icon={Briefcase} 
               color="bg-indigo-500" 
               delay={0.45}
@@ -731,20 +982,21 @@ export function Dashboard() {
         {/* Quick Stats Bar - New Feature */}
         {isVisible('quick_stats') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'quick_stats') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.45 }}
-            className="lg:col-span-4 bg-white dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 rounded-3xl p-4 flex flex-wrap items-center justify-between gap-6 shadow-sm"
-          >
-            <div className="flex items-center gap-4 sm:gap-8 px-4 overflow-x-auto no-scrollbar pb-2 sm:pb-0">
+            className={cn("lg:col-span-4 bg-white dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 rounded-3xl p-4 flex flex-wrap items-center justify-between gap-6 shadow-sm", maxClasses('quick_stats'))}>
+            <MaximizeButton id="quick_stats" />
+            <div className="w-full min-w-0 overflow-auto flex items-center gap-4 sm:gap-8 px-4  no-scrollbar pb-2 sm:pb-0">
               <div className="space-y-1 min-w-[120px] sm:min-w-0">
                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">Charges Fixes</p>
-                <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{formatCurrency(stats.expenses * 0.4)}</p>
+                <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{formatCurrency(stats.kpis.fixedExpenses)}</p>
               </div>
               <div className="w-px h-8 bg-slate-100 dark:bg-slate-800 shrink-0" />
               <div className="space-y-1 min-w-[120px] sm:min-w-0">
                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">Seuil de Rentabilité</p>
-                <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{formatCurrency(stats.expenses * 1.2)}</p>
+                <p className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">{formatCurrency(stats.kpis.seuilRentabilite)}</p>
               </div>
               <div className="w-px h-8 bg-slate-100 dark:bg-slate-800 shrink-0" />
               <div className="space-y-1 min-w-[120px] sm:min-w-0">
@@ -762,10 +1014,11 @@ export function Dashboard() {
         {/* Atmospheric Health Score - Large Bento Item */}
         {isVisible('health') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'health') }}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-             className="lg:col-span-2 lg:row-span-2 bg-slate-950 rounded-3xl p-6 sm:p-8 text-white relative overflow-hidden shadow-2xl group border border-white/5 flex flex-col justify-between min-h-[340px]"
-          >
+             className={cn("lg:col-span-2 lg:row-span-2 bg-slate-950 rounded-3xl p-6 sm:p-8 text-white relative overflow-hidden shadow-2xl group border border-white/5 flex flex-col justify-between min-h-[340px]", maxClasses('health'))}>
+            <MaximizeButton id="health" />
             {/* Background Glow - Improved Symbiosis */}
             <div className="absolute top-0 right-0 w-full h-full bg-[radial-gradient(circle_at_80%_20%,_rgba(16,185,129,0.12)_0%,_transparent_50%)] opacity-30 group-hover:opacity-40 transition-opacity duration-700" />
             <div className="absolute bottom-0 left-0 w-full h-full bg-[radial-gradient(circle_at_20%_80%,_rgba(197,160,89,0.08)_0%,_transparent_50%)] opacity-30 group-hover:opacity-40 transition-opacity duration-700" />
@@ -857,7 +1110,7 @@ export function Dashboard() {
                     "Votre structure financière est <span className="text-white font-black">robuste</span>. L'excédent de liquidité actuel suggère une opportunité de <span className="text-brand-green-light font-black">croissance externe</span>."
                   </p>
                   <button 
-                    onClick={() => navigate('/advisor')}
+                    onClick={() => navigate('/assistant')}
                     className="mt-6 flex items-center gap-2 text-[10px] font-black text-white uppercase tracking-widest hover:text-brand-gold transition-colors group/btn"
                   >
                     <span>Consulter Ory Advisor</span>
@@ -872,51 +1125,66 @@ export function Dashboard() {
         {/* Tax Calendar Widget */}
         {isVisible('tax_calendar') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'tax_calendar') }}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.6 }}
-            className="premium-card p-6 flex flex-col justify-between"
-          >
+            className={cn("premium-card p-6 flex flex-col justify-between", maxClasses('tax_calendar'))}>
+            <MaximizeButton id="tax_calendar" />
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Échéances Fiscales</h3>
+              <h3 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Échéances (7J)</h3>
               <div className="p-2 bg-rose-500/10 text-rose-500 rounded-xl">
                 <HistoryIcon size={16} />
               </div>
             </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
-                <div className="flex flex-col items-center justify-center w-10 h-10 bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-100 dark:border-slate-800">
-                  <span className="text-[10px] font-black text-rose-500 uppercase leading-none">Avr</span>
-                  <span className="text-lg font-black text-slate-900 dark:text-slate-100 leading-none">15</span>
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-900 dark:text-slate-100">Déclaration TVA</p>
-                  <p className="text-[10px] text-slate-500 uppercase tracking-wider">Mars 2026</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
-                <div className="flex flex-col items-center justify-center w-10 h-10 bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-100 dark:border-slate-800">
-                  <span className="text-[10px] font-black text-blue-500 uppercase leading-none">Mai</span>
-                  <span className="text-lg font-black text-slate-900 dark:text-slate-100 leading-none">20</span>
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-900 dark:text-slate-100">Impôt sur les Sociétés</p>
-                  <p className="text-[10px] text-slate-500 uppercase tracking-wider">Acompte Q1</p>
-                </div>
-              </div>
+            <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+              {(() => {
+                const combined = [...(deadlines.tasks || []), ...(deadlines.invoices || [])].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(0, 3);
+                if (combined.length === 0) {
+                  return (
+                    <div className="flex flex-col items-center justify-center py-6 text-center">
+                      <div className="w-12 h-12 bg-slate-50 dark:bg-slate-800 rounded-full flex flex-col items-center justify-center mb-3 text-slate-300 dark:text-slate-600">
+                        <Check size={20} />
+                      </div>
+                      <p className="text-xs font-bold text-slate-600 dark:text-slate-400">Aucune échéance à venir</p>
+                      <p className="text-[10px] text-slate-400 mt-1">Vous êtes à jour !</p>
+                    </div>
+                  );
+                }
+                return combined.map((d, i) => {
+                  const date = new Date(d.date);
+                  const monthName = date.toLocaleDateString('fr-FR', { month: 'short' }).substring(0, 4);
+                  const day = date.getDate();
+                  const isTask = d.type === 'task';
+                  
+                  return (
+                    <div key={`${d.type}-${d.id}-${i}`} className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                      <div className="flex flex-col items-center justify-center w-10 h-10 bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-100 dark:border-slate-800">
+                        <span className={cn("text-[9px] font-black uppercase leading-none", isTask ? "text-amber-500" : "text-rose-500")}>{monthName}</span>
+                        <span className="text-sm font-black text-slate-900 dark:text-slate-100 leading-none mt-0.5">{day}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate" title={d.title}>{d.title}</p>
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wider mt-0.5">{isTask ? 'Tâche' : 'Facture'}</p>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
-            <button className="mt-4 text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline text-center">Voir tout le calendrier</button>
+            <button onClick={() => navigate('/tasks')} className="mt-4 text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline text-center">Voir tout le calendrier</button>
           </motion.div>
         )}
 
         {/* Compliance Score Widget */}
         {isVisible('compliance') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'compliance') }}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.7 }}
-            className="premium-card p-6 flex flex-col justify-between bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-950"
-          >
+            className={cn("premium-card p-6 flex flex-col justify-between bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-950", maxClasses('compliance'))}>
+            <MaximizeButton id="compliance" />
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Conformité OHADA</h3>
               <div className="p-2 bg-brand-green/10 text-brand-green rounded-xl">
@@ -942,11 +1210,12 @@ export function Dashboard() {
 
         {isVisible('runway') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'runway') }}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.8 }}
-            className="premium-card p-6 flex flex-col justify-between"
-          >
+            className={cn("premium-card p-6 flex flex-col justify-between", maxClasses('runway'))}>
+            <MaximizeButton id="runway" />
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Cash Runway</h3>
               <div className="p-2 bg-brand-gold/10 dark:bg-brand-gold/20 text-brand-gold rounded-xl">
@@ -965,11 +1234,12 @@ export function Dashboard() {
 
         {isVisible('advisor') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'advisor') }}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.9 }}
-            className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl text-white flex flex-col justify-between group"
-          >
+            className={cn("bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl text-white flex flex-col justify-between group", maxClasses('advisor'))}>
+            <MaximizeButton id="advisor" />
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Conseiller Ory</h3>
               <div className="flex items-center gap-2">
@@ -1007,11 +1277,12 @@ export function Dashboard() {
 
         {isVisible('shortcut') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'shortcut') }}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 1.0 }}
-            className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm flex flex-col justify-between"
-          >
+            className={cn("bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm flex flex-col justify-between", maxClasses('shortcut'))}>
+            <MaximizeButton id="shortcut" />
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Raccourci</h3>
               <div className="p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-lg">
@@ -1031,13 +1302,14 @@ export function Dashboard() {
 
         {isVisible('payroll_summary') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'payroll_summary') }}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 1.1 }}
-            className="premium-card p-6 flex flex-col justify-between bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-950"
-          >
+            className={cn("premium-card p-6 flex flex-col justify-between bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-950", maxClasses('payroll_summary'))}>
+            <MaximizeButton id="payroll_summary" />
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Gestion de Paie</h3>
+              <h3 className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Résumé RH</h3>
               <div className="p-2 bg-brand-green/10 text-brand-green rounded-xl">
                 <Users size={16} />
               </div>
@@ -1046,21 +1318,21 @@ export function Dashboard() {
               <div className="flex justify-between items-end">
                 <div>
                   <p className="text-2xl font-black text-slate-900 dark:text-slate-100 font-display">{stats.payroll.employees}</p>
-                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Employés Actifs</p>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Salariés</p>
                 </div>
                 <div className="text-right">
                   <p className="text-lg font-black text-brand-green font-display">{formatCurrency(stats.payroll.total)}</p>
-                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Dernière Paie</p>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Masse Salariale</p>
                 </div>
               </div>
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
                 <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Statut Période</span>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Statut du Mois</span>
                   <span className={cn(
                     "px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest",
                     stats.payroll.lastPeriod === 'validated' ? "bg-brand-green/10 text-brand-green border border-brand-green/20" : "bg-brand-gold/10 text-brand-gold border border-brand-gold/20"
                   )}>
-                    {stats.payroll.lastPeriod === 'validated' ? 'Validée' : stats.payroll.lastPeriod === 'draft' ? 'Brouillon' : 'Aucune'}
+                    {stats.payroll.lastPeriod === 'validated' ? 'Payé' : stats.payroll.lastPeriod === 'draft' ? 'En cours' : 'Aucun'}
                   </span>
                 </div>
               </div>
@@ -1077,11 +1349,12 @@ export function Dashboard() {
         {/* Performance Chart - Extra Large Bento Item */}
         {isVisible('performance') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'performance') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.6 }}
-            className="lg:col-span-2 premium-card p-8 relative overflow-hidden group"
-          >
+            className={cn("lg:col-span-2 premium-card p-8 relative overflow-hidden group", maxClasses('performance'))}>
+            <MaximizeButton id="performance" />
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-10 relative z-10 gap-4">
               <div>
                 <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight font-display">Performance</h3>
@@ -1169,11 +1442,12 @@ export function Dashboard() {
         {/* Cash Flow Forecast - Large Bento Item */}
         {isVisible('cashflow') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'cashflow') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.55 }}
-            className="lg:col-span-4 premium-card p-8"
-          >
+            className={cn("lg:col-span-4 premium-card p-8", maxClasses('cashflow'))}>
+            <MaximizeButton id="cashflow" />
             <div className="flex items-center justify-between mb-10">
               <div>
                 <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight font-display">Prévision de Trésorerie</h3>
@@ -1213,11 +1487,20 @@ export function Dashboard() {
                       backgroundColor: 'var(--tooltip-bg)', 
                       color: 'var(--tooltip-text)' 
                     }}
-                    formatter={(value: number) => [formatCurrency(value), 'Solde']}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'balance') return [formatCurrency(value), 'Solde Projeté'];
+                      if (name === 'inflows') return [formatCurrency(value), 'Encaissement Prévu'];
+                      if (name === 'outflows') return [formatCurrency(value), 'Décaissement Prévu'];
+                      return [formatCurrency(value), name];
+                    }}
                   />
+                  <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px', fontWeight: 'bold' }} />
+                  <Bar dataKey="inflows" name="Encaissements" fill="#10b981" radius={[4, 4, 0, 0]} barSize={20} opacity={0.8} />
+                  <Bar dataKey="outflows" name="Décaissements" fill="#f43f5e" radius={[4, 4, 0, 0]} barSize={20} opacity={0.8} />
                   <Line 
                     type="monotone" 
                     dataKey="balance" 
+                    name="Solde Projeté"
                     stroke="#3b82f6" 
                     strokeWidth={4} 
                     dot={{ r: 4, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
@@ -1233,11 +1516,12 @@ export function Dashboard() {
         {/* Financial Health - Small Bento Item */}
         {isVisible('financial_health') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'financial_health') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.6 }}
-            className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl text-white"
-          >
+            className={cn("bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl text-white", maxClasses('financial_health'))}>
+            <MaximizeButton id="financial_health" />
             <h3 className="text-lg font-bold mb-1">Santé Financière</h3>
             <p className="text-xs text-slate-400 mb-6">Indicateurs clés de solvabilité</p>
             
@@ -1289,11 +1573,12 @@ export function Dashboard() {
         {/* Expenses Breakdown - Editorial List */}
         {isVisible('performance_ratios') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'performance_ratios') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.7 }}
-            className="col-span-1 lg:col-span-2 bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 shadow-sm relative overflow-hidden group"
-          >
+            className={cn("col-span-1 lg:col-span-2 bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 shadow-sm relative overflow-hidden group", maxClasses('performance_ratios'))}>
+            <MaximizeButton id="performance_ratios" />
             <div className="absolute top-0 right-0 w-64 h-64 bg-brand-green/5 rounded-full -translate-y-32 translate-x-32 blur-3xl group-hover:bg-brand-green/10 transition-colors duration-1000" />
             
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10 relative z-10">
@@ -1508,11 +1793,12 @@ export function Dashboard() {
 
         {isVisible('expenses') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'expenses') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.7 }}
-            className="lg:col-span-2 premium-card p-8"
-          >
+            className={cn("lg:col-span-2 premium-card p-8", maxClasses('expenses'))}>
+            <MaximizeButton id="expenses" />
             <div className="flex items-center justify-between mb-10">
               <div>
                 <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight font-display">Dépenses</h3>
@@ -1602,10 +1888,11 @@ export function Dashboard() {
 
         {isVisible('asset_summary') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'asset_summary') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="premium-card p-8 bg-gradient-to-br from-indigo-900 to-slate-900 text-white relative overflow-hidden group shadow-2xl shadow-indigo-500/10"
-          >
+            className={cn("premium-card p-8 bg-gradient-to-br from-indigo-900 to-slate-900 text-white relative overflow-hidden group shadow-2xl shadow-indigo-500/10", maxClasses('asset_summary'))}>
+            <MaximizeButton id="asset_summary" />
             <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full -translate-y-32 translate-x-32 blur-3xl group-hover:bg-indigo-500/20 transition-colors duration-1000" />
             
             <div className="flex items-center justify-between mb-8 relative z-10">
@@ -1668,12 +1955,13 @@ export function Dashboard() {
         {/* Recent Activity - Editorial List */}
         <div className="lg:col-span-4 grid grid-cols-1 lg:grid-cols-2 gap-6">
           {isVisible('activity') && (
-            <motion.div 
+          <motion.div 
+              style={{ order: widgets.findIndex(w => w.id === 'activity') }}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.8 }}
-              className="premium-card p-8 h-full"
-            >
+              className={cn("premium-card p-8 h-full", maxClasses('activity'))}>
+            <MaximizeButton id="activity" />
               <div className="flex items-center justify-between mb-10">
                 <div>
                   <div className="flex items-center gap-3 mb-1">
@@ -1713,6 +2001,13 @@ export function Dashboard() {
                             <span className="w-1 h-1 rounded-full bg-slate-200 dark:bg-slate-700 shrink-0" />
                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 truncate">ID: {String(tx.id || '').slice(0, 8)}</p>
                           </div>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); navigate('/journal?search=' + encodeURIComponent(tx.id || tx.reference || '')); }}
+                            className="p-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-brand-green/20 hover:text-brand-green text-slate-500 rounded-lg transition-colors ml-2 shrink-0 hidden group-hover/item:flex items-center justify-center"
+                            title="Voir la source"
+                          >
+                            <ExternalLink size={14} />
+                          </button>
                         </div>
                       </div>
                       <div className="text-right">
@@ -1730,7 +2025,7 @@ export function Dashboard() {
               </div>
               
               <button 
-                onClick={() => navigate('/journal')}
+                onClick={() => navigate('/ledger')}
                 className="mt-8 w-full py-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500 text-[10px] font-black uppercase tracking-[0.3em] hover:border-brand-green hover:text-brand-green hover:bg-brand-green/5 transition-all duration-500 flex items-center justify-center gap-3 group/btn"
               >
                 Consulter le Grand Livre
@@ -1740,12 +2035,13 @@ export function Dashboard() {
           )}
 
           {isVisible('recent_audit_logs') && (
-            <motion.div 
+          <motion.div 
+              style={{ order: widgets.findIndex(w => w.id === 'recent_audit_logs') }}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.9 }}
-              className="premium-card p-8 h-full bg-slate-50/30 dark:bg-slate-900/40"
-            >
+              className={cn("premium-card p-8 h-full bg-slate-50/30 dark:bg-slate-900/40", maxClasses('recent_audit_logs'))}>
+            <MaximizeButton id="recent_audit_logs" />
               <div className="flex items-center justify-between mb-10">
                 <div>
                   <div className="flex items-center gap-3 mb-1">
@@ -1801,11 +2097,12 @@ export function Dashboard() {
         {/* NEW: Strategic Analysis Section */}
         {isVisible('analysis') && (
           <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'analysis') }}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.9 }}
-            className="lg:col-span-4 grid grid-cols-1 lg:grid-cols-3 gap-6"
-          >
+            className={cn("lg:col-span-4 grid grid-cols-1 lg:grid-cols-3 gap-6", maxClasses('analysis'))}>
+            <MaximizeButton id="analysis" />
             {/* Net Margin Trend */}
             <div className="lg:col-span-2 premium-card p-8">
               <div className="flex items-center justify-between mb-10">
@@ -1985,7 +2282,192 @@ export function Dashboard() {
         widgets={widgets}
         onToggleWidget={toggleWidget}
         onReset={resetWidgets}
+        onReorder={handleReorderWidgets}
       />
+
+      <AnimatePresence>
+        {isReportModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setIsReportModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/80 backdrop-blur-xl" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-4xl max-h-[85vh] bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800"
+            >
+              <div className="flex items-center justify-between p-6 sm:p-8 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 backdrop-blur-md sticky top-0 z-10">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-brand-gold/20 rounded-2xl flex items-center justify-center text-brand-gold border border-brand-gold/30">
+                    <Sparkles size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 font-display">Rapport IA Exécutif</h2>
+                    <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Analyse Financière Globale</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsReportModalOpen(false)}
+                  className="p-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  <Search size={20} className="hidden" /> {/* Temp */}
+                  <span className="font-bold relative -top-[1px]">✕</span>
+                </button>
+              </div>
+
+              <div className="p-6 sm:p-8 overflow-y-auto min-h-[300px] flex-1">
+                {generatingReport ? (
+                  <div className="flex flex-col items-center justify-center h-full space-y-6">
+                    <div className="relative w-20 h-20">
+                      <div className="absolute inset-0 border-4 border-slate-100 dark:border-slate-800 rounded-full"></div>
+                      <div className="absolute inset-0 border-4 border-brand-gold rounded-full border-t-transparent animate-spin"></div>
+                      <Sparkles size={24} className="absolute inset-0 m-auto text-brand-gold animate-pulse" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-lg font-black text-slate-900 dark:text-slate-100 mb-2">Génération en cours</p>
+                      <p className="text-sm font-medium text-slate-500 max-w-sm">Le Directeur Financier Virtuel analyse vos données, ratios et KPIs pour préparer la synthèse...</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="prose prose-slate dark:prose-invert max-w-none prose-headings:font-display md:prose-lg prose-p:leading-relaxed prose-li:font-medium prose-strong:text-brand-gold">
+                    <Markdown>{reportContent || "Impossible de charger le rapport."}</Markdown>
+                  </div>
+                )}
+              </div>
+
+              {!generatingReport && (
+                <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex justify-end">
+                  <button 
+                    onClick={() => {
+                       const element = document.createElement("a");
+                       const file = new Blob([reportContent || ""], {type: 'text/markdown'});
+                       element.href = URL.createObjectURL(file);
+                       element.download = `rapport_executif_${new Date().toISOString().split('T')[0]}.md`;
+                       document.body.appendChild(element);
+                       element.click();
+                    }}
+                    className="flex items-center gap-2 px-6 py-3 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl text-sm font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
+                  >
+                    <Download size={18} />
+                    Télécharger (.MD)
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isPdfConfigOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setIsPdfConfigOpen(false)}
+              className="absolute inset-0 bg-slate-900/80 backdrop-blur-xl" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800"
+            >
+              <div className="flex items-center justify-between p-6 sm:p-8 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 backdrop-blur-md sticky top-0 z-10">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-500/20 rounded-2xl flex items-center justify-center text-blue-500 border border-blue-500/30">
+                    <FileText size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 font-display">Rapport PDF</h2>
+                    <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Options d'exportation</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsPdfConfigOpen(false)}
+                  className="p-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+                >
+                  <span className="font-bold relative -top-[1px]">✕</span>
+                </button>
+              </div>
+
+              <div className="p-6 sm:p-8 flex-1 space-y-6">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
+                    Titre du rapport
+                  </label>
+                  <input 
+                    type="text" 
+                    value={pdfConfig.title}
+                    onChange={(e) => setPdfConfig(prev => ({...prev, title: e.target.value}))}
+                    className="w-full bg-slate-100 dark:bg-slate-800 border-none rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green"
+                    placeholder="Synthèse Financière..."
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
+                    En-tête personnalisé (Optionnel)
+                  </label>
+                  <input 
+                    type="text" 
+                    value={pdfConfig.headerText}
+                    onChange={(e) => setPdfConfig(prev => ({...prev, headerText: e.target.value}))}
+                    className="w-full bg-slate-100 dark:bg-slate-800 border-none rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green"
+                    placeholder="Ex: Réunion du comité de direction..."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
+                    Pied de page personnalisé
+                  </label>
+                  <input 
+                    type="text" 
+                    value={pdfConfig.footerText}
+                    onChange={(e) => setPdfConfig(prev => ({...prev, footerText: e.target.value}))}
+                    className="w-full bg-slate-100 dark:bg-slate-800 border-none rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-green"
+                    placeholder="Texte du pied de page..."
+                  />
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex justify-end gap-3">
+                <button 
+                  onClick={() => setIsPdfConfigOpen(false)}
+                  className="px-6 py-3 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button 
+                  onClick={handleGeneratePdf}
+                  className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-xl text-sm font-black uppercase tracking-widest hover:bg-blue-700 transition-colors shadow-lg shadow-blue-500/30"
+                >
+                  <Download size={18} />
+                  Générer PDF
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {maximizedWidget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[90] bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm"
+            onClick={() => setMaximizedWidget(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { parseSafeJSON } from "../lib/utils";
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useLocation } from 'react-router-dom';
 import { PageHeader } from './ui/PageHeader';
 import { Users, FileText, Download, Plus, Calendar, CheckCircle, AlertCircle, ChevronRight, ArrowLeft, Calculator, Loader2, Trash2, Pencil, Printer, Coins, Banknote, List, BarChart3, Settings as SettingsIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -74,6 +74,7 @@ interface SalaryAdvance {
 export function PayrollManager() {
   const { alert: dialogAlert } = useDialog();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const { formatCurrency, currency } = useCurrency();
   const { activeYear } = useFiscalYear();
   const { alert, confirm } = useDialog();
@@ -88,6 +89,13 @@ export function PayrollManager() {
       setActiveView(view as any);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    if (location.state?.action === 'new') {
+      setIsEmployeeModalOpen(true);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<PayrollPeriod | null>(null);
@@ -694,7 +702,7 @@ export function PayrollManager() {
         </div>
 
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
+          <div className="w-full min-w-0 overflow-auto ">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-700">
@@ -787,7 +795,8 @@ export function PayrollManager() {
       </div>
 
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-        <table className="w-full text-left">
+        <div className="w-full min-w-0 overflow-auto ">
+        <table className="w-full text-left min-w-[800px]">
           <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
             <tr>
               <th className="px-6 py-4">Nom & Prénom</th>
@@ -845,6 +854,7 @@ export function PayrollManager() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -862,7 +872,8 @@ export function PayrollManager() {
       </div>
 
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-        <table className="w-full text-left">
+        <div className="w-full min-w-0 overflow-auto ">
+        <table className="w-full text-left min-w-[800px]">
           <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
             <tr>
               <th className="px-6 py-4">Période</th>
@@ -930,6 +941,7 @@ export function PayrollManager() {
             )}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -1033,7 +1045,8 @@ export function PayrollManager() {
 
         {/* Payslips Table */}
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-          <table className="w-full text-left">
+          <div className="w-full min-w-0 overflow-auto ">
+          <table className="w-full text-left min-w-[800px]">
             <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
               <tr>
                 <th className="px-6 py-4">Salarié</th>
@@ -1144,6 +1157,7 @@ export function PayrollManager() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     );
@@ -1408,7 +1422,7 @@ export function PayrollManager() {
       />
 
       {/* Mobile Nav for Payroll */}
-      <div className="lg:hidden flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner overflow-x-auto no-scrollbar">
+      <div className="w-full min-w-0 overflow-auto lg:hidden flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner  no-scrollbar">
         {[
           { id: 'dashboard', icon: BarChart3 },
           { id: 'employees', icon: Users },
@@ -1455,8 +1469,8 @@ export function PayrollManager() {
 
       {/* Salary Advance Modal */}
       {isAdvanceModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md p-6">
+        <div className="fixed inset-0 bg-black/50 z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md p-6 flex flex-col">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">
               {editingAdvanceId ? 'Modifier l\'avance' : 'Nouvelle Avance sur Salaire'}
             </h2>
@@ -1533,8 +1547,8 @@ export function PayrollManager() {
       )}
       {/* Employee Modal */}
       {isEmployeeModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-lg p-6">
+        <div className="fixed inset-0 bg-black/50 z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-lg p-6 flex flex-col">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">
               {editingEmployeeId ? 'Modifier le Salarié' : 'Nouveau Salarié'}
             </h2>
@@ -1640,8 +1654,8 @@ export function PayrollManager() {
 
       {/* Payslip Edit Modal */}
       {isPayslipModalOpen && editingPayslip && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-sm p-6">
+        <div className="fixed inset-0 bg-black/50 z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-1">Modifier le Bulletin</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{editingPayslip.name}</p>
             
@@ -1817,8 +1831,8 @@ export function PayrollManager() {
 
       {/* Period Modal */}
       {isPeriodModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-sm p-6">
+        <div className="fixed inset-0 bg-black/50 z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">Nouvelle Période</h2>
             <div className="space-y-4">
               <div>
@@ -1853,8 +1867,8 @@ export function PayrollManager() {
 
       {/* Payment Modal */}
       {isPaymentModalOpen && selectedPeriod && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-sm p-6">
+        <div className="fixed inset-0 bg-black/50 z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">Paiement des Salaires</h2>
             <div className="space-y-4">
               <p className="text-sm text-slate-600 dark:text-slate-400">

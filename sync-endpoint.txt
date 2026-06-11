@@ -1,0 +1,28 @@
+app.post("/api/third-parties/sync", (req, res) => {
+  try {
+    const transaction = db.transaction(() => {
+      // 1. Ensure all clients/suppliers have a proper account 411/401 and it matches names
+      const parties = db.prepare("SELECT * FROM third_parties").all();
+      let syncedCount = 0;
+      
+      for (const p of parties) {
+        // Sync account name
+        db.prepare("UPDATE accounts SET name = ? WHERE code = ?").run(p.name, p.account_code);
+        
+        // If it's an occasional third party, sync the occasional_name in transactions
+        if (p.is_occasional) {
+          db.prepare("UPDATE transactions SET occasional_name = ? WHERE third_party_id = ?").run(p.name, p.id);
+          db.prepare("UPDATE invoices SET occasional_name = ? WHERE third_party_id = ?").run(p.name, p.id);
+        }
+        
+        syncedCount++;
+      }
+      return syncedCount;
+    });
+    
+    const count = transaction();
+    res.json({ success: true, message: `Synchronisation terminée pour ${count} tiers.` });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});

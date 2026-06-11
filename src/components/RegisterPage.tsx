@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Logo } from './Logo';
 import { Link, useNavigate } from 'react-router-dom';
-import { Lock, Mail, User, Loader2, AlertCircle, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Lock, Mail, User, Loader2, AlertCircle, CheckCircle2, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { signInWithGoogle } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
@@ -13,12 +13,20 @@ export function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { setUser } = useAuth();
   const navigate = useNavigate();
 
+  
   const handleGoogleSignIn = async () => {
+    if (!acceptedTerms) {
+      setError('Veuillez accepter les conditions d\'utilisation et la politique de confidentialité.');
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -26,7 +34,7 @@ export function RegisterPage() {
       if (firebaseUser) {
         // Exchange Firebase token for backend JWT
         const idToken = await firebaseUser.getIdToken();
-        const response = await apiFetch('/api/auth/google', {
+        const response = await apiFetch('/api/auth/social', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -260,17 +268,19 @@ export function RegisterPage() {
             )}
 
             <div className="space-y-6">
+              
+            <div className="flex flex-col w-full">
               <button
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-700 active:scale-[0.98] transition-all flex items-center justify-center gap-4 disabled:opacity-70 disabled:cursor-not-allowed shadow-sm hover:shadow-xl hover:shadow-brand-gold/5 group"
+                className="w-full h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-700 active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-70 disabled:cursor-not-allowed shadow-sm hover:shadow-xl hover:shadow-brand-gold/5 group"
               >
                 {loading ? (
                   <Loader2 className="animate-spin text-brand-gold" />
                 ) : (
                   <>
-                    <div className="w-8 h-8 rounded-xl bg-white shadow-sm border border-slate-100 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 p-1.5 shrink-0 overflow-hidden">
+                    <div className="w-7 h-7 rounded-lg bg-white shadow-sm border border-slate-100 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 p-1 shrink-0 overflow-hidden">
                       <SafeImage 
                         src="https://www.gstatic.com/images/branding/googleg/1x/googleg_standard_color_128dp.png" 
                         alt="Google" 
@@ -282,6 +292,8 @@ export function RegisterPage() {
                   </>
                 )}
               </button>
+            </div>
+
 
               <div className="relative">
                 <div className="absolute inset-0 flex items-center">
@@ -329,14 +341,21 @@ export function RegisterPage() {
                     <div className="relative group">
                       <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 dark:text-slate-700 group-focus-within:text-brand-gold transition-colors" size={16} />
                       <input
-                        type="password"
+                        type={showPassword ? "text" : "password"}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        className="w-full h-14 pl-12 pr-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-900 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-brand-gold/10 focus:border-brand-gold outline-none transition-all font-bold text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 shadow-sm text-sm"
+                        className="w-full h-14 pl-12 pr-10 bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-900 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-brand-gold/10 focus:border-brand-gold outline-none transition-all font-bold text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 shadow-sm text-sm"
                         placeholder="••••••••"
                         required
                         minLength={8}
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-brand-gold transition-colors focus:outline-none"
+                      >
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
                     </div>
                   </div>
                   <div className="space-y-3">
@@ -344,14 +363,21 @@ export function RegisterPage() {
                     <div className="relative group">
                       <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 dark:text-slate-700 group-focus-within:text-brand-gold transition-colors" size={16} />
                       <input
-                        type="password"
+                        type={showConfirmPassword ? "text" : "password"}
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
-                        className="w-full h-14 pl-12 pr-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-900 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-brand-gold/10 focus:border-brand-gold outline-none transition-all font-bold text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 shadow-sm text-sm"
+                        className="w-full h-14 pl-12 pr-10 bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-900 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-brand-gold/10 focus:border-brand-gold outline-none transition-all font-bold text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 shadow-sm text-sm"
                         placeholder="••••••••"
                         required
                         minLength={8}
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-brand-gold transition-colors focus:outline-none"
+                      >
+                        {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -362,12 +388,14 @@ export function RegisterPage() {
                       type="checkbox" 
                       id="terms" 
                       required
+                      checked={acceptedTerms}
+                      onChange={(e) => setAcceptedTerms(e.target.checked)}
                       className="peer w-5 h-5 rounded-lg border-slate-200 dark:border-slate-800 text-brand-gold focus:ring-brand-gold bg-white dark:bg-slate-800 transition-all cursor-pointer appearance-none border checked:bg-brand-gold checked:border-brand-gold"
                     />
                     <CheckCircle2 className="absolute w-3.5 h-3.5 text-white opacity-0 peer-checked:opacity-100 left-0.5 pointer-events-none transition-opacity" />
                   </div>
                   <label htmlFor="terms" className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400 cursor-pointer select-none font-bold uppercase tracking-wider">
-                    J'accepte les <a href="#" className="text-brand-gold hover:underline">Conditions</a> et la <a href="#" className="text-brand-gold hover:underline">Confidentialité</a>.
+                    J'accepte les <Link to="/terms" className="text-brand-gold hover:underline">Conditions</Link> et la <Link to="/privacy" className="text-brand-gold hover:underline">Confidentialité</Link>.
                   </label>
                 </div>
 

@@ -46,7 +46,7 @@ export function CurrencyAnalyzer() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: "gemini-3-flash-preview",
+          model: "gemini-3.5-flash",
           contents: prompt,
           config: {
             tools: [{ googleSearch: {} }],

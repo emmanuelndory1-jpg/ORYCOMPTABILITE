@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveCo
 import { useCurrency } from '@/hooks/useCurrency';
 import { Loader2, AlertCircle, Info, Sparkles, Download } from 'lucide-react';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 interface CategoryData {
   id: number;
@@ -99,7 +99,7 @@ export function BudgetDashboard({ year, month }: { year: number; month: number }
       c.budget > 0 ? `${(((c.actual + c.engaged) / c.budget) * 100).toFixed(1)}%` : '-'
     ]);
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: 65,
       head: [['Catégorie', 'Budget', 'Réalisé', 'Engagé', 'Dipo.', '% Utilisé']],
       body: tableData,

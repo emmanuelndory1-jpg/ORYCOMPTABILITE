@@ -117,7 +117,7 @@ export function RecurringInvoiceManager() {
       </div>
 
       <div className="bg-card border rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-auto ">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-muted/50 border-bottom">
@@ -223,7 +223,7 @@ export function RecurringInvoiceManager() {
 
       <AnimatePresence>
         {showEditor && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex justify-center p-4 bg-background/80 backdrop-blur-sm items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}

@@ -60,7 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(true);
         try {
           const idToken = await firebaseUser.getIdToken();
-          const response = await apiFetch('/api/auth/google', {
+          const response = await apiFetch('/api/auth/social', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -110,6 +110,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const sessionStartTime = Date.now();
+
+    const handleBeforeUnload = () => {
+      const durationMs = Date.now() - sessionStartTime;
+      const token = localStorage.getItem('token');
+      // Only log if connection lasted more than 5 seconds
+      if (token && durationMs > 5000) {
+        apiFetch('/api/audit/session', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ durationMs }),
+          keepalive: true
+        }).catch(console.error);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      
+      // Attempt to log duration on component unmount (e.g. user manually logging out) if token still exists
+      const durationMs = Date.now() - sessionStartTime;
+      const token = localStorage.getItem('token');
+      if (token && durationMs > 5000) {
+        // use sendBeacon or fetch since it's unmounting
+        apiFetch('/api/audit/session', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ durationMs }),
+          keepalive: true
+        }).catch(() => {});
+      }
+    };
+  }, [user]);
 
   const logout = async () => {
     setLoading(true);

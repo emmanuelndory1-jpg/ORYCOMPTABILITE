@@ -12,10 +12,24 @@ const ai = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req)
       });
+      
+      let contentType = response.headers.get('content-type');
+      let isJson = contentType && contentType.includes('application/json');
+      
       if (!response.ok) {
+        if (isJson) {
+           const errData = await response.json().catch(() => null);
+           throw new Error(errData?.error || 'HTTP ' + response.status + ': ' + (errData?.message || 'Unknown error'));
+        }
         throw new Error([429, 503].includes(response.status) ? String(response.status) : 'HTTP ' + response.status);
       }
-      return await response.json();
+      
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        throw new Error("Invalid non-JSON response from server: " + text.substring(0, 50));
+      }
     }
   }
 };
@@ -29,7 +43,7 @@ const MIN_REQUEST_INTERVAL = 1000; // 1 second minimum gap between requests
 /**
  * Helper to wrap AI requests with exponential backoff and retry logic for 429 errors.
  */
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 4): Promise<T> {
   let lastError: any;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -45,22 +59,31 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
     } catch (error: any) {
       lastError = error;
       const errorString = error?.message || String(error);
+      const isDailyQuota = errorString.includes('GenerateRequestsPerDay');
       const isRateLimit = errorString.includes('429') || 
                          errorString.includes('503') ||
                          errorString.includes('UNAVAILABLE') ||
                          errorString.includes('RESOURCE_EXHAUSTED') ||
                          errorString.includes('quota');
 
-      if (isRateLimit && attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 2000 + Math.random() * 1000; // Increased base delay
-        console.warn(`Gemini rate limited (429). Retrying in ${Math.round(delay)}ms... (Attempt ${attempt + 1}/${maxRetries})`);
+      if (isRateLimit && !isDailyQuota && attempt < maxRetries) {
+        let delay = Math.pow(2, attempt) * 2000 + Math.random() * 1000;
+        
+        // Try to parse the suggested retry delay from the error message
+        const retryMatch = errorString.match(/retry in\s+([\d.]+)s/i);
+        if (retryMatch && retryMatch[1]) {
+           const suggestedDelay = parseFloat(retryMatch[1]) * 1000;
+           delay = Math.max(delay, suggestedDelay + 1000); // Take the max, add 1s buffer
+        }
+        
+        console.warn(`Gemini rate limited or unavailable. Retrying in ${Math.round(delay)}ms... (Attempt ${attempt + 1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
       
-      // If it's a 429 and we're out of retries, throw a descriptive error
-      if (isRateLimit) {
-        throw new Error("L'IA est actuellement surchargée. Veuillez patienter un instant avant de réessayer.");
+      // If we're out of retries or it's a hard limit, throw a descriptive error
+      if (isRateLimit || isDailyQuota) {
+        throw new Error(isDailyQuota ? "Quota d'utilisation IA de base atteint pour aujourd'hui. Veuillez revenir demain." : "L'IA est actuellement surchargée ou en cours de refroidissement (trop de requêtes). Veuillez patienter un instant avant de réessayer.");
       }
       throw error;
     }
@@ -136,7 +159,7 @@ export const parseNaturalLanguageEntry = async (text: string): Promise<NaturalLa
     `;
     
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -236,7 +259,7 @@ export const analyzeInvoice = async (
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: {
         parts: [
           { text: prompt },
@@ -381,10 +404,10 @@ export const suggestJournalEntry = async (
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: {
-        systemInstruction: "You are an expert accountant for the OHADA region. Provide journal entry suggestions in JSON format. Ensure the sum of debits equals the sum of credits.",
+        systemInstruction: "You are a master chief accountant specializing in the OHADA revised sysco system. Output must be strictly valid JSON. Double-check that all debits and credits perfectly balance. Include a brief, insightful explanation for the client.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -452,7 +475,7 @@ export const suggestCorrection = async (
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: {
         systemInstruction: "You are an expert forensic accountant for the OHADA region. Provide corrected journal entries in JSON format. Ensure the sum of debits equals the sum of credits.",
@@ -504,7 +527,7 @@ export const getQuickInsight = async (data: any) => {
     - Réponds en Français.`;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: systemPrompt,
     }));
 
@@ -512,6 +535,36 @@ export const getQuickInsight = async (data: any) => {
   } catch (error: any) {
     console.warn("AI Insight temporairement indisponible:", error.message);
     return "Optimisez vos flux de trésorerie en suivant vos créances de près.";
+  }
+};
+
+export const generateComprehensiveDashboardReport = async (dashboardData: any) => {
+  try {
+    const systemPrompt = `Tu es ORY, l'analyste financier en chef (Directeur Financier Virtuel).
+    Génère un rapport d'analyse exécutif exhaustif et percutant basé sur toutes les données du tableau de bord d'entreprise fournies.
+    
+    DONNÉES DU TABLEAU DE BORD :
+    ${JSON.stringify(dashboardData)}
+    
+    CONSIGNES :
+    - Structure ton rapport en Markdown clair et très élégant (titres, puces, texte en gras).
+    - Divise en 4 sections : 
+      1. Synthèse Executive (Le constat général, 2 lignes max)
+      2. Analyse de la Rentabilité et Trésorerie (Qu'est-ce qui va et ne va pas)
+      3. Points de Vigilance (Délai client/fournisseur, échéances critiques)
+      4. Recommandations Stratégiques Actionnables (3 étapes prioritaires pour le mois)
+    - Sois précis, cite les chiffres fournis dans ton analyse. S'ils sont à 0, adapte l'analyse en suggérant de clôturer l'exercice ou de saisir les écritures.
+    - Utilise le français professionnel. Sois direct, pas de blabla.`;
+
+    const response = await withRetry(() => ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: systemPrompt,
+    }));
+
+    return response.text;
+  } catch (error: any) {
+    console.error("Error generating comprehensive dashboard report:", error);
+    return "Désolé, l'analyse exhaustive n'a pas pu être générée. Veuillez réessayer.";
   }
 };
 
@@ -547,7 +600,7 @@ export const generateAudit = async (auditData: any) => {
     Format JSON strictement obligatoire.`;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: "Génère l'audit financier complet.",
       config: {
         systemInstruction: systemPrompt,
@@ -597,7 +650,7 @@ export const generateAudit = async (auditData: any) => {
 
 export const getP2PAdvice = async (p2pData: any) => {
   try {
-    const systemPrompt = `Tu es un expert en gestion de la chaîne d'approvisionnement (Procure-to-Pay) spécialisé dans le contexte OHADA.
+    const systemPrompt = `Tu es un expert mondial en Supply Chain et Procure-to-Pay, avec une spécialisation pointue sur les pratiques OHADA/UEMOA. Analyse ces données pour donner des conseils ayant un fort RSI (Retour sur Investissement).
     Analyse les données suivantes et donne de 1 à 3 conseils stratégiques courts pour optimiser les achats, la trésorerie ou la relation fournisseur.
     
     DONNÉES P2P :
@@ -612,7 +665,7 @@ export const getP2PAdvice = async (p2pData: any) => {
     - Réponds en Français sous forme de tableau de strings.`;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: systemPrompt,
       config: {
         responseMimeType: "application/json",
@@ -679,7 +732,7 @@ export const suggestAccountCode = async (
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: {
         systemInstruction: "Tu es un expert-comptable senior spécialisé en SYSCOHADA. Ton rôle est d'aider à la classification précise des opérations comptables. Retourne toujours un objet contenant un tableau de suggestions.",
@@ -789,7 +842,7 @@ export const analyzeTaxDocument = async (imageBase64: string): Promise<TaxDocume
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: {
         parts: [
           { text: prompt },
@@ -870,7 +923,7 @@ export const getTaxCompliance = async (message: string, imageBase64?: string | n
     }
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: { parts },
       config: {
         systemInstruction: "Tu es un expert en fiscalité OHADA (UEMOA/CEMAC). Ton rôle est d'aider les entreprises à rester en conformité avec les Codes Généraux des Impôts locaux. Réponds de manière précise, cite les articles de loi si possible, et sois pédagogique.",
@@ -912,7 +965,7 @@ export const aiReconcileBank = async (bankEntries: any[], internalEntries: any[]
     `;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: {
         systemInstruction: "Tu es un expert en audit bancaire. Ton but est de réconcilier parfaitement les comptes bancaires avec la comptabilité.",
@@ -982,21 +1035,29 @@ export const askAssistant = async (
       ]
     }));
 
-    const systemInstruction = `Tu es l'assistant intelligent d'ORYCOMPTA, une plateforme de gestion comptable et financière pour l'espace OHADA.
-    Ton rôle est d'aider l'utilisateur dans sa gestion quotidienne : comptabilité, fiscalité, paie, trésorerie.
-    
-    CONTEXTE ACTUEL :
-    ${context ? JSON.stringify(context) : 'Aucun contexte spécifique fourni.'}
-    
-    DIRECTIVES :
-    1. Sois professionnel, précis et pédagogique.
-    2. Utilise le format Markdown pour tes réponses.
-    3. Si l'utilisateur pose une question fiscale, utilise tes outils de recherche pour vérifier les dernières lois OHADA/UEMOA.
-    4. Si l'utilisateur demande une analyse de document (image), sois très précis sur les montants et les dates.
-    5. Ne donne jamais de conseils d'investissement, reste sur la gestion comptable et fiscale.`;
+    const systemInstruction = `Tu es ORY, l'assistant IA de confiance et expert ultra-précis de la plateforme ORYCOMPTA (gestion comptable, analytique, budgétaire, fiscale et RH sous le référentiel SYSCOHADA révisé).
+
+IMPORTANT : L'utilisateur exige une exactitude absolue. Absolument toutes les informations fournies — chiffres, nombres, libellés de comptes, noms, lettres, calculs et statuts — doivent être rigoureusement exactes, vérifiées et conformes aux données réelles de l'application et de l'entreprise.
+
+CONSIGNES DE SÉCURITÉ ET D'EXACTITUDE :
+1. N'invente, ne simule, ni n'estime JAMAIS de chiffres ou de noms de comptes ou de pièces comptables. Reste humble face aux limites de ton contexte.
+2. Pour toute question financière ou budgétaire, utilise SYSTÉMATIQUEMENT les outils à ta disposition :
+   - 'get_accounting_summary' : pour obtenir la synthèse financière exacte (soldes réels, CA mensuel, créances clients, dettes fournisseurs).
+   - 'get_recent_transactions' : pour inspecter les écritures comptables réelles du journal (débit/crédit, comptes de la classe 1 à 8).
+   - 'get_outstanding_invoices' : pour citer précisément les factures de tiers (clients/fournisseurs) en retard ou impayées.
+   - 'get_budget_status' : pour comparer le réel au prévisionnel.
+   - 'get_auditor_recommendations' : pour déceler l'ensemble des anomalies réelles (écarts de rapprochement bancaire, écritures déséquilibrées).
+3. Si un utilisateur te demande les chiffres de ses comptes, de son entreprise, de sa trésorerie ou de ses factures, appelle immédiatement l'outil adéquat, traite le retour, puis présente-lui les données réelles en indiquant explicitement la source des données ("Vérifié en temps réel dans vos registres comptables OHADA").
+4. Pour toute question de doctrine comptable ou fiscale, utilise 'googleSearch' si tu as le moindre doute, afin d'assurer une réponse parfaitement conforme aux décrets, bulletins officiels locaux ou dispositions du Code Général des Impôts (CGI) des pays membres de l'UEMOA/CEMAC.
+5. Utilise un format Markdown soigné (tableaux pour les listes de chiffres, listes à puces claires, caractères gras pour faire ressortir les soldes ou termes cardinaux).
+
+CONTEXTE ACTUEL TRANSMIS :
+${context ? JSON.stringify(context) : 'Aucun contexte spécifique fourni.'}
+
+Garde un ton professionnel, précis, rassurant et rigoureux.`;
 
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash",
       contents: chatHistory,
       config: {
         systemInstruction,
@@ -1021,7 +1082,7 @@ export const askAssistant = async (
     return text;
   } catch (error) {
     console.error("Error in askAssistant:", error);
-    return "Désolé, je n'ai pas pu traiter votre demande pour le moment.";
+    return "Désolé, je n'ai pas pu traiter votre demande pour le moment. Une erreur s'est produite lors de la connexion pour récupérer vos informations réelles.";
   }
 };
 
@@ -1032,7 +1093,7 @@ export const askGemini = async (prompt: string, history: { role: 'user' | 'model
   ];
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-3.5-flash",
     contents,
     config: {
       systemInstruction: "You are a highly accurate accounting and business assistant specializing in the OHADA (Organization for the Harmonization of Business Law in Africa) region. Your primary goal is to provide verified, factually correct information. Always use Google Search to verify tax laws, business regulations, and current financial standards if you are not 100% certain. Cite your sources when possible.",
@@ -1058,9 +1119,91 @@ export const askGemini = async (prompt: string, history: { role: 'user' | 'model
   return text;
 };
 
+export const generateCashFlowForecast = async (historicalData: any, scenarios: any[]) => {
+  const prompt = `
+En tant qu'expert financier et analyste de trésorerie (système OHADA), analyse les données historiques suivantes (y-compris les factures récurrentes) et génère une prévision de trésorerie détaillée sur les 90 prochains jours (3 mois).
+Prends en compte les scénarios hypothétiques (What-If) fournis par l'utilisateur pour simuler leur impact.
+
+## Données historiques et factures récurrentes et état actuel:
+${JSON.stringify(historicalData, null, 2)}
+
+## Scénarios "What-If" à appliquer:
+${JSON.stringify(scenarios, null, 2)}
+
+Tu dois renvoyer le résultat au format JSON STRICT respectant la structure suivante:
+{
+  "forecastPoints": [
+    { "day": "YYYY-MM-DD", "solde": 15000200, "inflow": 500000, "outflow": 200000 }
+  ],
+  "alerts": [
+    {
+      "date": "YYYY-MM-DD",
+      "type": "warning" | "critical" | "opportunity",
+      "message": "Message explicatif de l'alerte"
+    }
+  ],
+  "insights": "Analyse textuelle détaillée (paragraphe) des tendances et de l'impact des scénarios."
+}
+
+Consignes:
+- Applique des modèles saisonniers basés sur l'historique fourni.
+- Calcule rigoureusement l'impact des scénarios aux dates spécifiées.
+- Les jours doivent être consécutifs sans trou.
+- Formate la réponse uniquement en JSON.
+`;
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: "gemini-3.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction: "Tu es un directeur de la trésorerie expert du système OHADA. Tu ne réponds qu'au format JSON.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          forecastPoints: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                day: { type: Type.STRING },
+                solde: { type: Type.NUMBER },
+                inflow: { type: Type.NUMBER },
+                outflow: { type: Type.NUMBER }
+              },
+              required: ["day", "solde", "inflow", "outflow"]
+            }
+          },
+          alerts: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                date: { type: Type.STRING },
+                type: { type: Type.STRING, enum: ["warning", "critical", "opportunity"] },
+                message: { type: Type.STRING }
+              },
+              required: ["date", "type", "message"]
+            }
+          },
+          insights: { type: Type.STRING }
+        },
+        required: ["forecastPoints", "alerts", "insights"]
+      }
+    }
+  }));
+
+  try {
+    return parseSafeJSON(response.text);
+  } catch (err) {
+    console.error("Erreur parsing LLM:", err);
+    throw new Error("Impossible d'analyser les prévisions : " + err);
+  }
+};
+
 export const findNearbyBusinessResources = async (query: string, location?: { latitude: number, longitude: number }) => {
   const response = await withRetry(() => ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-3.5-flash",
     contents: query,
     config: {
       tools: [{ googleMaps: {} }],

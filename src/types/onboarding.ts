@@ -61,9 +61,11 @@ export interface OnboardingData {
   taxRegime: string;
   vatSubject: boolean;
   vatRate: number;
+  taxesEnabled?: boolean;
 
   // Capital
   capitalAmount: number;
+  cashCalledPercentage: number;
   partners: PartnerContribution[];
   constitutionCosts: number;
 

@@ -3,13 +3,13 @@ import { BudgetCategoriesSetup } from './BudgetCategoriesSetup';
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
 import { PageHeader } from './ui/PageHeader';
-import { Target, Save, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, History, BarChart3, Plus, FileText, Trash2, LayoutDashboard, Settings2, Upload, Download } from 'lucide-react';
+import { Target, Save, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, History, BarChart3, Plus, FileText, Trash2, LayoutDashboard, Settings2, Upload, Download, Copy } from 'lucide-react';
 import { useFiscalYear } from '@/context/FiscalYearContext';
 import { useCurrency } from '@/hooks/useCurrency';
 import { cn } from '@/lib/utils';
 import Papa from 'papaparse';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 
 interface ExpenseAccount {
@@ -50,7 +50,7 @@ interface Revision {
 export function BudgetManager() {
   const { formatCurrency, currency } = useCurrency();
   const { activeYear } = useFiscalYear();
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'categories' | 'elaboration' | 'monitoring' | 'engagements' | 'reporting'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'comparative' | 'categories' | 'elaboration' | 'monitoring' | 'engagements' | 'reporting'>('dashboard');
 
   const [accounts, setAccounts] = useState<ExpenseAccount[]>([]);
   const [budgetStatus, setBudgetStatus] = useState<BudgetStatus[]>([]);
@@ -90,7 +90,7 @@ export function BudgetManager() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      if (activeTab === 'elaboration' || activeTab === 'monitoring') {
+      if (activeTab === 'elaboration' || activeTab === 'monitoring' || activeTab === 'comparative') {
         const [accRes, statRes] = await Promise.all([
           apiFetch('/api/accounts/expenses'),
           apiFetch(`/api/budgets/status?year=${currentYear}&month=${currentMonth}`)
@@ -167,6 +167,44 @@ export function BudgetManager() {
       setMessage({ type: 'error', text: err.message });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDuplicatePreviousMonth = async () => {
+    let fromMonth = currentMonth - 1;
+    let fromYear = currentYear;
+    if (fromMonth === 0) {
+      fromMonth = 12;
+      fromYear--;
+    }
+
+    if (!window.confirm(`Voulez-vous dupliquer les budgets de la période ${fromMonth}/${fromYear} vers ${currentMonth}/${currentYear} ?`)) {
+      return;
+    }
+
+    try {
+      const res = await apiFetch('/api/budgets/duplicate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from_month: fromMonth,
+          from_year: fromYear,
+          to_month: currentMonth,
+          to_year: currentYear
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setMessage({ type: 'success', text: `${data.count} budgets dupliqués avec succès.` });
+        fetchData();
+      } else {
+        const errData = await res.json();
+        setMessage({ type: 'error', text: errData.error || 'Erreur lors de la duplication.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage({ type: 'error', text: 'Erreur réseau.' });
     }
   };
 
@@ -268,7 +306,7 @@ export function BudgetManager() {
       formatCurrency(s.available)
     ]);
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: 30,
       head: [['Compte', 'Description', 'Budget', 'Engagé', 'Réalisé', 'Disponible']],
       body: tableData,
@@ -281,7 +319,7 @@ export function BudgetManager() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 w-full">
       <PageHeader
         title="Gestion Budgétaire"
         subtitle="Contrôle de l'engagement, suivi réalisé vs prévisionnel."
@@ -304,6 +342,14 @@ export function BudgetManager() {
             
             {activeTab === 'elaboration' && (
               <>
+                <button 
+                  onClick={handleDuplicatePreviousMonth}
+                  className="bg-brand-gold/10 dark:bg-brand-gold/20 text-brand-gold dark:text-brand-gold border border-brand-gold/20 dark:border-brand-gold/30 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-brand-gold/20 dark:hover:bg-brand-gold/30 transition-all"
+                  title="Dupliquer le budget du mois précédent vers ce mois"
+                >
+                  <Copy size={18} />
+                  Dupliquer M-1
+                </button>
                 <button 
                   onClick={() => fileInputRef.current?.click()}
                   className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
@@ -330,7 +376,7 @@ export function BudgetManager() {
               </>
             )}
 
-            {(activeTab === 'monitoring' || activeTab === 'elaboration') && (
+            {(activeTab === 'monitoring' || activeTab === 'elaboration' || activeTab === 'comparative') && (
               <button 
                 onClick={handleExportPDF}
                 className="bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
@@ -353,7 +399,8 @@ export function BudgetManager() {
         }
       />
 
-      <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800/50 rounded-xl w-fit flex-wrap">
+      <div className="w-full min-w-0 overflow-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-hide">
+      <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800/50 rounded-xl w-max sm:w-fit min-w-full sm:min-w-0">
         <button 
           onClick={() => setActiveTab('dashboard')}
           className={cn(
@@ -363,6 +410,16 @@ export function BudgetManager() {
         >
           <LayoutDashboard size={16} />
           Tableau de Bord
+        </button>
+        <button 
+          onClick={() => setActiveTab('comparative')}
+          className={cn(
+            "px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2", 
+            activeTab === 'comparative' ? "bg-white dark:bg-slate-900 shadow-sm text-brand-green" : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          <BarChart3 size={16} />
+          Comparatif (Budget vs Réel)
         </button>
         <button 
           onClick={() => setActiveTab('categories')}
@@ -415,6 +472,7 @@ export function BudgetManager() {
           Reporting
         </button>
       </div>
+      </div>
 
       {message && (
         <div className={cn("p-4 rounded-xl flex items-center gap-3 animate-in slide-in-from-top-2", 
@@ -433,9 +491,105 @@ export function BudgetManager() {
         <BudgetCategoriesSetup />
       )}
 
+      {activeTab === 'comparative' && (
+        <div className="space-y-6">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <Target className="text-brand-green" size={20} />
+                Tableau Comparatif (Budget vs Réel)
+              </h3>
+            </div>
+            <div className="w-full min-w-0 overflow-auto ">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Compte / Description</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Budget Alloué</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Total Réalisé + Engagé</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Écart (Variance)</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Alertes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {loading ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <tr key={i} className="animate-pulse">
+                        <td className="px-6 py-4"><div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-48" /></td>
+                        <td className="px-6 py-4 text-right"><div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-20 ml-auto" /></td>
+                        <td className="px-6 py-4 text-right"><div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-20 ml-auto" /></td>
+                        <td className="px-6 py-4 text-right"><div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-24 ml-auto" /></td>
+                        <td className="px-6 py-4 text-center"><div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-24 mx-auto" /></td>
+                      </tr>
+                    ))
+                  ) : budgetStatus.length === 0 ? (
+                    <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-500 italic">Aucune donnée budgétaire pour cette période.</td></tr>
+                  ) : budgetStatus.map((s) => {
+                    const consumed = s.engaged + s.actual;
+                    const variance = s.budget - consumed; // Positive is good, negative is overspent
+                    const consumption = s.budget > 0 ? (consumed / s.budget) * 100 : (consumed > 0 ? 100 : 0);
+                    const isOver = variance < 0;
+                    const isWarning = consumption >= 80 && consumption < 100;
+
+                    return (
+                      <tr key={s.account_code} className={cn("hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors", isOver && "bg-rose-50/50 dark:bg-rose-900/10")}>
+                        <td className="px-6 py-5">
+                          <div className={cn("text-sm font-bold truncate max-w-[250px]", isOver ? "text-rose-900 dark:text-rose-400" : "text-slate-900 dark:text-white")}>{s.account_name}</div>
+                          <div className="text-xs text-slate-500 font-mono mt-0.5">{s.account_code}</div>
+                        </td>
+                        <td className="px-6 py-5 text-right text-sm font-bold text-slate-600 dark:text-slate-300">
+                          {formatCurrency(s.budget)}
+                        </td>
+                        <td className="px-6 py-5 text-right">
+                          <div className="text-sm font-bold text-slate-900 dark:text-white">{formatCurrency(consumed)}</div>
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            dont {formatCurrency(s.actual)} réalisé
+                          </div>
+                        </td>
+                        <td className="px-6 py-5 text-right">
+                          <div className={cn("text-sm font-black tracking-tight", 
+                            isOver ? "text-rose-600 dark:text-rose-400" : 
+                            isWarning ? "text-amber-500" : "text-emerald-500"
+                          )}>
+                            {isOver ? '-' : '+'}{formatCurrency(Math.abs(variance))}
+                          </div>
+                          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">
+                            {consumption.toFixed(1)}% Consommé
+                          </div>
+                        </td>
+                        <td className="px-6 py-5 text-center flex justify-center items-center h-full">
+                          {isOver ? (
+                            <span className="flex flex-col items-center gap-1 group">
+                              <span className="px-3 py-1 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 text-xs font-black uppercase tracking-widest flex items-center gap-1 shadow-sm">
+                                <AlertCircle size={14} className="animate-pulse" />
+                                Dépassement
+                              </span>
+                            </span>
+                          ) : isWarning ? (
+                            <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-black uppercase tracking-widest flex items-center gap-1">
+                              <AlertCircle size={14} />
+                              Attention
+                            </span>
+                          ) : (
+                            <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-xs font-black uppercase tracking-widest flex items-center gap-1">
+                              <CheckCircle2 size={14} />
+                              Dans le budget
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeTab === 'monitoring' && (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="w-full min-w-0 overflow-auto ">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
@@ -497,13 +651,14 @@ export function BudgetManager() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
-        </div>
       )}
 
       {activeTab === 'elaboration' && (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-          <table className="w-full text-left border-collapse">
+          <div className="w-full min-w-0 overflow-auto ">
+          <table className="w-full text-left border-collapse min-w-[800px]">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Compte de Charge</th>
@@ -547,12 +702,14 @@ export function BudgetManager() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
       {activeTab === 'engagements' && (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-          <table className="w-full text-left border-collapse">
+          <div className="w-full min-w-0 overflow-auto ">
+          <table className="w-full text-left border-collapse min-w-[800px]">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800">
                 <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</th>
@@ -603,6 +760,7 @@ export function BudgetManager() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -701,8 +859,8 @@ export function BudgetManager() {
       </div>
 
       {showRevisions && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex justify-center z-50 p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300 flex flex-col">
             <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <History className="text-brand-green" />
@@ -713,8 +871,8 @@ export function BudgetManager() {
                 className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-400 transition-colors"
               >✕</button>
             </div>
-            <div className="p-6 max-h-[400px] overflow-y-auto">
-              <table className="w-full text-left border-collapse">
+            <div className="w-full min-w-0 overflow-auto p-6 max-h-[400px] overflow-y-auto ">
+              <table className="w-full text-left border-collapse min-w-[500px]">
                 <thead>
                   <tr className="border-b text-xs uppercase text-slate-400">
                     <th className="py-2">Date</th>
@@ -744,8 +902,8 @@ export function BudgetManager() {
       )}
 
       {showEngagementForm && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex justify-center z-50 p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300 flex flex-col">
             <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <Plus className="text-brand-green" />

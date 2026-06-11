@@ -1,0 +1,391 @@
+src/components/DialogProvider.tsx:    <DialogContext.Provider value={{ alert, confirm }}>
+src/components/ComplianceAudit.tsx:                      value={correctingTx.date}
+src/components/ComplianceAudit.tsx:                      value={correctingTx.reference}
+src/components/ComplianceAudit.tsx:                      value={correctingTx.description}
+src/components/ComplianceAudit.tsx:                                  value={entry.account_code}
+src/components/ComplianceAudit.tsx:                                value={entry.debit || ''}
+src/components/ComplianceAudit.tsx:                                value={entry.credit || ''}
+src/components/Treasury.tsx:                  value={transferData.fromAccount}
+src/components/Treasury.tsx:                    <option key={acc.code} value={acc.code}>
+src/components/Treasury.tsx:                  value={transferData.toAccount}
+src/components/Treasury.tsx:                    <option key={acc.code} value={acc.code}>
+src/components/Treasury.tsx:                  value={transferData.amount}
+src/components/Treasury.tsx:                  value={transferData.description}
+src/components/Treasury.tsx:                  value={transferData.date}
+src/components/InvoiceEditor.tsx:                          value={tpSearch}
+src/components/InvoiceEditor.tsx:                  value={occasionalName}
+src/components/InvoiceEditor.tsx:                        value={item.description}
+src/components/InvoiceEditor.tsx:                        value={item.quantity}
+src/components/InvoiceEditor.tsx:                        value={item.unit_price}
+src/components/InvoiceEditor.tsx:                        value={item.vat_rate}
+src/components/InvoiceEditor.tsx:                        <option value={18}>18%</option>
+src/components/InvoiceEditor.tsx:                        <option value={10}>10%</option>
+src/components/InvoiceEditor.tsx:                        <option value={5}>5%</option>
+src/components/InvoiceEditor.tsx:                        <option value={0}>0%</option>
+src/components/InvoiceEditor.tsx:                        value={item.account_code || '701'}
+src/components/InvoiceEditor.tsx:                          <option key={acc.code} value={acc.code}>{acc.code} - {acc.name}</option>
+src/components/InvoiceEditor.tsx:                  value={date}
+src/components/InvoiceEditor.tsx:                  value={dueDate || ''}
+src/components/InvoiceEditor.tsx:                    value={currency}
+src/components/InvoiceEditor.tsx:                      value={exchangeRate}
+src/components/InvoiceEditor.tsx:                  value={notes}
+src/components/InvoiceEditor.tsx:                  value={terms}
+src/components/ExpertAdvisor.tsx:              value={input}
+src/components/PayrollSettingsManager.tsx:            value={rule.rate ? (rule.rate * 100).toFixed(3) : ''}
+src/components/PayrollSettingsManager.tsx:            value={rule.ceiling || ''}
+src/components/PayrollSettingsManager.tsx:                    value={companySettings?.tax_regime || ''}
+src/components/PayrollSettingsManager.tsx:                        value={simGross}
+src/components/PayrollSettingsManager.tsx:                        value={simParts}
+src/components/PayrollSettingsManager.tsx:                          value={b.min_value}
+src/components/PayrollSettingsManager.tsx:                          value={b.max_value || ''}
+src/components/PayrollSettingsManager.tsx:                            value={b.rate * 100}
+src/components/PayrollSettingsManager.tsx:                          value={b.deduction}
+src/components/PayrollSettingsManager.tsx:                          value={b.min_value}
+src/components/PayrollSettingsManager.tsx:                          value={b.max_value || ''}
+src/components/PayrollSettingsManager.tsx:                            value={b.rate * 100}
+src/components/PayrollSettingsManager.tsx:                          value={b.deduction}
+src/components/PayrollSettingsManager.tsx:                          value={r.parts}
+src/components/PayrollSettingsManager.tsx:                            value={rule.name}
+src/components/PayrollSettingsManager.tsx:                          value={rule.type}
+src/components/PayrollSettingsManager.tsx:                          value={rule.formula}
+src/components/CashFlowForecast.tsx:                    value={newScenario.name} onChange={(e) => setNewScenario({...newScenario, name: e.target.value})}
+src/components/CashFlowForecast.tsx:                    <select value={newScenario.type} onChange={(e) => setNewScenario({...newScenario, type: e.target.value as any})} className="flex-1 text-sm bg-slate-50 dark:bg-slate-800 border-none rounded-xl p-3 font-medium">
+src/components/CashFlowForecast.tsx:                    value={newScenario.amount || ''} onChange={(e) => setNewScenario({...newScenario, amount: Number(e.target.value)})}
+src/components/CashFlowForecast.tsx:                    value={newScenario.date} onChange={(e) => setNewScenario({...newScenario, date: e.target.value})}
+src/components/CustomReports.tsx:                      value={startDate}
+src/components/CustomReports.tsx:                      value={endDate}
+src/components/RecurringTransactions.tsx:            value={searchQuery}
+src/components/RecurringTransactions.tsx:                      value={formData.description}
+src/components/RecurringTransactions.tsx:                      value={formData.frequency}
+src/components/RecurringTransactions.tsx:                      value={formData.category}
+src/components/RecurringTransactions.tsx:                      value={formData.next_date}
+src/components/RecurringTransactions.tsx:                      value={formData.end_date}
+src/components/RecurringTransactions.tsx:                      value={formData.max_occurrences}
+src/components/RecurringTransactions.tsx:                            value={line.account_code}
+src/components/RecurringTransactions.tsx:                            value={line.debit || ''}
+src/components/RecurringTransactions.tsx:                            value={line.credit || ''}
+src/components/RecurringTransactions.tsx:                            value={line.description || ''}
+src/components/Accounts.tsx:              value={searchTerm}
+src/components/Accounts.tsx:                  value={code}
+src/components/Accounts.tsx:                  value={name}
+src/components/Accounts.tsx:                  value={type}
+src/components/Accounts.tsx:                        value={columnMapping.code}
+src/components/Accounts.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/Accounts.tsx:                        value={columnMapping.name}
+src/components/Accounts.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/Accounts.tsx:                        value={columnMapping.class}
+src/components/Accounts.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/Accounts.tsx:                        value={columnMapping.type}
+src/components/Accounts.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/PayrollWizard.tsx:                      value={period.month}
+src/components/PayrollWizard.tsx:                        <option key={i + 1} value={i + 1}>{getMonthName(i + 1)}</option>
+src/components/PayrollWizard.tsx:                      value={period.year}
+src/components/PayrollWizard.tsx:                        <option key={y} value={y}>{y}</option>
+src/components/PayrollWizard.tsx:                      value={paymentAccount}
+src/components/PayrollWizard.tsx:                      <option value={companySettings?.payment_bank_account || '521'}>Banque ({companySettings?.payment_bank_account || '521'})</option>
+src/components/PayrollWizard.tsx:                      <option value={companySettings?.payment_cash_account || '571'}>Caisse ({companySettings?.payment_cash_account || '571'})</option>
+src/components/PayrollWizard.tsx:                      <option value={companySettings?.payment_mobile_account || '585'}>Mobile Money ({companySettings?.payment_mobile_account || '585'})</option>
+src/components/PayrollWizard.tsx:                          value={bonus.label}
+src/components/PayrollWizard.tsx:                          value={bonus.amount || ''}
+src/components/PayrollWizard.tsx:                          value={deduction.label}
+src/components/PayrollWizard.tsx:                          value={deduction.amount || ''}
+src/components/GeneralLedger.tsx:            value={startDate}
+src/components/GeneralLedger.tsx:            value={endDate}
+src/components/GeneralLedger.tsx:              value={accountFilter}
+src/components/GeneralLedger.tsx:              value={descriptionSearch}
+src/components/VATDeclaration.tsx:            value={period.month}
+src/components/VATDeclaration.tsx:              <option key={m} value={m}>{getMonthName(m)}</option>
+src/components/VATDeclaration.tsx:            value={period.year}
+src/components/VATDeclaration.tsx:              <option key={y} value={y}>{y}</option>
+src/components/CompanyCreation.tsx:                    value={formData.name}
+src/components/CompanyCreation.tsx:                    value={formData.legalForm}
+src/components/CompanyCreation.tsx:                    {LEGAL_FORMS.map(f => <option key={f} value={f}>{f}</option>)}
+src/components/CompanyCreation.tsx:                    value={formData.managerName}
+src/components/CompanyCreation.tsx:                    value={formData.rccm}
+src/components/CompanyCreation.tsx:                    value={formData.taxId}
+src/components/CompanyCreation.tsx:                    value={formData.country}
+src/components/CompanyCreation.tsx:                    {COUNTRIES.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+src/components/CompanyCreation.tsx:                    value={formData.city}
+src/components/CompanyCreation.tsx:                      value={formData.email}
+src/components/CompanyCreation.tsx:                      value={formData.phone}
+src/components/CompanyCreation.tsx:                    value={formData.currency}
+src/components/CompanyCreation.tsx:                    value={formData.fiscalYearStart}
+src/components/CompanyCreation.tsx:                    value={isNaN(formData.fiscalYearDuration) ? '' : formData.fiscalYearDuration}
+src/components/CompanyCreation.tsx:                          value={formData.vatRate}
+src/components/CompanyCreation.tsx:                          <option value={currentCountryData.vatRate}>{currentCountryData.vatRate}% (Standard {currentCountryData.name})</option>
+src/components/CompanyCreation.tsx:                          {currentCountryData.vatRate !== 18 && <option value={18}>18% (Standard UEMOA)</option>}
+src/components/CompanyCreation.tsx:                          <option value={10}>10% (Réduit)</option>
+src/components/CompanyCreation.tsx:                          <option value={5}>5% (Super Réduit)</option>
+src/components/CompanyCreation.tsx:                          <option value={0}>0% (Exonéré)</option>
+src/components/CompanyCreation.tsx:                        value={isNaN(formData.capitalAmount) ? '' : formData.capitalAmount}
+src/components/CompanyCreation.tsx:                            value={p.name}
+src/components/CompanyCreation.tsx:                            value={isNaN(p.amount) ? '' : p.amount}
+src/components/CompanyCreation.tsx:                            value={p.type}
+src/components/CompanyCreation.tsx:                      value={isNaN(formData.constitutionCosts) ? '' : formData.constitutionCosts}
+src/components/CompanyCreation.tsx:                          value={formData.bankName}
+src/components/CompanyCreation.tsx:                          value={formData.bankAccountNumber}
+src/components/CompanyCreation.tsx:                          value={formData.bankIban}
+src/components/CompanyCreation.tsx:                          value={formData.bankSwift}
+src/components/CompanyCreation.tsx:                            value={formData.paymentBankAccount}
+src/components/CompanyCreation.tsx:                            value={formData.paymentCashAccount}
+src/components/CompanyCreation.tsx:                            value={formData.paymentMobileAccount}
+src/components/CompanyCreation.tsx:                          value={t.name}
+src/components/CompanyCreation.tsx:                            value={t.accountNumber || ''}
+src/components/CompanyCreation.tsx:                          value={t.type}
+src/components/CompanyCreation.tsx:                          value={isNaN(t.initialBalance) ? '' : t.initialBalance}
+src/components/CompanyCreation.tsx:                          value={u.name}
+src/components/CompanyCreation.tsx:                          value={u.email}
+src/components/CompanyCreation.tsx:                          value={u.role}
+src/components/TrialBalance.tsx:              value={startDate}
+src/components/TrialBalance.tsx:              value={endDate}
+src/components/TrialBalance.tsx:                value={filter}
+src/components/RecurringInvoiceManager.tsx:            value={searchQuery}
+src/components/RecurringInvoiceManager.tsx:            value={formData.third_party_id}
+src/components/RecurringInvoiceManager.tsx:              <option key={tp.id} value={tp.id}>{tp.name}</option>
+src/components/RecurringInvoiceManager.tsx:            value={formData.type}
+src/components/RecurringInvoiceManager.tsx:            value={formData.frequency}
+src/components/RecurringInvoiceManager.tsx:            value={formData.next_date}
+src/components/RecurringInvoiceManager.tsx:            value={formData.end_date || ''}
+src/components/RecurringInvoiceManager.tsx:            value={formData.currency}
+src/components/RecurringInvoiceManager.tsx:                  value={item.description}
+src/components/RecurringInvoiceManager.tsx:                  value={item.quantity}
+src/components/RecurringInvoiceManager.tsx:                  value={item.unit_price}
+src/components/LoginPage.tsx:                      value={email}
+src/components/LoginPage.tsx:                      value={password}
+src/components/CommandPalette.tsx:              value={query}
+src/components/Journal.tsx:            value={magicInput}
+src/components/Journal.tsx:              value={searchTerm}
+src/components/Journal.tsx:              value={startDate}
+src/components/Journal.tsx:              value={endDate}
+src/components/Journal.tsx:            value={statusFilter}
+src/components/Journal.tsx:                  value={thirdPartyFilter}
+src/components/Journal.tsx:                    <option key={tp.id} value={tp.id}>{tp.name}</option>
+src/components/Journal.tsx:                    value={accountFilter}
+src/components/Journal.tsx:                  value={minAmount}
+src/components/Journal.tsx:                  value={maxAmount}
+src/components/Journal.tsx:                      value={date}
+src/components/Journal.tsx:                        value={reference}
+src/components/Journal.tsx:                          value={transactionCurrency}
+src/components/Journal.tsx:                            value={transactionExchangeRate}
+src/components/Journal.tsx:                    value={description}
+src/components/Journal.tsx:                                  value={selectedThirdParty || ''}
+src/components/Journal.tsx:                                    <option key={p.id} value={p.account_code}>
+src/components/Journal.tsx:                                  value={occasionalName}
+src/components/Journal.tsx:                            value={isNaN(amountHT) ? '' : amountHT}
+src/components/Journal.tsx:                            value={vatRate}
+src/components/Journal.tsx:                            <option value={18}>18% (Standard)</option>
+src/components/Journal.tsx:                            <option value={10}>10% (Réduit)</option>
+src/components/Journal.tsx:                            <option value={5}>5% (Super Réduit)</option>
+src/components/Journal.tsx:                            <option value={2}>2% (Spécial)</option>
+src/components/Journal.tsx:                            <option value={0}>0% (Exonéré)</option>
+src/components/Journal.tsx:                              value={selectedTreasuryAccount || ''}
+src/components/Journal.tsx:                                  <option key={a.code} value={a.code}>
+src/components/Journal.tsx:                          value={notes}
+src/components/Journal.tsx:                                value={entry.account_code}
+src/components/Journal.tsx:                              value={isNaN(entry.debit) ? '' : entry.debit}
+src/components/Journal.tsx:                              value={isNaN(entry.credit) ? '' : entry.credit}
+src/components/Journal.tsx:                              value={entry.description || ''}
+src/components/Journal.tsx:                        <option key={acc.code} value={acc.code}>{acc.name}</option>
+src/components/Journal.tsx:                    value={newOpIcon}
+src/components/Journal.tsx:                    value={newOpLabel}
+src/components/Journal.tsx:                    value={newOpVatDebit}
+src/components/Journal.tsx:                      <option key={a.code} value={a.code}>{a.name}</option>
+src/components/Journal.tsx:                    value={newOpVatCredit}
+src/components/Journal.tsx:                      <option key={a.code} value={a.code}>{a.name}</option>
+src/components/Journal.tsx:                          value={line.account_code}
+src/components/Journal.tsx:                          value={line.type}
+src/components/Journal.tsx:                          value={line.formula}
+src/components/Journal.tsx:                    <option key={acc.code} value={acc.code}>{acc.name}</option>
+src/components/FinancialStatements.tsx:              value={startDate}
+src/components/FinancialStatements.tsx:              value={endDate}
+src/components/TaxManager.tsx:              value={selectedMonth}
+src/components/TaxManager.tsx:                <option key={i + 1} value={i + 1}>{m}</option>
+src/components/TaxManager.tsx:              value={selectedYear}
+src/components/TaxManager.tsx:                <option key={y} value={y}>{y}</option>
+src/components/AuditLogViewer.tsx:              value={searchTerm}
+src/components/AuditLogViewer.tsx:              value={userFilter}
+src/components/AuditLogViewer.tsx:                <option key={user} value={user}>{user}</option>
+src/components/AuditLogViewer.tsx:              value={filterAction}
+src/components/AuditLogViewer.tsx:                value={startDate}
+src/components/AuditLogViewer.tsx:                value={endDate}
+src/components/CompanySettingsManager.tsx:                  value={settings.name ?? ''}
+src/components/CompanySettingsManager.tsx:                    value={settings.legal_form ?? 'SARL'}
+src/components/CompanySettingsManager.tsx:                    value={settings.currency ?? 'FCFA'}
+src/components/CompanySettingsManager.tsx:                  value={settings.activity ?? ''}
+src/components/CompanySettingsManager.tsx:                  value={settings.capital ?? 0}
+src/components/CompanySettingsManager.tsx:                      value={settings.manager_name ?? ''}
+src/components/CompanySettingsManager.tsx:                        value={settings.phone ?? ''}
+src/components/CompanySettingsManager.tsx:                        value={settings.email ?? ''}
+src/components/CompanySettingsManager.tsx:                      value={settings.address ?? ''}
+src/components/CompanySettingsManager.tsx:                        value={settings.city ?? ''}
+src/components/CompanySettingsManager.tsx:                        value={settings.country ?? 'Côte d\'Ivoire'}
+src/components/CompanySettingsManager.tsx:                        value={settings.fiscal_id ?? ''}
+src/components/CompanySettingsManager.tsx:                        value={settings.rccm ?? ''}
+src/components/CompanySettingsManager.tsx:                      value={settings.syscohada_system ?? 'normal'}
+src/components/CompanySettingsManager.tsx:                        value={settings.tax_regime ?? 'Régime du Réel Normal'}
+src/components/CompanySettingsManager.tsx:                        value={settings.vat_regime ?? 'Assujetti'}
+src/components/CompanySettingsManager.tsx:                      value={settings.vat_rate ?? 18}
+src/components/CompanySettingsManager.tsx:                      value={settings.bank_name ?? ''}
+src/components/CompanySettingsManager.tsx:                      value={settings.bank_swift ?? ''}
+src/components/CompanySettingsManager.tsx:                      value={settings.bank_iban ?? settings.bank_account_number ?? ''}
+src/components/CompanySettingsManager.tsx:                          value={settings.payment_bank_account ?? '521'}
+src/components/CompanySettingsManager.tsx:                          value={settings.payment_cash_account ?? '571'}
+src/components/CompanySettingsManager.tsx:                          value={settings.payment_mobile_account ?? '585'}
+src/components/CompanySettingsManager.tsx:                          value={settings.cnps_employer_number ?? ''}
+src/components/CompanySettingsManager.tsx:                          value={settings.tax_office ?? ''}
+src/components/ProcureToPay.tsx:                      value={reqDesc}
+src/components/ProcureToPay.tsx:                      value={reqDept}
+src/components/ProcureToPay.tsx:                      value={reqAmount}
+src/components/ProcureToPay.tsx:                                value={item.description}
+src/components/ProcureToPay.tsx:                                value={item.quantity}
+src/components/ProcureToPay.tsx:                                value={item.unitPrice}
+src/components/ProcureToPay.tsx:                        value={reqInstType}
+src/components/ProcureToPay.tsx:                        value={reqInstName}
+src/components/ProcureToPay.tsx:                        value={reqBudgetLine}
+src/components/ProcureToPay.tsx:                        value={reqProjectCode}
+src/components/ProcureToPay.tsx:                    value={poSupplierId}
+src/components/ProcureToPay.tsx:                      <option key={s.id} value={s.id}>{s.name} ({s.account_code})</option>
+src/components/ProcureToPay.tsx:                    value={poDelivery}
+src/components/InvoiceReminderSettings.tsx:                  value={settings.invoice_reminder_days}
+src/components/InvoiceReminderSettings.tsx:                  value={settings.invoice_reminder_email}
+src/components/InvoiceReminderSettings.tsx:                  value={settings.invoice_reminder_subject}
+src/components/InvoiceReminderSettings.tsx:                  value={settings.invoice_reminder_template}
+src/components/InvoiceViewer.tsx:                  value={emailData.email}
+src/components/InvoiceViewer.tsx:                  value={emailData.subject}
+src/components/InvoiceViewer.tsx:                  value={emailData.message}
+src/components/InvoiceViewer.tsx:                         <QRCodeSVG value={`FNE:${invoice.number}-TOTAL:${invoice.total_amount}`} size={80} level="L" className="text-slate-900" />
+src/components/CRMManager.tsx:              value={searchTerm}
+src/components/InvoicingManager.tsx:            value={searchQuery}
+src/components/BudgetCategoriesSetup.tsx:                    value={formData.name}
+src/components/BudgetCategoriesSetup.tsx:                    value={formData.color}
+src/components/TaxAssistant.tsx:              value={input}
+src/components/Dashboard.tsx:                value={quickEntry}
+src/components/Dashboard.tsx:              value={stats.cash} 
+src/components/Dashboard.tsx:              value={stats.turnover} 
+src/components/Dashboard.tsx:              value={stats.receivables} 
+src/components/Dashboard.tsx:              value={stats.payables} 
+src/components/Dashboard.tsx:              value={stats.net_result} 
+src/components/Dashboard.tsx:              value={stats.payroll.total} 
+src/components/FiscalYearManager.tsx:                value={newName}
+src/components/FiscalYearManager.tsx:                value={newStartDate}
+src/components/FiscalYearManager.tsx:                value={newEndDate}
+src/components/FloatingAdvisor.tsx:                  value={input}
+src/components/TeamManager.tsx:            value={activeTab === 'users' ? searchTerm : logSearchTerm}
+src/components/TeamManager.tsx:                    value={formData.name}
+src/components/TeamManager.tsx:                    value={formData.email}
+src/components/TeamManager.tsx:                    value={formData.password}
+src/components/AssetsManager.tsx:                    value={name}
+src/components/AssetsManager.tsx:                      value={price}
+src/components/AssetsManager.tsx:                    value={vatRate}
+src/components/AssetsManager.tsx:                    value={date}
+src/components/AssetsManager.tsx:                    value={duration}
+src/components/AssetsManager.tsx:                    value={depMethod}
+src/components/AssetsManager.tsx:                      value={depCoef}
+src/components/AssetsManager.tsx:                    value={saleDate}
+src/components/AssetsManager.tsx:                      value={salePrice}
+src/components/AuditTrail.tsx:              value={searchTerm}
+src/components/AuditTrail.tsx:              value={userFilter}
+src/components/AuditTrail.tsx:                <option key={user} value={user}>{user}</option>
+src/components/AuditTrail.tsx:              value={actionFilter}
+src/components/AuditTrail.tsx:                value={startDate}
+src/components/AuditTrail.tsx:                value={endDate}
+src/components/VATSettingsManager.tsx:                      value={formData.label || ''}
+src/components/VATSettingsManager.tsx:                      value={formData.rate || 0}
+src/components/VATSettingsManager.tsx:                      value={formData.account_collected || ''}
+src/components/VATSettingsManager.tsx:                      value={formData.account_deductible || ''}
+src/components/VATSettingsManager.tsx:                    value={formData.label || ''}
+src/components/VATSettingsManager.tsx:                    value={formData.rate || 0}
+src/components/VATSettingsManager.tsx:                    value={formData.account_collected || ''}
+src/components/VATSettingsManager.tsx:                    value={formData.account_deductible || ''}
+src/components/BankReconciliation.tsx:                            value={glSearchTerm}
+src/components/BankReconciliation.tsx:                              value={searchTerm}
+src/components/BankReconciliation.tsx:                            value={statusFilter}
+src/components/BankReconciliation.tsx:                    value={newAccount.name}
+src/components/BankReconciliation.tsx:                    value={newAccount.bank_name}
+src/components/BankReconciliation.tsx:                    value={newAccount.account_number}
+src/components/BankReconciliation.tsx:                    value={newAccount.balance}
+src/components/BankReconciliation.tsx:                    value={newAccount.currency}
+src/components/BankReconciliation.tsx:                    value={newAccount.gl_account_code}
+src/components/BankReconciliation.tsx:                      <option key={acc.code} value={acc.code}>
+src/components/BankReconciliation.tsx:                  value={createEntryForm.accountCode}
+src/components/BankReconciliation.tsx:                    <option key={acc.code} value={acc.code}>
+src/components/BankReconciliation.tsx:                  value={createEntryForm.description}
+src/components/BankReconciliation.tsx:                    value={createEntryForm.date}
+src/components/BankReconciliation.tsx:                    value={formatCurrency(createEntryForm.amount)}
+src/components/BankReconciliation.tsx:                  value={adjustmentReason}
+src/components/BankReconciliation.tsx:                    value={manualMatchSearch}
+src/components/BankReconciliation.tsx:                        value={csvMapping.date}
+src/components/BankReconciliation.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/BankReconciliation.tsx:                        value={csvMapping.description}
+src/components/BankReconciliation.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/BankReconciliation.tsx:                        value={csvMapping.amount}
+src/components/BankReconciliation.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/BankReconciliation.tsx:                        value={csvMapping.reference}
+src/components/BankReconciliation.tsx:                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+src/components/BudgetManager.tsx:                  value={newEngagement.account_code}
+src/components/BudgetManager.tsx:                    <option key={acc.code} value={acc.code}>{acc.code} - {acc.name}</option>
+src/components/BudgetManager.tsx:                      value={newEngagement.amount || ''}
+src/components/BudgetManager.tsx:                    value={newEngagement.reference}
+src/components/BudgetManager.tsx:                  value={newEngagement.description}
+src/components/JournalSettingsManager.tsx:                  value={formData.id}
+src/components/JournalSettingsManager.tsx:                  value={formData.name}
+src/components/JournalSettingsManager.tsx:                  value={formData.type}
+src/components/JournalSettingsManager.tsx:                  value={formData.description}
+src/components/ThirdPartyManager.tsx:            value={searchTerm}
+src/components/ThirdPartyManager.tsx:                    value={isNaN(paymentData.amount) ? '' : paymentData.amount}
+src/components/ThirdPartyManager.tsx:                        value={paymentData.date}
+src/components/ThirdPartyManager.tsx:                          value={paymentData.mode}
+src/components/ThirdPartyManager.tsx:                    value={paymentData.reference}
+src/components/ThirdPartyManager.tsx:                  value={formData.name || ''}
+src/components/ThirdPartyManager.tsx:                    value={formData.email || ''}
+src/components/ThirdPartyManager.tsx:                    value={formData.phone || ''}
+src/components/ThirdPartyManager.tsx:                  value={formData.address || ''}
+src/components/ThirdPartyManager.tsx:                    value={formData.tax_id || ''}
+src/components/ThirdPartyManager.tsx:                    value={formData.payment_terms || 0}
+src/components/ThirdPartyManager.tsx:                  value={formData.credit_limit || 0}
+src/components/PayrollManager.tsx:              value={advanceFilter.employeeId || ''}
+src/components/PayrollManager.tsx:              <option value={0}>Tous les employés</option>
+src/components/PayrollManager.tsx:                <option key={emp.id} value={emp.id}>{emp.last_name} {emp.first_name}</option>
+src/components/PayrollManager.tsx:              value={advanceFilter.status || ''}
+src/components/PayrollManager.tsx:                  value={newAdvance.employee_id || ''}
+src/components/PayrollManager.tsx:                  <option value={0}>Sélectionner un employé</option>
+src/components/PayrollManager.tsx:                    <option key={emp.id} value={emp.id}>{emp.last_name} {emp.first_name}</option>
+src/components/PayrollManager.tsx:                  value={newAdvance.amount || ''}
+src/components/PayrollManager.tsx:                  value={newAdvance.date}
+src/components/PayrollManager.tsx:                  value={newAdvance.description}
+src/components/PayrollManager.tsx:                  <input className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={newEmployee.firstName ?? ''} onChange={e => setNewEmployee({...newEmployee, firstName: e.target.value})} />
+src/components/PayrollManager.tsx:                  <input className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={newEmployee.lastName ?? ''} onChange={e => setNewEmployee({...newEmployee, lastName: e.target.value})} />
+src/components/PayrollManager.tsx:                  <input className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={newEmployee.email ?? ''} onChange={e => setNewEmployee({...newEmployee, email: e.target.value})} />
+src/components/PayrollManager.tsx:                  <input className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={newEmployee.phone ?? ''} onChange={e => setNewEmployee({...newEmployee, phone: e.target.value})} />
+src/components/PayrollManager.tsx:                  <input className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={newEmployee.position ?? ''} onChange={e => setNewEmployee({...newEmployee, position: e.target.value})} />
+src/components/PayrollManager.tsx:                  <input className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={newEmployee.department ?? ''} onChange={e => setNewEmployee({...newEmployee, department: e.target.value})} />
+src/components/PayrollManager.tsx:                  <input type="number" className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={isNaN(newEmployee.baseSalary) ? '' : newEmployee.baseSalary} onChange={e => setNewEmployee({...newEmployee, baseSalary: Number(e.target.value)})} />
+src/components/PayrollManager.tsx:                  <input type="date" className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white" value={newEmployee.startDate ?? ''} onChange={e => setNewEmployee({...newEmployee, startDate: e.target.value})} />
+src/components/PayrollManager.tsx:                    value={newEmployee.maritalStatus ?? 'single'} 
+src/components/PayrollManager.tsx:                    value={isNaN(newEmployee.childrenCount) ? '' : newEmployee.childrenCount} 
+src/components/PayrollManager.tsx:                    value={newEmployee.cnpsNumber ?? ''} 
+src/components/PayrollManager.tsx:                    value={newEmployee.status ?? 'active'} 
+src/components/PayrollManager.tsx:                                value={bonus.label ?? ''}
+src/components/PayrollManager.tsx:                                value={isNaN(bonus.amount) ? '' : bonus.amount}
+src/components/PayrollManager.tsx:                                value={bonus.type}
+src/components/PayrollManager.tsx:                                value={deduction.label ?? ''}
+src/components/PayrollManager.tsx:                                value={isNaN(deduction.amount) ? '' : deduction.amount}
+src/components/PayrollManager.tsx:                  value={newPeriod.month ?? 1}
+src/components/PayrollManager.tsx:                    <option key={m} value={m}>{new Date(2000, m - 1).toLocaleString('fr-FR', { month: 'long' })}</option>
+src/components/PayrollManager.tsx:                  value={isNaN(newPeriod.year) ? '' : newPeriod.year}
+src/components/PayrollManager.tsx:                  value={paymentAccount ?? '521'}
+src/components/PayrollManager.tsx:                  <option value={companySettings?.payment_bank_account || '521'}>Banque ({companySettings?.payment_bank_account || '521'})</option>
+src/components/PayrollManager.tsx:                  <option value={companySettings?.payment_cash_account || '571'}>Caisse ({companySettings?.payment_cash_account || '571'})</option>
+src/components/PayrollManager.tsx:                  <option value={companySettings?.payment_mobile_account || '585'}>Mobile Money ({companySettings?.payment_mobile_account || '585'})</option>
+src/components/Header.tsx:            value={searchQuery}
+src/components/CurrencyManager.tsx:              value={newRate.from_currency}
+src/components/CurrencyManager.tsx:              value={baseCurrency}
+src/components/CurrencyManager.tsx:              value={newRate.rate}
+src/components/TaxSummaryReport.tsx:              value={selectedMonth}
+src/components/TaxSummaryReport.tsx:                <option key={i + 1} value={i + 1}>{m}</option>
+src/components/TaxSummaryReport.tsx:              value={selectedYear}
+src/components/TaxSummaryReport.tsx:                <option key={y} value={y}>{y}</option>
+src/components/RegisterPage.tsx:                      value={name}
+src/components/RegisterPage.tsx:                      value={email}
+src/components/RegisterPage.tsx:                        value={password}
+src/components/RegisterPage.tsx:                        value={confirmPassword}

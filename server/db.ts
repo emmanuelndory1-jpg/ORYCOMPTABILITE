@@ -1,14 +1,136 @@
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
+import { AsyncLocalStorage } from 'async_hooks';
+import fs from 'fs';
 
-const dbPath = process.env.DB_PATH || 'compta.db';
-const db = new Database(dbPath);
+const defaultDbPath = 'compta.db';
 
-db.pragma('foreign_keys = ON');
-console.log(`Database connected at ${dbPath}`);
+export function connectWithRecovery(filePath: string): Database.Database {
+  try {
+    const dbInstance = new Database(filePath);
+    // Test if the database is readable and not malformed
+    dbInstance.prepare("SELECT name FROM sqlite_master LIMIT 1").all();
+    return dbInstance;
+  } catch (error: any) {
+    if (
+      error.message && (
+        error.message.includes('malformed') ||
+        error.message.includes('corrupt') ||
+        error.code === 'SQLITE_CORRUPT'
+      )
+    ) {
+      console.error(`🚨 SQLite Database at "${filePath}" is corrupted/malformed: ${error.message}. Performing emergency recovery.`);
+      
+      const backupPath = `${filePath}.corrupted_bk_${Date.now()}`;
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.renameSync(filePath, backupPath);
+          console.log(`✅ Renamed corrupted database to: ${backupPath}`);
+        }
+        
+        // Remove WAL and SHM sidecars to prevent mismatch errors
+        const walFile = `${filePath}-wal`;
+        const shmFile = `${filePath}-shm`;
+        if (fs.existsSync(walFile)) {
+          try { fs.unlinkSync(walFile); } catch (e) {}
+        }
+        if (fs.existsSync(shmFile)) {
+          try { fs.unlinkSync(shmFile); } catch (e) {}
+        }
+      } catch (err: any) {
+        console.error(`Failed to move/clean corrupted database file "${filePath}":`, err.message);
+      }
+      
+      const freshDb = new Database(filePath);
+      return freshDb;
+    } else {
+      throw error;
+    }
+  }
+}
 
-// Initialize database
-db.exec(`
+export let defaultDb = connectWithRecovery(defaultDbPath);
+defaultDb.pragma('journal_mode = WAL');
+defaultDb.pragma('foreign_keys = ON');
+console.log(`Main database connected at ${defaultDbPath}`);
+
+export const dbStorage = new AsyncLocalStorage<Database.Database>();
+
+export const userDbInstances = new Map<string, Database.Database>();
+
+// Proxy to current active database
+const db = new Proxy({} as Database.Database, {
+  get(target, prop, receiver) {
+    const activeDb = dbStorage.getStore() || defaultDb;
+    const value = Reflect.get(activeDb, prop);
+    if (typeof value === 'function') {
+      return value.bind(activeDb);
+    }
+    return value;
+  },
+  set(target, prop, value, receiver) {
+    const activeDb = dbStorage.getStore() || defaultDb;
+    return Reflect.set(activeDb, prop, value);
+  }
+});
+
+export function getOrCreateDatabaseForUser(userId: number, email?: string): Database.Database {
+  if (!userId) {
+    return defaultDb;
+  }
+
+  // Treat default users as using the default compta.db
+  const checkEmail = (email || '').toLowerCase();
+  if (
+    userId === 1 || userId === 2 || userId === 3 ||
+    checkEmail === 'admin@example.com' ||
+    checkEmail === 'comptable@example.com' ||
+    checkEmail === 'utilisateur@example.com'
+  ) {
+    return defaultDb;
+  }
+
+  const cacheKey = `user_${userId}`;
+  if (userDbInstances.has(cacheKey)) {
+    return userDbInstances.get(cacheKey)!;
+  }
+
+  const filePath = `empty_user_${userId}.db`;
+  const userDb = connectWithRecovery(filePath);
+  userDb.pragma('journal_mode = WAL');
+  userDb.pragma('foreign_keys = ON');
+
+  // Cache it IMMEDIATELY so any concurrent getOrCreateDatabaseForUser calls for the same user get the cached instance
+  userDbInstances.set(cacheKey, userDb);
+
+  // Let's run migrations on this new database in its own storage context!
+  dbStorage.run(userDb, () => {
+    runDatabaseMigrations(false, email);
+  });
+
+  // Seed the user themselves into their own database users table so queries work if they fetch active users
+  if (email) {
+    try {
+      dbStorage.run(userDb, () => {
+        const userExists = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+        if (!userExists) {
+          db.prepare(`
+            INSERT OR IGNORE INTO users (id, email, password_hash, role, name)
+            VALUES (?, ?, ?, 'user', ?)
+          `).run(userId, email, 'placeholder_hash', email.split('@')[0]);
+        }
+      });
+    } catch (e) {
+      console.error("Error seeding self user in private db:", e);
+    }
+  }
+
+  return userDb;
+}
+
+export function runDatabaseMigrations(isDefault: boolean, email?: string) {
+  // Initialize database
+  db.exec(`
   CREATE TABLE IF NOT EXISTS accounts (
     code TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -71,6 +193,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
   CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
   CREATE INDEX IF NOT EXISTS idx_transactions_deleted ON transactions(deleted_at);
+  CREATE INDEX IF NOT EXISTS idx_transactions_status_deleted_date ON transactions(status, deleted_at, date);
+  CREATE INDEX IF NOT EXISTS idx_journal_entries_code_trans_id ON journal_entries(account_code, transaction_id);
+  CREATE INDEX IF NOT EXISTS idx_journal_entries_code_cover ON journal_entries(account_code, debit, credit, transaction_id);
+
+  CREATE TABLE IF NOT EXISTS crm_deals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    third_party_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    value REAL DEFAULT 0,
+    probability INTEGER DEFAULT 0,
+    stage TEXT DEFAULT 'prospect',
+    expected_close_date TEXT,
+    department TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(third_party_id) REFERENCES third_parties(id)
+  );
 
   CREATE TABLE IF NOT EXISTS bank_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +259,7 @@ db.exec(`
     tax_regime TEXT,
     vat_regime TEXT,
     vat_rate REAL DEFAULT 18,
+    taxes_enabled BOOLEAN DEFAULT 1,
     currency TEXT DEFAULT 'FCFA',
     address TEXT,
     city TEXT,
@@ -157,6 +296,30 @@ db.exec(`
     is_active BOOLEAN DEFAULT 0,
     FOREIGN KEY(company_id) REFERENCES company_settings(id)
   );
+
+  CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    due_date TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    priority TEXT DEFAULT 'medium',
+    category TEXT DEFAULT 'Général',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT
+  );
+
+  -- Seed initial tasks if empty
+  INSERT OR IGNORE INTO tasks (id, title, due_date, status, priority, category)
+  SELECT 'task_seed_1', 'Déclaration TVA - Mois en cours', date('now', '+15 days'), 'pending', 'high', 'Fiscal'
+  WHERE NOT EXISTS (SELECT 1 FROM tasks LIMIT 1);
+  
+  INSERT OR IGNORE INTO tasks (id, title, due_date, status, priority, category)
+  SELECT 'task_seed_2', 'Rapprochement bancaire', date('now', '+5 days'), 'completed', 'medium', 'Comptabilité'
+  WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE id = 'task_seed_2');
+
+  INSERT OR IGNORE INTO tasks (id, title, due_date, status, priority, category)
+  SELECT 'task_seed_3', 'Relance factures impayées', date('now', '+2 days'), 'pending', 'medium', 'Ventes'
+  WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE id = 'task_seed_3');
 
   CREATE TABLE IF NOT EXISTS fiscal_years (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -283,6 +446,18 @@ db.exec(`
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    recipient_email TEXT NOT NULL,
+    recipient_name TEXT,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT DEFAULT 'sent', -- 'pending', 'sent', 'failed'
+    attachment_url TEXT,
+    related_invoice_id TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL UNIQUE,
@@ -341,14 +516,17 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS invoice_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_id INTEGER NOT NULL,
+    inventory_item_id INTEGER,
     description TEXT NOT NULL,
     quantity REAL DEFAULT 1,
     unit_price REAL DEFAULT 0,
     vat_rate REAL DEFAULT 18,
+    discount REAL DEFAULT 0,
     total REAL DEFAULT 0,
-    account_code TEXT, -- Revenue account for invoices
+    account_code TEXT,
     FOREIGN KEY(invoice_id) REFERENCES invoices(id),
-    FOREIGN KEY(account_code) REFERENCES accounts(code)
+    FOREIGN KEY(account_code) REFERENCES accounts(code),
+    FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id)
   );
 
   CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices(number);
@@ -467,7 +645,23 @@ db.exec(`
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(from_currency, to_currency)
   );
+
+  CREATE TABLE IF NOT EXISTS inventory_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference TEXT UNIQUE,
+    name TEXT NOT NULL,
+    category TEXT DEFAULT 'Général',
+    unit TEXT DEFAULT 'unité',
+    quantity INTEGER DEFAULT 0,
+    min_quantity INTEGER DEFAULT 0,
+    unit_price REAL DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+try { db.exec("ALTER TABLE inventory_items ADD COLUMN category TEXT DEFAULT 'Général'"); } catch (e) {}
+try { db.exec("ALTER TABLE inventory_items ADD COLUMN unit TEXT DEFAULT 'unité'"); } catch (e) {}
+try { db.exec("ALTER TABLE inventory_items ADD COLUMN min_quantity INTEGER DEFAULT 0"); } catch (e) {}
 
 try {
   db.prepare("ALTER TABLE assets ADD COLUMN depreciation_method TEXT DEFAULT 'linear'").run();
@@ -551,7 +745,9 @@ const newCols = [
   ['payment_mobile_account', 'TEXT'],
   ['cnps_employer_number', 'TEXT'],
   ['tax_office', 'TEXT'],
-  ['logo_url', 'TEXT']
+  ['logo_url', 'TEXT'],
+  ['corporate_tax_rate', 'REAL DEFAULT 25'],
+  ['imf_rate', 'REAL DEFAULT 0.5']
 ];
 
 for (const [col, type] of newCols) {
@@ -611,6 +807,49 @@ db.exec(`
     account_collected TEXT NOT NULL,
     account_deductible TEXT NOT NULL,
     is_active BOOLEAN DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS mobile_money_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gateway_id TEXT,
+    type TEXT NOT NULL, -- 'payment' or 'payout'
+    amount REAL NOT NULL,
+    currency TEXT DEFAULT 'FCFA',
+    status TEXT DEFAULT 'pending',
+    network TEXT, -- 'orange', 'mtn', 'wave'
+    customer_name TEXT,
+    customer_phone TEXT,
+    reference TEXT,
+    invoice_id INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS recurring_transactions (
+    id TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    amount REAL NOT NULL,
+    frequency TEXT NOT NULL, -- 'monthly', 'quarterly', 'annually', 'weekly'
+    next_date TEXT NOT NULL,
+    end_date TEXT,
+    max_occurrences INTEGER,
+    current_occurrences INTEGER DEFAULT 0,
+    last_processed TEXT,
+    debit_account TEXT, -- Legacy, will use lines if present
+    credit_account TEXT, -- Legacy, will use lines if present
+    category TEXT,
+    active INTEGER DEFAULT 1,
+    auto_process INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS recurring_transaction_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recurring_transaction_id TEXT NOT NULL,
+    account_code TEXT NOT NULL,
+    debit REAL DEFAULT 0,
+    credit REAL DEFAULT 0,
+    description TEXT,
+    FOREIGN KEY (recurring_transaction_id) REFERENCES recurring_transactions(id) ON DELETE CASCADE
   );
 `);
 
@@ -753,36 +992,38 @@ if (checkFiscalYear.get().count === 0) {
   `).run(`Exercice ${currentYear}`, `${currentYear}-01-01`, `${currentYear}-12-31`);
 }
 
-// Seed default admin user if none exists
-const checkUsers = db.prepare('SELECT COUNT(*) as count FROM users');
-const defaultHash = bcrypt.hashSync('admin123', 10);
+// Seed default admin user if none exists (only on the central database)
+if (isDefault) {
+  const checkUsers = db.prepare('SELECT COUNT(*) as count FROM users');
+  const defaultHash = bcrypt.hashSync('admin123', 10);
 
-if (checkUsers.get().count === 0) {
-  db.prepare(`
-    INSERT INTO users (email, password_hash, role, name)
-    VALUES (?, ?, 'admin', 'Administrateur')
-  `).run('admin@example.com', defaultHash);
+  if (checkUsers.get().count === 0) {
+    db.prepare(`
+      INSERT INTO users (email, password_hash, role, name)
+      VALUES (?, ?, 'admin', 'Administrateur')
+    `).run('admin@example.com', defaultHash);
 
-  db.prepare(`
-    INSERT INTO users (email, password_hash, role, name)
-    VALUES (?, ?, 'accountant', 'Comptable Expert')
-  `).run('comptable@example.com', defaultHash);
+    db.prepare(`
+      INSERT INTO users (email, password_hash, role, name)
+      VALUES (?, ?, 'accountant', 'Comptable Expert')
+    `).run('comptable@example.com', defaultHash);
 
-  db.prepare(`
-    INSERT INTO users (email, password_hash, role, name)
-    VALUES (?, ?, 'user', 'Utilisateur Standard')
-  `).run('utilisateur@example.com', defaultHash);
-} else {
-  // Force update the admin password hash just in case it was wrong
-  db.prepare(`
-    UPDATE users SET password_hash = ? WHERE email = 'admin@example.com'
-  `).run(defaultHash);
-  
-  db.prepare(`INSERT OR IGNORE INTO users (email, password_hash, role, name) VALUES (?, ?, 'accountant', 'Comptable Expert')`).run('comptable@example.com', defaultHash);
-  db.prepare(`UPDATE users SET password_hash = ? WHERE email = 'comptable@example.com'`).run(defaultHash);
+    db.prepare(`
+      INSERT INTO users (email, password_hash, role, name)
+      VALUES (?, ?, 'user', 'Utilisateur Standard')
+    `).run('utilisateur@example.com', defaultHash);
+  } else {
+    // Force update the admin password hash just in case it was wrong
+    db.prepare(`
+      UPDATE users SET password_hash = ? WHERE email = 'admin@example.com'
+    `).run(defaultHash);
+    
+    db.prepare(`INSERT OR IGNORE INTO users (email, password_hash, role, name) VALUES (?, ?, 'accountant', 'Comptable Expert')`).run('comptable@example.com', defaultHash);
+    db.prepare(`UPDATE users SET password_hash = ? WHERE email = 'comptable@example.com'`).run(defaultHash);
 
-  db.prepare(`INSERT OR IGNORE INTO users (email, password_hash, role, name) VALUES (?, ?, 'user', 'Utilisateur Standard')`).run('utilisateur@example.com', defaultHash);
-  db.prepare(`UPDATE users SET password_hash = ? WHERE email = 'utilisateur@example.com'`).run(defaultHash);
+    db.prepare(`INSERT OR IGNORE INTO users (email, password_hash, role, name) VALUES (?, ?, 'user', 'Utilisateur Standard')`).run('utilisateur@example.com', defaultHash);
+    db.prepare(`UPDATE users SET password_hash = ? WHERE email = 'utilisateur@example.com'`).run(defaultHash);
+  }
 }
 
 // Seed default journals
@@ -1047,6 +1288,10 @@ try {
 try {
   db.prepare("ALTER TABLE company_settings ADD COLUMN currency TEXT DEFAULT 'FCFA'").run();
 } catch (e) {}
+try {
+  db.prepare("ALTER TABLE company_settings ADD COLUMN taxes_enabled BOOLEAN DEFAULT 1").run();
+} catch (e) {}
+
 
 try {
   db.prepare("ALTER TABLE third_parties ADD COLUMN is_occasional BOOLEAN DEFAULT 0").run();
@@ -1063,81 +1308,109 @@ try {
 // Seed Company Settings if empty
 const checkCompany = db.prepare('SELECT COUNT(*) as count FROM company_settings');
 if (checkCompany.get().count === 0) {
-  db.prepare(`
-    INSERT INTO company_settings (name, legal_form, activity, creation_date, fiscal_id, rccm, tax_regime, vat_regime, vat_rate, currency, address, city, country, capital, manager_name, phone, email)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    'OryCompta SARL',
-    'SARL',
-    'Services Informatiques et Conseil',
-    '2025-01-01',
-    '0123456X',
-    'CI-ABJ-2025-B-1234',
-    'Réel Normal',
-    'Mensuel',
-    18,
-    'FCFA',
-    'Cocody Angré, 7ème Tranche',
-    'Abidjan',
-    'Côte d\'Ivoire',
-    10000000,
-    'Emmanuel Ndory',
-    '+225 0102030405',
-    'contact@orycompta.ci'
-  );
+  if (isDefault) {
+    db.prepare(`
+      INSERT INTO company_settings (name, legal_form, activity, creation_date, fiscal_id, rccm, tax_regime, vat_regime, vat_rate, currency, address, city, country, capital, manager_name, phone, email)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'OryCompta SARL',
+      'SARL',
+      'Services Informatiques et Conseil',
+      '2025-01-01',
+      '0123456X',
+      'CI-ABJ-2025-B-1234',
+      'Réel Normal',
+      'Mensuel',
+      18,
+      'FCFA',
+      'Cocody Angré, 7ème Tranche',
+      'Abidjan',
+      'Côte d\'Ivoire',
+      10000000,
+      'Emmanuel Ndory',
+      '+225 0102030405',
+      'contact@orycompta.ci'
+    );
+  } else {
+    // Seed generic empty company settings for the newly created user database
+    db.prepare(`
+      INSERT INTO company_settings (name, legal_form, activity, creation_date, fiscal_id, rccm, tax_regime, vat_regime, vat_rate, currency, address, city, country, capital, manager_name, phone, email)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'Ma Nouvelle Entreprise',
+      'SARL',
+      'Activités Commerciales',
+      new Date().toISOString().split('T')[0],
+      '',
+      '',
+      'Réel Simplifié',
+      'Mensuel',
+      18,
+      'FCFA',
+      '',
+      'Abidjan',
+      'Côte d\'Ivoire',
+      1000000,
+      '',
+      '',
+      email || ''
+    );
+  }
 }
 
-// Seed Demo Data (Third Parties, Employees, Assets, Transactions)
-const checkDemoData = db.prepare('SELECT COUNT(*) as count FROM third_parties');
-if (checkDemoData.get().count === 0) {
-  // 1. Third Parties
-  const thirdParties = [
-    ['client', 'SARL Distribution Ivoirienne', 'contact@sarl-di.ci', '+225 0102030405', 'Abidjan, Plateau', '1234567A', '411101'],
-    ['client', 'ETS Kouassi & Fils', 'kouassi@gmail.com', '+225 0506070809', 'Yamoussoukro', '7654321B', '411102'],
-    ['supplier', 'SOCIETE IVOIRIENNE DE BUREAUTIQUE', 'sales@sib.ci', '+225 0708091011', 'Abidjan, Marcory', '9876543C', '401101'],
-    ['supplier', 'CIE (Compagnie Ivoirienne d\'Electricité)', 'info@cie.ci', '175', 'Abidjan', '0000000D', '401102']
-  ];
-  const insertTP = db.prepare('INSERT INTO third_parties (type, name, email, phone, address, tax_id, account_code) VALUES (?, ?, ?, ?, ?, ?, ?)');
-  for (const tp of thirdParties) insertTP.run(tp);
+// Seed Demo Data (Third Parties, Employees, Assets, Transactions) ONLY if isDefault is true
+if (isDefault) {
+  const checkDemoData = db.prepare('SELECT COUNT(*) as count FROM third_parties');
+  if (checkDemoData.get().count === 0) {
+    // 1. Third Parties
+    const thirdParties = [
+      ['client', 'SARL Distribution Ivoirienne', 'contact@sarl-di.ci', '+225 0102030405', 'Abidjan, Plateau', '1234567A', '411101'],
+      ['client', 'ETS Kouassi & Fils', 'kouassi@gmail.com', '+225 0506070809', 'Yamoussoukro', '7654321B', '411102'],
+      ['supplier', 'SOCIETE IVOIRIENNE DE BUREAUTIQUE', 'sales@sib.ci', '+225 0708091011', 'Abidjan, Marcory', '9876543C', '401101'],
+      ['supplier', 'CIE (Compagnie Ivoirienne d\'Electricité)', 'info@cie.ci', '175', 'Abidjan', '0000000D', '401102']
+    ];
+    const insertTP = db.prepare('INSERT INTO third_parties (type, name, email, phone, address, tax_id, account_code) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (const tp of thirdParties) insertTP.run(tp);
 
-  // 2. Employees
-  const employees = [
-    ['Jean', 'Bakayoko', 'j.bakayoko@orycompta.ci', '0101010101', 'Comptable', 'Finance', 450000, '2025-01-01', 'married', 2],
-    ['Awa', 'Koné', 'a.kone@orycompta.ci', '0202020202', 'Commerciale', 'Ventes', 350000, '2025-06-01', 'single', 0]
-  ];
-  const insertEmp = db.prepare('INSERT INTO employees (first_name, last_name, email, phone, position, department, base_salary, start_date, marital_status, children_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  for (const emp of employees) insertEmp.run(emp);
+    // 2. Employees
+    const employees = [
+      ['Jean', 'Bakayoko', 'j.bakayoko@orycompta.ci', '0101010101', 'Comptable', 'Finance', 450000, '2025-01-01', 'married', 2],
+      ['Awa', 'Koné', 'a.kone@orycompta.ci', '0202020202', 'Commerciale', 'Ventes', 350000, '2025-06-01', 'single', 0]
+    ];
+    const insertEmp = db.prepare('INSERT INTO employees (first_name, last_name, email, phone, position, department, base_salary, start_date, marital_status, children_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const emp of employees) insertEmp.run(emp);
 
-  // 3. Assets
-  const assets = [
-    ['Ordinateur MacBook Pro', 'it', 1200000, 216000, 1416000, '2026-01-10', 3, '244'],
-    ['Mobilier de bureau', 'furniture', 800000, 144000, 944000, '2026-01-15', 5, '244']
-  ];
-  const insertAsset = db.prepare('INSERT INTO assets (name, type, purchase_price, vat_amount, total_price, acquisition_date, depreciation_duration, account_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-  for (const asset of assets) insertAsset.run(asset);
+    // 3. Assets
+    const assets = [
+      ['Ordinateur MacBook Pro', 'it', 1200000, 216000, 1416000, '2026-01-10', 3, '244'],
+      ['Mobilier de bureau', 'furniture', 800000, 144000, 944000, '2026-01-15', 5, '244']
+    ];
+    const insertAsset = db.prepare('INSERT INTO assets (name, type, purchase_price, vat_amount, total_price, acquisition_date, depreciation_duration, account_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const asset of assets) insertAsset.run(asset);
 
-  // 4. Initial Transactions (Capital, Rent, Stock)
-  // Capital Contribution (10,000,000)
-  const trans1 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-01-01', 'Apport initial en capital', 'REF-001', 'validated');
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans1.lastInsertRowid, '521', 10000000, 0);
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans1.lastInsertRowid, '101', 0, 10000000);
+    // 4. Initial Transactions (Capital, Rent, Stock)
+    // Capital Contribution (10,000,000)
+    const trans1 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-01-01', 'Apport initial en capital', 'REF-001', 'validated');
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans1.lastInsertRowid, '521', 10000000, 0);
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans1.lastInsertRowid, '101', 0, 10000000);
 
-  // Rent Payment (500,000)
-  const trans2 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-02-01', 'Paiement loyer Février 2026', 'LOY-2026-02', 'validated');
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans2.lastInsertRowid, '622', 500000, 0);
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans2.lastInsertRowid, '521', 0, 500000);
+    // Rent Payment (500,000)
+    const trans2 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-02-01', 'Paiement loyer Février 2026', 'LOY-2026-02', 'validated');
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans2.lastInsertRowid, '622', 500000, 0);
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans2.lastInsertRowid, '521', 0, 500000);
 
-  // Stock Purchase (2,000,000 HT + 18% TVA)
-  const trans3 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-02-15', 'Achat marchandises stock', 'FAC-SIB-001', 'validated');
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans3.lastInsertRowid, '601', 2000000, 0);
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans3.lastInsertRowid, '4452', 360000, 0);
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans3.lastInsertRowid, '401', 0, 2360000);
+    // Stock Purchase (2,000,000 HT + 18% TVA)
+    const trans3 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-02-15', 'Achat marchandises stock', 'FAC-SIB-001', 'validated');
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans3.lastInsertRowid, '601', 2000000, 0);
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans3.lastInsertRowid, '4452', 360000, 0);
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans3.lastInsertRowid, '401', 0, 2360000);
 
-  // Sale (3,500,000 HT + 18% TVA)
-  const trans4 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-03-10', 'Vente de marchandises', 'FAC-CLI-001', 'validated');
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans4.lastInsertRowid, '411', 4130000, 0);
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans4.lastInsertRowid, '701', 0, 3500000);
-  db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans4.lastInsertRowid, '4431', 0, 630000);
+    // Sale (3,500,000 HT + 18% TVA)
+    const trans4 = db.prepare('INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, ?)').run('2026-03-10', 'Vente de marchandises', 'FAC-CLI-001', 'validated');
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans4.lastInsertRowid, '411', 4130000, 0);
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans4.lastInsertRowid, '701', 0, 3500000);
+    db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)').run(trans4.lastInsertRowid, '4431', 0, 630000);
+  }
 }
 
 // Migration for company_settings bank details
@@ -1165,6 +1438,13 @@ try {
 try {
   db.prepare("ALTER TABLE invoices ADD COLUMN payment_link TEXT").run();
 } catch (e) {}
+try { db.prepare("ALTER TABLE invoice_items ADD COLUMN discount REAL DEFAULT 0").run(); } catch (e) {}
+try { db.prepare("ALTER TABLE recurring_invoice_items ADD COLUMN discount REAL DEFAULT 0").run(); } catch (e) {}
+try { db.prepare("ALTER TABLE invoices ADD COLUMN template TEXT DEFAULT 'fne'").run(); } catch (e) {}
+try { db.prepare("ALTER TABLE recurring_invoices ADD COLUMN template TEXT DEFAULT 'fne'").run(); } catch (e) {}
+try { db.prepare("ALTER TABLE invoices ADD COLUMN global_discount REAL DEFAULT 0").run(); } catch (e) {}
+try { db.prepare("ALTER TABLE recurring_invoices ADD COLUMN global_discount REAL DEFAULT 0").run(); } catch (e) {}
+try { db.prepare("ALTER TABLE invoice_items ADD COLUMN inventory_item_id INTEGER").run(); } catch (e) {}
 
 // Migration for company_settings payment modes
 const paymentModeCols = [
@@ -1257,5 +1537,11 @@ try {
 } catch (error) {
   console.error("Error setting up budget limits", error);
 }
+}
+
+// Automatically trigger migration for default database on boot
+dbStorage.run(defaultDb, () => {
+  runDatabaseMigrations(true);
+});
 
 export default db;

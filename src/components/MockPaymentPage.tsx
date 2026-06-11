@@ -21,19 +21,34 @@ export function MockPaymentPage() {
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     try {
-      const res = await apiFetch('/api/payment/mock-confirm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction_id: transactionId })
-      });
-
-      if (res.ok) {
-        setStatus('success');
-        setTimeout(() => {
-          navigate('/dashboard'); // Redirect to dashboard after success
-        }, 3000);
+      if (searchParams.get('invoice_id')) {
+        const invId = searchParams.get('invoice_id');
+        const res = await apiFetch(`/api/invoices/${invId}/pay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: parseFloat(amount || '0'), paymentAccount: '521' }) // Default to bank
+        });
+        if (res.ok) {
+          setStatus('success');
+          setTimeout(() => navigate('/transactions'), 3000);
+        } else {
+          setStatus('failed');
+        }
       } else {
-        setStatus('failed');
+        const res = await apiFetch('/api/payment/mock-confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transaction_id: transactionId })
+        });
+
+        if (res.ok) {
+          setStatus('success');
+          setTimeout(() => {
+            navigate('/dashboard'); // Redirect to dashboard after success
+          }, 3000);
+        } else {
+          setStatus('failed');
+        }
       }
     } catch (err) {
       setStatus('failed');
@@ -48,8 +63,10 @@ export function MockPaymentPage() {
             <CheckCircle className="text-brand-green w-10 h-10" />
           </div>
           <h2 className="text-2xl font-bold text-slate-900 mb-2">Paiement Réussi !</h2>
-          <p className="text-slate-500 mb-6">Votre abonnement {plan} est maintenant actif.</p>
-          <div className="text-sm text-slate-400">Redirection vers le tableau de bord...</div>
+          <p className="text-slate-500 mb-6">
+             {searchParams.get('invoice_id') ? "Votre paiement a été reçu et comptabilisé avec succès." : `Votre abonnement ${plan} est maintenant actif.`}
+          </p>
+          <div className="text-sm text-slate-400">Redirection automatique...</div>
         </div>
       </div>
     );

@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils';
 import { sanitizeText, formatCurrencyPDF } from '@/lib/pdfUtils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { exportToCSV, PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings } from '@/lib/exportUtils';
+import { PageHeader } from './ui/PageHeader';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface TrialBalanceEntry {
   code: string;
@@ -180,36 +182,40 @@ export function TrialBalance() {
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">Balance Générale</h1>
-          <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400">Synthèse des comptes et vérification de l'équilibre</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button 
-            onClick={handleExportCSV}
-            className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 sm:px-4 py-2 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors shadow-sm text-sm"
-          >
-            <FileSpreadsheet size={18} />
-            CSV
-          </button>
-          <button 
-            onClick={handleExportExcel}
-            className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 sm:px-4 py-2 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors shadow-sm text-sm"
-          >
-            <FileSpreadsheet size={18} className="text-brand-green" />
-            Excel
-          </button>
-          <button 
-            onClick={handleExportPDF}
-            className="flex-1 sm:flex-none bg-brand-green hover:bg-brand-green-dark text-white px-3 sm:px-4 py-2 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors shadow-lg shadow-brand-green/20 text-sm"
-          >
-            <Download size={18} />
-            PDF
-          </button>
-        </div>
-      </div>
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="space-y-6"
+    >
+      <PageHeader
+        title="Balance Générale"
+        subtitle="Synthèse des comptes et vérification de l'équilibre"
+        actions={
+          <>
+            <button 
+              onClick={handleExportCSV}
+              className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 sm:px-4 py-2 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors shadow-sm text-sm"
+            >
+              <FileSpreadsheet size={18} />
+              CSV
+            </button>
+            <button 
+              onClick={handleExportExcel}
+              className="flex-1 sm:flex-none bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-3 sm:px-4 py-2 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors shadow-sm text-sm"
+            >
+              <FileSpreadsheet size={18} className="text-brand-green" />
+              Excel
+            </button>
+            <button 
+              onClick={handleExportPDF}
+              className="flex-1 sm:flex-none bg-brand-green hover:bg-brand-green-dark text-white px-3 sm:px-4 py-2 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors shadow-lg shadow-brand-green/20 text-sm"
+            >
+              <Download size={18} />
+              PDF
+            </button>
+          </>
+        }
+      />
 
       {/* Filters */}
       <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-100 dark:border-slate-800 flex flex-col lg:flex-row gap-4 items-stretch lg:items-end">
@@ -277,8 +283,8 @@ export function TrialBalance() {
 
       {/* Table */}
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
+        <div className="w-full min-w-0 overflow-auto ">
+          <table className="w-full text-sm text-left min-w-[800px]">
             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
               <tr>
                 <th className="px-6 py-3 font-medium w-24">Compte</th>
@@ -331,6 +337,6 @@ export function TrialBalance() {
           </table>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

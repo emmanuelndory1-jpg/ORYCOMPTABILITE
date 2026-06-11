@@ -210,7 +210,7 @@ service cloud.firestore {
     }
 
     match /ocr_feedback/{feedbackId} {
-      allow read: if isAdmin();
+      allow read: if isVerified();
       allow create: if isVerified() && incoming().userId == request.auth.uid;
     }
   }

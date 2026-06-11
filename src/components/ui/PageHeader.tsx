@@ -17,10 +17,14 @@ export function PageHeader({
   icon, 
   actions, 
   className,
-  sticky = true 
+  sticky = false 
 }: PageHeaderProps) {
   return (
-    <div className={cn(
+    <motion.div 
+      initial={{ opacity: 0, y: -15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: 'easeOut' }}
+      className={cn(
       "flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 md:mb-8",
       sticky && "sticky top-16 md:top-20 z-30 py-2 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md -mx-4 px-4 sm:-mx-6 sm:px-6 md:-mx-8 md:px-8",
       className
@@ -48,6 +52,6 @@ export function PageHeader({
           {actions}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { LayoutDashboard, BookOpen, Calculator, Menu, Wallet, ChevronDown, FileText, Target, Receipt, History, Users, Settings2, Sparkles, ShieldCheck, ShoppingBag, Briefcase, Plus, Camera, Search, X } from 'lucide-react';
+import { LayoutDashboard, BookOpen, Calculator, Menu, Wallet, ChevronDown, FileText, Target, Receipt, History, Users, Settings2, Sparkles, ShieldCheck, ShoppingBag, Briefcase, Plus, Camera, Search, X, Folder, CheckSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -61,6 +61,7 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
         { id: 'ledger', path: '/ledger', label: 'Grand Livre', icon: FileText },
         { id: 'trial-balance', path: '/trial-balance', label: 'Balance', icon: Calculator },
         { id: 'payroll', path: '/payroll', label: 'Paie', icon: Briefcase, module: 'payroll' },
+        { id: 'hr-dashboard', path: '/hr-dashboard', label: 'RH', icon: Briefcase, module: 'payroll' },
         { id: 'vat', path: '/vat', label: 'TVA', icon: Receipt, module: 'vat' },
       ]
     },
@@ -79,9 +80,13 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
     { 
       id: 'analysis', 
       path: '/financial-auditor', 
-      label: 'Analyse', 
+      label: 'Outils', 
       icon: Sparkles,
       items: [
+        { id: 'documents', path: '/documents', label: 'Documents', icon: Folder },
+        { id: 'messaging', path: '/messaging', label: 'Messages', icon: FileText },
+        { id: 'tasks', path: '/tasks', label: 'Tâches', icon: CheckSquare },
+        { id: 'settings', path: '/settings', label: 'Paramètres', icon: Settings2 },
         { id: 'financial-auditor', path: '/financial-auditor', label: 'Audit IA', icon: Sparkles },
         { id: 'tax-assistant', path: '/tax-assistant', label: 'Fisc IA', icon: ShieldCheck },
         { id: 'audit', path: '/audit', label: 'Logs', icon: History, module: 'audit' },
@@ -162,13 +167,13 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
                     className={cn(
                       "flex items-center gap-3 p-3 rounded-2xl transition-all text-left",
                       isSubActive 
-                        ? "bg-brand-green/10 text-brand-green" 
+                        ? "bg-brand-green/10 dark:bg-brand-green/20 text-brand-green dark:text-emerald-400" 
                         : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/5"
                     )}
                   >
                     <div className={cn(
                       "w-8 h-8 rounded-lg flex items-center justify-center transition-all",
-                      isSubActive ? "bg-brand-green text-white" : "bg-slate-100 dark:bg-slate-800"
+                      isSubActive ? "bg-brand-green text-white dark:bg-emerald-500 dark:text-slate-950" : "bg-slate-100 dark:bg-slate-800"
                     )}>
                       <subItem.icon size={16} />
                     </div>
@@ -229,13 +234,13 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
               onClick={() => handleSectionClick(section)}
               className={cn(
                 "flex flex-col items-center gap-1 p-2 rounded-[2rem] transition-all relative flex-1 min-w-0 group",
-                isExpanded || isCurrentSectionActive ? "text-brand-green dark:text-brand-green-light" : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                isExpanded || isCurrentSectionActive ? "text-brand-green dark:text-emerald-400" : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
               )}
             >
               {(isExpanded || isCurrentSectionActive) && (
                 <motion.div 
                   layoutId="mobile-dock-bg"
-                  className="absolute inset-0 bg-brand-green/10 dark:bg-brand-green/20 rounded-[2rem] -z-10"
+                  className="absolute inset-0 bg-brand-green/10 dark:bg-brand-green/30 rounded-[2rem] -z-10"
                   transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                 />
               )}
@@ -284,13 +289,13 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
               onClick={() => handleSectionClick(section)}
               className={cn(
                 "flex flex-col items-center gap-1 p-2 rounded-[2rem] transition-all relative flex-1 min-w-0 group",
-                isExpanded || isCurrentSectionActive ? "text-brand-green dark:text-brand-green-light" : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                isExpanded || isCurrentSectionActive ? "text-brand-green dark:text-emerald-400" : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
               )}
             >
               {(isExpanded || isCurrentSectionActive) && (
                 <motion.div 
                   layoutId="mobile-dock-bg"
-                  className="absolute inset-0 bg-brand-green/10 dark:bg-brand-green/20 rounded-[2rem] -z-10"
+                  className="absolute inset-0 bg-brand-green/10 dark:bg-brand-green/30 rounded-[2rem] -z-10"
                   transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                 />
               )}

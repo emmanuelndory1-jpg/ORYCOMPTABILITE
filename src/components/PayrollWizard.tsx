@@ -220,11 +220,11 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
   ];
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white dark:bg-slate-900 w-full max-w-4xl max-h-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+        className="bg-white dark:bg-slate-900 w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col"
       >
         {/* Header */}
         <div className="px-8 py-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 sticky top-0 z-10">
@@ -622,11 +622,11 @@ export function PayrollWizard({ onComplete, onCancel }: PayrollWizardProps) {
 
         {/* Sub-modal for editing variables */}
         {editingPayslip && (
-          <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 z-[60] flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white dark:bg-slate-800 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+              className="bg-white dark:bg-slate-800 w-full max-w-md rounded-2xl p-6 shadow-2xl flex flex-col"
             >
               <h4 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Variables de Paie</h4>
               <p className="text-sm text-slate-500 mb-6">{editingPayslip.name}</p>

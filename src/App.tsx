@@ -1,3 +1,4 @@
+import { triggerCloudBackup } from './lib/backup';
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useLocation, Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
@@ -8,6 +9,7 @@ import { Accounts } from './components/Accounts';
 import { ExpertAdvisor as Assistant } from './components/ExpertAdvisor';
 import { Journal } from './components/Journal';
 import { Treasury } from './components/Treasury';
+import { MobileMoneyManager } from './components/MobileMoneyManager';
 import { FinancialStatements } from './components/FinancialStatements';
 import { CustomReports } from './components/CustomReports';
 import { ComplianceAudit } from './components/ComplianceAudit';
@@ -23,7 +25,9 @@ import { TrialBalance } from './components/TrialBalance';
 import { TaxManager } from './components/TaxManager';
 import { TaxSummaryReport } from './components/TaxSummaryReport';
 import { PayrollManager } from './components/PayrollManager';
+import { HRDashboard } from './components/HRDashboard';
 import { ThirdPartyManager } from './components/ThirdPartyManager';
+import { CRMManager } from './components/CRMManager';
 import { BudgetManager } from './components/BudgetManager';
 import { InvoicingManager } from './components/InvoicingManager';
 import { MobileNav } from './components/MobileNav';
@@ -31,13 +35,22 @@ import { PricingPage } from './components/PricingPage';
 import { MockPaymentPage } from './components/MockPaymentPage';
 import { LoginPage } from './components/LoginPage';
 import { RegisterPage } from './components/RegisterPage';
+import { TermsPage } from './components/TermsPage';
+import { PrivacyPage } from './components/PrivacyPage';
 import { TaxAssistant } from './components/TaxAssistant';
 import { BankReconciliation } from './components/BankReconciliation';
 import { TeamManager } from './components/TeamManager';
 import { FinancialAuditor } from './components/FinancialAuditor';
+import { DocumentManager } from './components/DocumentManager';
+import { TasksManager } from './components/TasksManager';
+import { MessagingManager } from './components/MessagingManager';
 import { AiTrainingDashboard } from './components/AiTrainingDashboard';
+import InventoryManager from './components/InventoryManager';
 import { Header } from './components/Header';
 import { CommandPalette } from './components/CommandPalette';
+import { Scratchpad } from './components/Scratchpad';
+import { QuickActionFAB } from './components/QuickActionFAB';
+import { SyncProvider } from './context/SyncContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { LanguageProvider } from './context/LanguageContext';
@@ -46,7 +59,7 @@ import { ModuleProvider } from './context/ModuleContext';
 import { DialogProvider } from './components/DialogProvider';
 import { apiFetch } from './lib/api';
 import { cn } from './lib/utils';
-import { Loader2, Menu, Moon, Sun } from 'lucide-react';
+import { Loader2, Menu, Moon, Sun, WifiOff } from 'lucide-react';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -86,11 +99,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+import { motion, AnimatePresence } from 'motion/react';
+
 function DashboardLayout() {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isCompanyCreated, setIsCompanyCreated] = useState<boolean | null>(null);
   const [companySettings, setCompanySettings] = useState<any>(null);
   const [openJournalModal, setOpenJournalModal] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -137,6 +153,19 @@ function DashboardLayout() {
       setIsCompanyCreated(false);
     }
   }, [user]);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const handleQuickAction = (action: string) => {
     if (action === 'voice') {
@@ -190,65 +219,101 @@ function DashboardLayout() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 transition-colors duration-300">
+    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 transition-colors duration-500 selection:bg-brand-green/20 selection:text-brand-green">
       <Sidebar 
         isMobileOpen={isMobileOpen}
         setIsMobileOpen={setIsMobileOpen}
         companyName={companySettings?.name || 'Ma PME'}
         logoUrl={companySettings?.logo_url}
+        taxesEnabled={companySettings?.taxes_enabled !== false && Number(companySettings?.taxes_enabled) !== 0}
         user={user}
       />
 
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden pb-20 md:pb-0 relative">
-        <div className="hidden md:block">
-          <Header logoUrl={companySettings?.logo_url} />
-        </div>
-        
-        {/* Mobile Header */}
-        <div className="md:hidden bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-slate-200 dark:border-white/5 px-4 h-16 flex items-center justify-between sticky top-0 z-40 transition-colors duration-300 shadow-sm">
-          <Link to="/" className="flex items-center gap-2 group">
-            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-900 flex items-center justify-center shadow-lg shadow-brand-green/20 border border-slate-100 dark:border-white/5 transition-transform active:scale-95 overflow-hidden">
-              <Logo className="w-5 h-5 text-brand-green" showText={false} src={companySettings?.logo_url} />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-black text-xs tracking-tight text-slate-900 dark:text-white uppercase">ORYCOMPTA</span>
-              <span className="text-[7px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Expert OHADA</span>
-            </div>
-          </Link>
-          
-          <div className="flex items-center gap-1">
-            <button 
-              onClick={() => setIsMobileOpen(true)} 
-              className="p-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/5 rounded-2xl transition-all active:scale-90"
-              aria-label="Open menu"
-            >
-              <Menu size={20} />
-            </button>
-          </div>
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden pb-20 md:pb-0 relative bg-slate-50/50 dark:bg-[#0f172a]/50">
+        <div>
+          <Header logoUrl={companySettings?.logo_url} onMenuClick={() => setIsMobileOpen(true)} />
         </div>
 
+        {/* Offline Banner */}
+        {!isOnline && (
+          <div className="bg-rose-500 text-white px-4 py-2.5 text-xs font-bold flex items-center justify-center gap-2 shadow-md z-50">
+            <WifiOff size={16} />
+            <span>Mode hors-ligne actif. Vos données seront synchronisées lors de la reconnexion.</span>
+          </div>
+        )}
+
         {/* Main Content Area */}
-        <div className="flex-1 overflow-y-auto scroll-smooth">
+        <div id="main-content-area" className="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth custom-scrollbar relative flex flex-col min-w-0 w-full">
+          <div className="absolute inset-0 bg-grid-slate-100 dark:bg-grid-white bg-[bottom_1px_center] pointer-events-none opacity-[0.4] dark:opacity-[0.8]" />
           <div className={cn(
-            "mx-auto px-4 sm:px-6 md:px-8 py-6 md:py-8",
-            location.pathname === '/assistant' ? "max-w-full" : "max-w-7xl"
+            "mx-auto px-4 sm:px-6 md:px-8 lg:px-10 pt-10 pb-6 md:pt-14 md:pb-8 w-full relative z-10 flex flex-col flex-1 min-w-0",
+            location.pathname === '/assistant' ? "max-w-full" : "max-w-[1600px] 2xl:max-w-[1800px]"
           )}>
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 h-full">
-              <Outlet context={{ openJournalModal, setOpenJournalModal, companySettings, refreshCompanySettings: fetchCompanyStatus }} />
-            </div>
+            <AnimatePresence mode="wait">
+              <motion.div 
+                key={location.pathname} 
+                initial={{ opacity: 0, y: 15, filter: 'blur(4px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, y: -15, filter: 'blur(4px)' }}
+                transition={{ duration: 0.3, ease: 'easeOut' }}
+                className="flex flex-col flex-1 min-w-0 w-full"
+              >
+                <Breadcrumbs />
+                <Outlet context={{ openJournalModal, setOpenJournalModal, companySettings, refreshCompanySettings: fetchCompanyStatus }} />
+              </motion.div>
+            </AnimatePresence>
           </div>
         </div>
 
         <FloatingAssistant />
         <CommandPalette />
+        <Scratchpad />
+        <QuickActionFAB onAction={(action) => {
+          if (action === 'new') {
+            navigate('/journal');
+          } else if (action === 'scan') {
+            navigate('/journal', { state: { action: 'scan' } });
+          } else if (action === 'voice') {
+            navigate('/assistant');
+          } else if (action === 'invoice') {
+            navigate('/invoicing', { state: { action: 'new' } });
+          } else if (action === 'payroll') {
+            navigate('/payroll', { state: { action: 'new' } });
+          } else if (action === 'asset') {
+            navigate('/assets', { state: { action: 'new' } });
+          }
+        }} />
         <MobileNav onMenuClick={() => setIsMobileOpen(true)} />
       </main>
     </div>
   );
 }
 
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    // Scroll the main content area to top on route change
+    const mainContent = document.querySelector('#main-content-area');
+    if (mainContent) {
+        mainContent.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [pathname]);
+  return null;
+}
+
 export default function App() {
   useEffect(() => {
+    // Background Backup Sync Pattern
+    // Executes automatically every 6 hours while the app is open
+    const initBackupSync = () => {
+       const syncInterval = setInterval(() => {
+          triggerCloudBackup().catch(e => console.error("Cloud backup failed:", e));
+       }, 6 * 60 * 60 * 1000);
+       return () => clearInterval(syncInterval);
+    };
+
+    const cleanupBackup = initBackupSync();
+
     // Initialize CSRF token with retry for cold starts
     const initCsrf = async (retries = 3) => {
       for (let i = 0; i < retries; i++) {
@@ -271,15 +336,19 @@ export default function App() {
       }
     };
     initCsrf();
+    
+    return cleanupBackup;
   }, []);
 
   return (
-    <ThemeProvider>
-      <LanguageProvider>
+    <SyncProvider>
+      <ThemeProvider>
+        <LanguageProvider>
         <DialogProvider>
           <AuthProvider>
             <ModuleProvider>
               <FiscalYearProvider>
+                <ScrollToTop />
                 <Routes>
                 <Route path="/login" element={
                   <PublicRoute>
@@ -291,6 +360,8 @@ export default function App() {
                     <RegisterPage />
                   </PublicRoute>
                 } />
+                <Route path="/terms" element={<TermsPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/pricing" element={<PricingPage />} />
                 <Route path="/mock-payment" element={<MockPaymentPage />} />
                 <Route 
@@ -311,14 +382,21 @@ export default function App() {
                   <Route path="compliance" element={<ComplianceAudit />} />
                   <Route path="recurring" element={<RecurringTransactions />} />
                   <Route path="assets" element={<AssetsManager />} />
+                  <Route path="inventory" element={<InventoryManager />} />
                   <Route path="p2p" element={<ProcureToPay />} />
                   <Route path="company" element={<CompanyCreation />} />
                   <Route path="treasury" element={<Treasury />} />
+                  <Route path="documents" element={<DocumentManager />} />
+                  <Route path="tasks" element={<TasksManager />} />
+                  <Route path="messaging" element={<MessagingManager />} />
+                  <Route path="mobile-money" element={<MobileMoneyManager />} />
                   <Route path="reconciliation" element={<BankReconciliation />} />
                   <Route path="vat" element={<TaxManager />} />
                   <Route path="tax-report" element={<TaxSummaryReport />} />
                   <Route path="payroll" element={<PayrollManager />} />
+                  <Route path="hr-dashboard" element={<HRDashboard />} />
                   <Route path="third-parties" element={<ThirdPartyManager />} />
+                  <Route path="crm" element={<CRMManager />} />
                   <Route path="budgets" element={<BudgetManager />} />
                   <Route path="invoicing" element={<InvoicingManager />} />
                   <Route path="audit" element={<AuditLogViewer />} />
@@ -336,13 +414,31 @@ export default function App() {
           </AuthProvider>
         </DialogProvider>
       </LanguageProvider>
-    </ThemeProvider>
+      </ThemeProvider>
+    </SyncProvider>
   );
 }
 
 import { useOutletContext } from 'react-router-dom';
 
 function JournalWrapper() {
+  const location = useLocation();
   const { openJournalModal, setOpenJournalModal } = useOutletContext<{ openJournalModal: boolean; setOpenJournalModal: (val: boolean) => void }>();
-  return <Journal openModal={openJournalModal} onModalClose={() => setOpenJournalModal(false)} />;
+  
+  const [triggerAction, setTriggerAction] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (location.state?.action) {
+      setTriggerAction(location.state.action);
+      // Consume the state so it doesn't trigger again on refresh
+      window.history.replaceState({}, '');
+    }
+  }, [location.state]);
+
+  return <Journal 
+    openModal={openJournalModal} 
+    onModalClose={() => setOpenJournalModal(false)}
+    scanTrigger={triggerAction === 'scan'}
+    onScanTriggerConsumed={() => setTriggerAction(null)}
+  />;
 }

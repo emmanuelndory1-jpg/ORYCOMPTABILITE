@@ -363,7 +363,7 @@ export function FinancialStatements() {
   if (!data) return null;
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 min-w-0 w-full">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">États Financiers</h1>
@@ -430,7 +430,7 @@ export function FinancialStatements() {
       </div>
 
       {/* Tabs - Scrollable on mobile */}
-      <div className="overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-hide">
+      <div className="w-full min-w-0 overflow-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-hide">
         <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-max sm:w-fit min-w-full sm:min-w-0">
           <button
             onClick={() => setActiveTab('income')}

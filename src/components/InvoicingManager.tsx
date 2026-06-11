@@ -1,6 +1,6 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { PageHeader } from './ui/PageHeader';
 import { 
   Plus, 
@@ -26,7 +26,11 @@ import {
   Loader2,
   List,
   BarChart3,
-  Receipt
+  Receipt,
+  BookOpen,
+  X,
+  User,
+  Edit2
 } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useFiscalYear } from '@/context/FiscalYearContext';
@@ -41,7 +45,7 @@ import { CurrencyAnalyzer } from './CurrencyAnalyzer';
 import { motion, AnimatePresence } from 'motion/react';
 import { RecurringInvoiceManager } from './RecurringInvoiceManager';
 
-type DocType = 'invoice' | 'quote' | 'recurring';
+type DocType = 'invoice' | 'quote' | 'recurring' | 'proforma';
 
 interface Invoice {
   id: number;
@@ -74,9 +78,14 @@ export function InvoicingManager() {
   const [exporting, setExporting] = useState(false);
   const [companySettings, setCompanySettings] = useState<any>(null);
   const [prefillData, setPrefillData] = useState<any>(null);
+  const [selectedDocs, setSelectedDocs] = useState<number[]>([]);
+  const [isBatchSending, setIsBatchSending] = useState(false);
 
   useEffect(() => {
-    if (location.state?.prefill) {
+    if (location.state?.action === 'new') {
+      setShowEditor(true);
+      window.history.replaceState({}, document.title);
+    } else if (location.state?.prefill) {
       setPrefillData(location.state.prefill);
       setShowEditor(true);
       // Clear state to avoid re-opening on refresh
@@ -90,14 +99,19 @@ export function InvoicingManager() {
       .then(data => setCompanySettings(data))
       .catch(err => console.error("Failed to fetch company settings", err));
   }, []);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchParams] = useSearchParams();
+  const [searchQuery, setSearchQuery] = useState(searchParams.get('search') || '');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showEditor, setShowEditor] = useState(false);
   const [showViewer, setShowViewer] = useState(false);
   const [showQuickView, setShowQuickView] = useState(false);
   const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
+  const [quickEditDocId, setQuickEditDocId] = useState<number | null>(null);
+  const [quickEditData, setQuickEditData] = useState<any>(null);
   const [activeView, setActiveView] = useState<'list' | 'reports'>('list');
   const [reportData, setReportData] = useState<any>(null);
   const [showAnalyzer, setShowAnalyzer] = useState(false);
+  const [showTransactionPicker, setShowTransactionPicker] = useState(false);
 
   useEffect(() => {
     fetchDocuments();
@@ -105,6 +119,27 @@ export function InvoicingManager() {
       fetchReports();
     }
   }, [activeTab, activeView, activeYear?.id]);
+
+  const handleQuickEditSave = async () => {
+    if (!quickEditDocId || !quickEditData) return;
+    try {
+      const res = await apiFetch(`/api/invoices/${quickEditDocId}/quick`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(quickEditData)
+      });
+      if (res.ok) {
+        setQuickEditDocId(null);
+        setQuickEditData(null);
+        dialogAlert('Document mis à jour', 'success');
+        fetchDocuments();
+      } else {
+        dialogAlert('Erreur lors de la mise à jour', 'error');
+      }
+    } catch (e) {
+      dialogAlert('Erreur réseau', 'error');
+    }
+  };
 
   const fetchReports = async () => {
     try {
@@ -179,7 +214,7 @@ export function InvoicingManager() {
       'Statut': doc.status.toUpperCase()
     }));
 
-    exportToExcel(exportData, `${activeTab === 'invoice' ? 'Factures' : 'Devis'}_${new Date().toISOString().split('T')[0]}`);
+    exportToExcel(exportData, `${activeTab === 'invoice' ? 'Factures' : activeTab === 'quote' ? 'Devis' : 'Proformas'}_${new Date().toISOString().split('T')[0]}`);
   };
 
   const handleDownloadPDF = async (docId: number) => {
@@ -187,7 +222,7 @@ export function InvoicingManager() {
       const res = await apiFetch(`/api/invoices/${docId}`);
       if (res.ok) {
         const fullDoc = await res.json();
-        generateInvoicePDF(fullDoc, companySettings);
+        await generateInvoicePDF(fullDoc, companySettings);
       }
     } catch (err) {
       console.error("Failed to download PDF", err);
@@ -195,10 +230,12 @@ export function InvoicingManager() {
     }
   };
 
-  const filteredDocs = (documents || []).filter(doc => 
-    (doc.number?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-    (doc.third_party_name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
-  );
+  const filteredDocs = (documents || []).filter(doc => {
+    const matchesSearch = (doc.number?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+                          (doc.third_party_name?.toLowerCase() || '').includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || doc.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
 
   const getStatusBadge = (status: string) => {
     const configs: Record<string, { label: string; color: string; bg: string; icon: any }> = {
@@ -296,7 +333,7 @@ export function InvoicingManager() {
 
       <AnimatePresence>
         {showEditor && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6">
+          <div className="fixed inset-0 z-[110] flex justify-center p-4 sm:p-6 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -308,14 +345,16 @@ export function InvoicingManager() {
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="relative w-full max-w-5xl max-h-[90vh] bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
+              className="relative w-full max-w-5xl bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
             >
               <InvoiceEditor 
                 type={activeTab === 'recurring' ? 'invoice' : activeTab} 
+                id={selectedDocId || undefined}
                 prefill={prefillData}
                 onClose={() => {
                   setShowEditor(false);
                   setPrefillData(null);
+                  setSelectedDocId(null);
                   fetchDocuments();
                 }} 
               />
@@ -325,8 +364,79 @@ export function InvoicingManager() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {quickEditDocId && quickEditData && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setQuickEditDocId(null);
+                setQuickEditData(null);
+              }}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="relative w-full max-w-lg bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl p-8"
+            >
+              <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-6">Édition Rapide ({quickEditData.number})</h3>
+              
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Date d'émission</label>
+                  <input type="date" value={quickEditData.date} onChange={e => setQuickEditData({...quickEditData, date: e.target.value})} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Date d'échéance</label>
+                  <input type="date" value={quickEditData.due_date} onChange={e => setQuickEditData({...quickEditData, due_date: e.target.value})} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Statut</label>
+                  <select value={quickEditData.status} onChange={e => setQuickEditData({...quickEditData, status: e.target.value})} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                    <option value="draft">Brouillon</option>
+                    <option value="sent">Envoyé</option>
+                    <option value="paid">Payé</option>
+                    <option value="overdue">En retard</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Notes</label>
+                  <textarea value={quickEditData.notes || ''} onChange={e => setQuickEditData({...quickEditData, notes: e.target.value})} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl min-h-[80px]" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Conditions de règlement</label>
+                  <textarea value={quickEditData.terms || ''} onChange={e => setQuickEditData({...quickEditData, terms: e.target.value})} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl min-h-[80px]" />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-4 mt-8">
+                <button
+                  onClick={() => {
+                    setQuickEditDocId(null);
+                    setQuickEditData(null);
+                  }}
+                  className="px-6 py-3 font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleQuickEditSave}
+                  className="px-6 py-3 font-bold text-white bg-brand-green hover:bg-brand-green/90 rounded-xl shadow-lg"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {showViewer && selectedDocId && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6">
+          <div className="fixed inset-0 z-[110] flex justify-center p-4 sm:p-6 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -338,9 +448,9 @@ export function InvoicingManager() {
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="relative w-full max-w-4xl max-h-[90vh] bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
+              className="relative w-full max-w-4xl bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="p-8 overflow-y-auto">
+              <div className="p-8 overflow-y-auto flex-1 min-h-0 w-full">
                 <InvoiceViewer 
                   id={selectedDocId} 
                   onClose={() => {
@@ -359,8 +469,8 @@ export function InvoicingManager() {
         )}
       </AnimatePresence>
       <PageHeader
-        title={activeTab === 'invoice' ? 'Facturation' : activeTab === 'quote' ? 'Devis' : 'Facturation Récurrente'}
-        subtitle={activeTab === 'invoice' ? 'Gérez vos factures clients et suivez les paiements' : activeTab === 'quote' ? 'Propositions commerciales' : 'Abonnements et factures périodiques'}
+        title={activeTab === 'invoice' ? 'Facturation' : activeTab === 'quote' ? 'Devis' : activeTab === 'proforma' ? 'Proformas' : 'Facturation Récurrente'}
+        subtitle={activeTab === 'invoice' ? 'Gérez vos factures clients et suivez les paiements' : activeTab === 'quote' ? 'Propositions commerciales' : activeTab === 'proforma' ? 'Factures proforma' : 'Abonnements et factures périodiques'}
         icon={<Receipt size={24} />}
         actions={
           <div className="flex items-center gap-3">
@@ -401,6 +511,14 @@ export function InvoicingManager() {
                   <Globe size={20} />
                 </button>
                 <button 
+                  onClick={() => setShowTransactionPicker(true)}
+                  className="bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 whitespace-nowrap"
+                  title="Créer depuis des écritures existantes"
+                >
+                  <BookOpen size={20} className="text-brand-green" />
+                  <span className="hidden sm:inline">Depuis écritures</span>
+                </button>
+                <button 
                   onClick={() => setShowEditor(true)}
                   className="bg-brand-green hover:bg-brand-green/90 text-white px-6 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-green/20 transition-all active:scale-95 whitespace-nowrap"
                 >
@@ -413,7 +531,7 @@ export function InvoicingManager() {
         }
       />
 
-      <div className="flex items-center justify-between gap-4 overflow-x-auto no-scrollbar py-1">
+      <div className="w-full min-w-0 overflow-auto flex items-center justify-between gap-4  no-scrollbar py-1">
         <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shadow-inner">
           <button
             onClick={() => setActiveTab('invoice')}
@@ -432,6 +550,15 @@ export function InvoicingManager() {
             )}
           >
             Devis
+          </button>
+          <button
+            onClick={() => setActiveTab('proforma')}
+            className={cn(
+              "px-5 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all",
+              activeTab === 'proforma' ? "bg-white dark:bg-slate-700 text-brand-green shadow-sm" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            Proforma
           </button>
           <button
             onClick={() => setActiveTab('recurring')}
@@ -490,7 +617,7 @@ export function InvoicingManager() {
                 <div className="p-4 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-2xl group-hover:scale-110 transition-transform duration-300">
                   <FileText size={28} />
                 </div>
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Total {activeTab === 'invoice' ? 'Facturé' : 'Devis'}</span>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Total {activeTab === 'invoice' ? 'Facturé' : activeTab === 'quote' ? 'Devis' : 'Proformas'}</span>
               </div>
               <div className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{formatCurrency(stats.total)}</div>
               <div className="flex items-center gap-2 mt-2">
@@ -540,7 +667,7 @@ export function InvoicingManager() {
                 <div className="p-4 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-2xl group-hover:scale-110 transition-transform duration-300">
                   {activeTab === 'invoice' ? <AlertCircle size={28} /> : <FileX size={28} />}
                 </div>
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{activeTab === 'invoice' ? 'En retard' : 'Refusé'}</span>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{activeTab === 'invoice' ? 'En retard' : activeTab === 'proforma' ? 'Refusé / Expiré' : 'Refusé'}</span>
               </div>
               <div className="text-3xl font-black text-rose-600 font-display tracking-tighter">{formatCurrency(stats.overdue)}</div>
               <div className="flex items-center gap-2 mt-2">
@@ -553,7 +680,37 @@ export function InvoicingManager() {
 
       {/* Filters & Search */}
       <div className="premium-card p-4 flex flex-col md:flex-row gap-4 items-center">
-        <div className="relative flex-1 w-full group">
+        <div className="flex flex-wrap lg:flex-nowrap gap-2">
+                <button 
+                  onClick={() => setStatusFilter('all')}
+                  className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${statusFilter === 'all' ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900' : 'bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
+                >
+                  Tous
+                </button>
+                {activeTab === 'invoice' && (
+                  <>
+                    <button 
+                      onClick={() => setStatusFilter('overdue')}
+                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${statusFilter === 'overdue' ? 'bg-rose-500 text-white' : 'bg-rose-50 text-rose-500 hover:bg-rose-100 dark:bg-rose-900/20 dark:text-rose-400 dark:hover:bg-rose-900/40'}`}
+                    >
+                      En retard
+                    </button>
+                    <button 
+                      onClick={() => setStatusFilter('paid')}
+                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${statusFilter === 'paid' ? 'bg-emerald-500 text-white' : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400 dark:hover:bg-emerald-900/40'}`}
+                    >
+                      Payés
+                    </button>
+                    <button 
+                      onClick={() => setStatusFilter('sent')}
+                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${statusFilter === 'sent' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-blue-500 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/40'}`}
+                    >
+                      Envoyés
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="relative flex-1 w-full group">
           <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-brand-green transition-colors" size={20} />
           <input 
             type="text"
@@ -575,11 +732,35 @@ export function InvoicingManager() {
       </div>
 
       {/* Table */}
-      <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] border border-slate-100 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+      <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] border border-slate-100 dark:border-slate-700 shadow-sm overflow-hidden relative">
+        {selectedDocs.length > 0 && (
+          <div className="absolute top-0 left-0 right-0 z-10 bg-brand-green text-white px-8 py-4 flex items-center justify-between border-b border-brand-green-light">
+            <div className="flex items-center gap-4">
+              <span className="font-bold">{selectedDocs.length} document(s) sélectionné(s)</span>
+            </div>
+            <button 
+              onClick={() => setIsBatchSending(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-white text-brand-green rounded-xl font-bold text-sm shadow-sm hover:scale-105 active:scale-95 transition-all"
+            >
+              <Mail size={16} /> Envoyer par Email
+            </button>
+          </div>
+        )}
+        <div className="w-full min-w-0 overflow-auto ">
+          <table className="w-full text-left border-collapse min-w-[800px]">
             <thead>
               <tr className="border-b border-slate-50 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50">
+                <th className="px-8 py-6 w-12 text-center">
+                  <input 
+                    type="checkbox"
+                    className="w-4 h-4 rounded text-brand-green focus:ring-brand-green/20 bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700 cursor-pointer"
+                    onChange={(e) => {
+                      if (e.target.checked) setSelectedDocs(filteredDocs.map(d => d.id));
+                      else setSelectedDocs([]);
+                    }}
+                    checked={filteredDocs.length > 0 && selectedDocs.length === filteredDocs.length}
+                  />
+                </th>
                 <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Document</th>
                 <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Client</th>
                 <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Échéance</th>
@@ -591,7 +772,7 @@ export function InvoicingManager() {
             <tbody className="divide-y divide-slate-50 dark:divide-slate-700">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-8 py-24 text-center">
+                  <td colSpan={7} className="px-8 py-24 text-center">
                     <div className="flex flex-col items-center gap-4">
                       <div className="w-12 h-12 border-4 border-brand-green/20 border-t-brand-green rounded-full animate-spin" />
                       <p className="text-slate-500 font-bold tracking-tight">Chargement de vos documents...</p>
@@ -600,7 +781,7 @@ export function InvoicingManager() {
                 </tr>
               ) : filteredDocs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-8 py-24 text-center">
+                  <td colSpan={7} className="px-8 py-24 text-center">
                     <div className="flex flex-col items-center gap-6 max-w-sm mx-auto">
                       <div className="p-8 bg-slate-50 dark:bg-slate-900 rounded-[2rem] text-slate-300">
                         <FileText size={64} />
@@ -628,6 +809,17 @@ export function InvoicingManager() {
                       setShowQuickView(true);
                     }}
                   >
+                    <td className="px-8 py-4 w-12 text-center" onClick={(e) => e.stopPropagation()}>
+                      <input 
+                        type="checkbox"
+                        className="w-4 h-4 rounded text-brand-green focus:ring-brand-green/20 bg-slate-100 border-slate-200 dark:bg-slate-800 dark:border-slate-700 cursor-pointer"
+                        checked={selectedDocs.includes(doc.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedDocs([...selectedDocs, doc.id]);
+                          else setSelectedDocs(selectedDocs.filter(id => id !== doc.id));
+                        }}
+                      />
+                    </td>
                     <td className="px-8 py-6">
                       <div className="flex items-center gap-4">
                         <div className="p-3 bg-slate-100 dark:bg-slate-700 text-slate-500 rounded-2xl group-hover:bg-brand-green group-hover:text-white transition-all duration-300 shadow-sm">
@@ -642,7 +834,18 @@ export function InvoicingManager() {
                       </div>
                     </td>
                     <td className="px-8 py-6">
-                      <div className="font-bold text-slate-700 dark:text-slate-300">{doc.occasional_name || doc.third_party_name}</div>
+                      <div className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                        {doc.occasional_name || doc.third_party_name}
+                        {doc.third_party_id && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); window.location.href = '#/third-parties?search=' + encodeURIComponent(doc.third_party_name); }}
+                            className="p-1.5 text-slate-400 hover:text-brand-green hover:bg-brand-green/10 rounded-lg transition-colors invisible group-hover:visible"
+                            title="Voir le client"
+                          >
+                            <User size={14} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="px-8 py-6">
                       <div className={cn(
@@ -673,6 +876,16 @@ export function InvoicingManager() {
                           onClick={() => handleDownloadPDF(doc.id)}
                         >
                           <Download size={20} />
+                        </button>
+                        <button 
+                          className="p-3 text-slate-400 hover:text-amber-500 hover:bg-amber-500/10 rounded-xl transition-all active:scale-90"
+                          title="Édition Rapide"
+                          onClick={() => {
+                            setQuickEditData(doc);
+                            setQuickEditDocId(doc.id);
+                          }}
+                        >
+                          <Edit2 size={20} />
                         </button>
                         <button 
                           className="p-3 text-slate-400 hover:text-brand-green hover:bg-brand-green/10 rounded-xl transition-all active:scale-90"
@@ -773,6 +986,261 @@ export function InvoicingManager() {
       </div>
     </div>
   )}
+
+  {isBatchSending && (
+    <BatchSendModal 
+      onClose={() => setIsBatchSending(false)}
+      selectedDocs={selectedDocs}
+      documents={documents}
+      companySettings={companySettings}
+      onComplete={() => {
+        setIsBatchSending(false);
+        setSelectedDocs([]);
+        fetchDocuments();
+      }}
+    />
+  )}
+
+  {showTransactionPicker && (
+    <TransactionPickerModal
+      onClose={() => setShowTransactionPicker(false)}
+      onSelect={(tx) => {
+        setShowTransactionPicker(false);
+        setPrefillData(tx);
+        setShowEditor(true);
+      }}
+      formatCurrency={formatCurrency}
+    />
+  )}
 </div>
+  );
+}
+
+function BatchSendModal({ 
+  onClose, 
+  selectedDocs, 
+  documents, 
+  companySettings,
+  onComplete
+}: { 
+  onClose: () => void, 
+  selectedDocs: number[], 
+  documents: Invoice[], 
+  companySettings: any,
+  onComplete: () => void
+}) {
+  const [subject, setSubject] = useState(`Vos documents de ${companySettings?.name || 'notre entreprise'}`);
+  const [body, setBody] = useState(`Bonjour,\n\nVeuillez trouver ci-joint votre document.\n\nCordialement,\nL'équipe ${companySettings?.name || ''}`);
+  const [sending, setSending] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [results, setResults] = useState<any[]>([]);
+
+  const handleSend = async () => {
+    setSending(true);
+    const docsToSend = documents.filter(d => selectedDocs.includes(d.id));
+    const newResults = [];
+    
+    for (let i = 0; i < docsToSend.length; i++) {
+        const doc = docsToSend[i];
+        try {
+           const docRes = await apiFetch(`/api/invoices/${doc.id}`);
+           if (docRes.ok) {
+               const fullDoc = await docRes.json();
+               const recipientEmail = fullDoc.third_party?.email || 'client@example.com';
+               
+               const msgRes = await apiFetch('/api/messages', {
+                 method: 'POST',
+                 body: JSON.stringify({
+                   recipient_email: recipientEmail,
+                   recipient_name: doc.third_party_name,
+                   subject: `${subject} - ${doc.number}`,
+                   body: body,
+                   related_invoice_id: doc.id.toString(),
+                   attachment_url: `pdfurl`
+                 })
+               });
+               
+               if (msgRes.ok) {
+                 newResults.push({ id: doc.id, success: true, number: doc.number, email: recipientEmail });
+                 // also update status to sent in DB if it was a quote or draft invoice
+                 if (doc.status === 'draft') {
+                    await apiFetch(`/api/invoices/${doc.id}/status`, {
+                       method: 'PUT',
+                       body: JSON.stringify({ status: 'sent' })
+                    });
+                 }
+               } else {
+                 newResults.push({ id: doc.id, success: false, number: doc.number });
+               }
+           }
+        } catch (err) {
+            newResults.push({ id: doc.id, success: false, number: doc.number });
+        }
+        setProgress(Math.round(((i + 1) / docsToSend.length) * 100));
+    }
+    
+    setResults(newResults);
+    setSending(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex justify-center p-4 bg-slate-900/80 backdrop-blur-md animate-in fade-in transition-all items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+      <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl border border-slate-100 dark:border-slate-800 animate-in zoom-in-95 flex flex-col">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-brand-green/10 text-brand-green flex items-center justify-center">
+              <Mail size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">Envoi groupé</h2>
+              <p className="text-sm font-medium text-slate-500">{selectedDocs.length} document(s) sélectionné(s)</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+
+        {results.length > 0 ? (
+          <div className="space-y-6">
+            <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl space-y-3 max-h-60 overflow-y-auto custom-scrollbar">
+               {results.map((r, i) => (
+                 <div key={i} className="flex justify-between items-center text-sm font-bold">
+                    <span className="text-slate-700 dark:text-slate-300">{r.number} {r.email ? `(${r.email})` : ''}</span>
+                    <span className={r.success ? "text-brand-green" : "text-rose-500"}>
+                      {r.success ? 'Envoyé' : 'Échec'}
+                    </span>
+                 </div>
+               ))}
+            </div>
+            <button
+               onClick={onComplete}
+               className="w-full bg-brand-green text-white py-4 rounded-xl font-black shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-transform"
+            >
+               Terminer
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div>
+              <label className="block text-xs font-black text-slate-400 tracking-widest uppercase mb-2">Sujet de l'email</label>
+              <input 
+                 type="text" 
+                 value={subject}
+                 onChange={e => setSubject(e.target.value)}
+                 className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700 rounded-xl px-4 py-3 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all"
+                 disabled={sending}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-black text-slate-400 tracking-widest uppercase mb-2">Message</label>
+              <textarea 
+                 rows={5}
+                 value={body}
+                 onChange={e => setBody(e.target.value)}
+                 className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700 rounded-xl px-4 py-3 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green transition-all resize-none"
+                 disabled={sending}
+              />
+            </div>
+            
+            {sending && (
+               <div className="space-y-2">
+                 <div className="flex justify-between text-xs font-bold text-slate-500">
+                    <span>Envoi en cours...</span>
+                    <span>{progress}%</span>
+                 </div>
+                 <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-brand-green transition-all duration-300" style={{ width: `${progress}%` }}></div>
+                 </div>
+               </div>
+            )}
+
+            <button
+               onClick={handleSend}
+               disabled={sending}
+               className="w-full bg-brand-green text-white py-4 rounded-xl font-black shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-transform disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+               {sending ? <Loader2 size={20} className="animate-spin" /> : <Mail size={20} />}
+               {sending ? 'Traitement en cours...' : 'Envoyer les documents'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TransactionPickerModal({ onClose, onSelect, formatCurrency }: { onClose: () => void, onSelect: (tx: any) => void, formatCurrency: (v: number, c?: string) => string }) {
+  const [txs, setTxs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiFetch("/api/transactions?isDeleted=false")
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const validUninvoiced = data.filter((t: any) => t.status === 'validated' && !t.invoice_number);
+          setTxs(validUninvoiced);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex justify-center p-4 bg-slate-900/80 backdrop-blur-md animate-in fade-in transition-all items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+      <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] p-8 shadow-2xl border border-slate-100 dark:border-slate-800 animate-in zoom-in-95 flex flex-col">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-brand-green/10 text-brand-green flex items-center justify-center">
+              <BookOpen size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">Convertir une écriture</h2>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Sélectionnez une écriture validée</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-all">
+            <X size={24} />
+          </button>
+        </div>
+
+        <div className="max-h-[50vh] overflow-y-auto space-y-3 no-scrollbar pb-4">
+          {loading ? (
+            <div className="py-20 text-center"><Loader2 size={32} className="mx-auto text-brand-green animate-spin" /></div>
+          ) : txs.length === 0 ? (
+            <div className="py-20 text-center text-slate-400 font-medium italic">
+              Aucune écriture comptable validée disponible pour la facturation.
+            </div>
+          ) : (
+            txs.map(t => (
+              <button
+                key={t.id}
+                onClick={async () => {
+                  try {
+                    const res = await apiFetch(`/api/transactions/${t.id}`);
+                    const fullTx = await res.json();
+                    onSelect(fullTx);
+                  } catch (err) {
+                    console.error('Error fetching full transaction:', err);
+                  }
+                }}
+                className="w-full text-left p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-100 dark:border-slate-700 hover:border-brand-green/30 transition-all group flex items-center justify-between"
+              >
+                <div>
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t.date}</span>
+                    <span className="text-[10px] font-black text-brand-green uppercase tracking-widest bg-brand-green/10 px-2 py-0.5 rounded-md">{t.reference || 'Auto'}</span>
+                  </div>
+                  <p className="font-bold text-slate-900 dark:text-white group-hover:text-brand-green transition-colors">{t.description}</p>
+                </div>
+                <div className="text-right">
+                  <p className="font-black font-mono text-slate-900 dark:text-white">{formatCurrency(t.total_amount, t.currency)}</p>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,12 +1,14 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, Filter, Pencil, Trash2, X, Check, Copy, Upload, ArrowRight, RefreshCw, AlertCircle } from 'lucide-react';
+import { Search, Plus, Filter, Pencil, Trash2, X, Check, Copy, Upload, ArrowRight, RefreshCw, AlertCircle, Sparkles, ChevronRight, AlertTriangle, Info } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useDialog } from './DialogProvider';
 import Papa from 'papaparse';
+import { cn } from '@/lib/utils';
 
 import { PageHeader } from './ui/PageHeader';
 import { Calculator } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface Account {
   code: string;
@@ -15,6 +17,56 @@ interface Account {
   type: string;
 }
 
+const AccountRow = React.memo(({ acc, onOpenModal, onCopy, onDelete }: { acc: Account, onOpenModal: (account: Account) => void, onCopy: (account: Account) => void, onDelete: (code: string) => void }) => {
+  return (
+    <tr className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group">
+      <td className="px-8 py-5 font-mono font-bold text-slate-700 dark:text-slate-300">{acc.code}</td>
+      <td className="px-8 py-5 font-medium text-slate-900 dark:text-white">{acc.name}</td>
+      <td className="px-8 py-5">
+        <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+          Classe {acc.class_code}
+        </span>
+      </td>
+      <td className="px-8 py-5">
+        <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border
+          ${acc.type === 'actif' ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border-blue-100 dark:border-blue-900/30' : 
+            acc.type === 'passif' ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border-purple-100 dark:border-purple-900/30' :
+            acc.type === 'charge' ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400 border-rose-100 dark:border-rose-900/30' :
+            acc.type === 'produit' ? 'bg-brand-green/10 dark:bg-brand-green/20 text-brand-green dark:text-brand-green-light border-brand-green/20 dark:border-brand-green/30' :
+            'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-100 dark:border-gray-700'
+          }`}>
+          {acc.type}
+        </span>
+      </td>
+      <td className="px-8 py-5 text-right">
+        <div className="flex justify-end gap-2">
+          <button 
+            onClick={() => onOpenModal(acc)}
+            className="p-2 text-slate-400 dark:text-slate-500 hover:text-brand-green dark:hover:text-brand-green-light hover:bg-brand-green/5 dark:hover:bg-brand-green/10 rounded-lg transition-colors"
+            title="Modifier"
+          >
+            <Pencil size={16} />
+          </button>
+          <button 
+            onClick={() => onCopy(acc)}
+            className="p-2 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
+            title="Copier"
+          >
+            <Copy size={16} />
+          </button>
+          <button 
+            onClick={() => onDelete(acc.code)}
+            className="p-2 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
+            title="Supprimer"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+});
+
 export function Accounts() {
   const { alert: dialogAlert } = useDialog();
   const { confirm, alert } = useDialog();
@@ -22,7 +74,11 @@ export function Accounts() {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
   const [editingCode, setEditingCode] = useState<string | null>(null);
+
+  // Audit Results
+  const [auditResults, setAuditResults] = useState<{ id: string, title: string, description: string, type: 'warning' | 'info' | 'error', accountsAffected: string[] }[]>([]);
 
   // Form State
   const [code, setCode] = useState('');
@@ -34,8 +90,10 @@ export function Accounts() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvData, setCsvData] = useState<any[]>([]);
-  const [columnMapping, setColumnMapping] = useState<{code: string, name: string, type: string, class: string}>({ code: '', name: '', type: '', class: '' });
+  const [columnMapping, setColumnMapping] = useState<{code: string, name: string, type: string, class: string, tax_code: string}>({ code: '', name: '', type: '', class: '', tax_code: '' });
   const [isImporting, setIsImporting] = useState(false);
+  const [isImportValidationModalOpen, setIsImportValidationModalOpen] = useState(false);
+  const [pendingAccountsToImport, setPendingAccountsToImport] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -48,9 +106,65 @@ export function Accounts() {
       .then(res => res.json())
       .then(data => {
         setAccounts(data);
+        generateAudit(data);
         setLoading(false);
       })
       .catch(err => console.error(err));
+  };
+
+  const generateAudit = (accs: Account[]) => {
+    const results: typeof auditResults = [];
+    const accCodes = accs.map(a => a.code);
+    
+    // Règle 1: Suppression des frais d'établissement (201)
+    const has201 = accs.filter(a => a.code.startsWith('201'));
+    if (has201.length > 0) {
+      results.push({
+        id: 'rule_1',
+        title: "Comptes de frais d'établissement obsolètes",
+        description: "Le SYSCOHADA révisé exige de comptabiliser directement en charges les frais d'établissement. Les comptes 201 ne doivent plus être utilisés ni capitalisés.",
+        type: 'error',
+        accountsAffected: has201.map(a => a.code)
+      });
+    }
+
+    // Règle 2: Provisions de retraite (169)
+    const has169 = accs.filter(a => a.code.startsWith('169'));
+    if (has169.length === 0) {
+      results.push({
+        id: 'rule_2',
+        title: "Absence de provisions pour retraite",
+        description: "Il est fortement recommandé/obligatoire de provisionner les indemnités de fin de carrière (Comptes 169) si vous avez des employés.",
+        type: 'warning',
+        accountsAffected: []
+      });
+    }
+
+    // Règle 3: Comptabilité analytique
+    const hasClass9 = accs.filter(a => a.code.startsWith('9'));
+    if (hasClass9.length === 0) {
+      results.push({
+        id: 'rule_3',
+        title: "Organisation de la comptabilité analytique",
+        description: "Le PCGO recommande de ventiler les coûts. En l'absence de classe 9, assurez-vous que les subdivisions des classes 6, 7 et 8 sont suffisantes pour le suivi par composant/bureau.",
+        type: 'info',
+        accountsAffected: []
+      });
+    }
+    
+    // Règle 4: Amortissement par composants
+    const hasComplexAssets = accs.filter(a => ['213', '215'].some(prefix => a.code.startsWith(prefix) && a.code.length === 3));
+    if (hasComplexAssets.length > 0) {
+      results.push({
+        id: 'rule_4',
+        title: "Approche par composants (Amortissement)",
+        description: "Pour les grandes immobilisations (Bâtiments, Matériels industriels), il faut créer des subdivisions pour séparer la structure principale des sous-composants (ex: 2131 Toiture).",
+        type: 'info',
+        accountsAffected: hasComplexAssets.map(a => a.code)
+      });
+    }
+
+    setAuditResults(results);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -76,6 +190,7 @@ export function Accounts() {
             name: headers.find(h => h.toLowerCase().includes('intitul') || h.toLowerCase().includes('libell') || h.toLowerCase().includes('name')) || '',
             type: headers.find(h => h.toLowerCase().includes('type') || h.toLowerCase().includes('nature')) || '',
             class: headers.find(h => h.toLowerCase().includes('classe')) || '',
+            tax_code: headers.find(h => h.toLowerCase().includes('taxe') || h.toLowerCase().includes('tva')) || '',
           };
           setColumnMapping(guessMapping);
         } else {
@@ -89,18 +204,17 @@ export function Accounts() {
     });
   };
 
-  const submitImport = async () => {
+  const submitImport = () => {
     if (!columnMapping.code || !columnMapping.name) {
       dialogAlert("Veuillez mapper au moins le Code et l'Intitulé du compte.", "error");
       return;
     }
 
-    setIsImporting(true);
-
     const accountsToImport = csvData.map(row => {
       const rowCode = String(row[columnMapping.code] || '').trim();
       const rowName = String(row[columnMapping.name] || '').trim();
       const rowType = columnMapping.type ? String(row[columnMapping.type] || '').trim().toLowerCase() : 'actif';
+      const rowTaxCode = columnMapping.tax_code ? String(row[columnMapping.tax_code] || '').trim() : '';
       
       let classCode = parseInt(rowCode.charAt(0)) || 0;
       if (columnMapping.class && row[columnMapping.class]) {
@@ -112,20 +226,26 @@ export function Accounts() {
         name: rowName,
         class_code: classCode,
         type: ['actif', 'passif', 'charge', 'produit', 'capitaux'].includes(rowType) ? rowType : 'actif',
+        tax_code: rowTaxCode
       };
     }).filter(acc => acc.code && acc.name);
 
     if (accountsToImport.length === 0) {
       dialogAlert("Aucun compte valide trouvé après le mappage.", "error");
-      setIsImporting(false);
       return;
     }
 
+    setPendingAccountsToImport(accountsToImport);
+    setIsImportValidationModalOpen(true);
+  };
+
+  const confirmImportAccounts = async () => {
+    setIsImporting(true);
     try {
-      const res = await fetch('/api/accounts/import', {
+      const res = await apiFetch('/api/accounts/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(accountsToImport)
+        body: JSON.stringify(pendingAccountsToImport)
       });
       
       const data = await res.json();
@@ -133,8 +253,10 @@ export function Accounts() {
       if (res.ok) {
         dialogAlert(data.message || "Importation réussie", "success");
         setIsImportModalOpen(false);
+        setIsImportValidationModalOpen(false);
         setImportFile(null);
         setCsvData([]);
+        setPendingAccountsToImport([]);
         fetchAccounts();
       } else {
         dialogAlert(data.error || "Une erreur est survenue lors de l'importation.", "error");
@@ -147,9 +269,11 @@ export function Accounts() {
     }
   };
 
-  const filteredAccounts = accounts.filter(acc => 
-    acc.code.includes(searchTerm) || acc.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredAccounts = React.useMemo(() => {
+    return accounts.filter(acc => 
+      acc.code.includes(searchTerm) || acc.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [accounts, searchTerm]);
 
   const handleOpenModal = (account?: Account) => {
     if (account) {
@@ -184,7 +308,7 @@ export function Accounts() {
       const url = editingCode ? `/api/accounts/${editingCode}` : '/api/accounts';
       const method = editingCode ? 'PUT' : 'POST';
       
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -222,7 +346,11 @@ export function Accounts() {
   };
 
   return (
-    <div className="space-y-6">
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="space-y-6"
+    >
       <PageHeader
         title="Plan Comptable"
         subtitle="SYSCOHADA Révisé"
@@ -235,6 +363,13 @@ export function Accounts() {
             >
               <Upload size={18} />
               <span className="hidden sm:inline">Importer</span>
+            </button>
+            <button 
+              onClick={() => setIsAuditModalOpen(true)}
+              className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 sm:py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm"
+            >
+              <Sparkles size={18} />
+              <span className="hidden sm:inline">Audit SYSCOHADA</span>
             </button>
             <button 
               onClick={() => handleOpenModal()}
@@ -265,7 +400,7 @@ export function Accounts() {
           </button>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-auto ">
           <table className="w-full text-left border-collapse">
             <thead className="bg-slate-50/50 dark:bg-slate-900/80 border-b border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-xs uppercase font-bold tracking-wider">
               <tr>
@@ -287,51 +422,13 @@ export function Accounts() {
                 </tr>
               ) : (
                 filteredAccounts.map((acc) => (
-                  <tr key={acc.code} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group">
-                    <td className="px-8 py-5 font-mono font-bold text-slate-700 dark:text-slate-300">{acc.code}</td>
-                    <td className="px-8 py-5 font-medium text-slate-900 dark:text-white">{acc.name}</td>
-                    <td className="px-8 py-5">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                        Classe {acc.class_code}
-                      </span>
-                    </td>
-                    <td className="px-8 py-5">
-                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border
-                        ${acc.type === 'actif' ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border-blue-100 dark:border-blue-900/30' : 
-                          acc.type === 'passif' ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border-purple-100 dark:border-purple-900/30' :
-                          acc.type === 'charge' ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400 border-rose-100 dark:border-rose-900/30' :
-                          acc.type === 'produit' ? 'bg-brand-green/10 dark:bg-brand-green/20 text-brand-green dark:text-brand-green-light border-brand-green/20 dark:border-brand-green/30' :
-                          'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-100 dark:border-gray-700'
-                        }`}>
-                        {acc.type}
-                      </span>
-                    </td>
-                    <td className="px-8 py-5 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button 
-                          onClick={() => handleOpenModal(acc)}
-                          className="p-2 text-slate-400 dark:text-slate-500 hover:text-brand-green dark:hover:text-brand-green-light hover:bg-brand-green/5 dark:hover:bg-brand-green/10 rounded-lg transition-colors"
-                          title="Modifier"
-                        >
-                          <Pencil size={16} />
-                        </button>
-                        <button 
-                          onClick={() => handleCopy(acc)}
-                          className="p-2 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
-                          title="Copier"
-                        >
-                          <Copy size={16} />
-                        </button>
-                        <button 
-                          onClick={() => handleDelete(acc.code)}
-                          className="p-2 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors"
-                          title="Supprimer"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                  <AccountRow 
+                    key={acc.code} 
+                    acc={acc} 
+                    onOpenModal={handleOpenModal} 
+                    onCopy={handleCopy} 
+                    onDelete={handleDelete} 
+                  />
                 ))
               )}
             </tbody>
@@ -341,8 +438,8 @@ export function Accounts() {
 
       {/* Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex justify-center p-4 animate-in fade-in duration-200 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800 flex flex-col">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-slate-900 dark:text-white">
                 {editingCode ? "Modifier le Compte" : "Nouveau Compte"}
@@ -414,10 +511,78 @@ export function Accounts() {
         </div>
       )}
 
+      {/* Audit Modal */}
+      {isAuditModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex justify-center p-4 animate-in fade-in duration-200 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl p-6 animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800 flex flex-col">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Sparkles size={24} className="text-purple-600" />
+                Audit SYSCOHADA Révisé
+              </h2>
+              <button 
+                onClick={() => setIsAuditModalOpen(false)} 
+                className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                title="Fermer"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
+              <p className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-4 px-1">
+                Voici une analyse de la conformité de votre plan comptable selon le référentiel actuel (PCGO).
+              </p>
+              
+              {auditResults.length === 0 ? (
+                <div className="bg-brand-green/10 text-brand-green p-6 rounded-2xl text-center font-bold">
+                  Aucun défaut de conformité détecté pour le moment.
+                </div>
+              ) : (
+                auditResults.map((result, idx) => (
+                  <div key={result.id} className={`p-5 rounded-2xl border ${
+                    result.type === 'error' ? 'bg-rose-50 dark:bg-rose-900/10 border-rose-200 dark:border-rose-900/30 text-rose-700 dark:text-rose-400' :
+                    result.type === 'warning' ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-900/30 text-amber-700 dark:text-amber-500' :
+                    'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-900/30 text-blue-700 dark:text-blue-400'
+                  }`}>
+                    <h3 className="font-bold flex items-center gap-2 mb-2">
+                      {result.type === 'error' ? <AlertTriangle size={18} /> : 
+                       result.type === 'warning' ? <AlertTriangle size={18} /> : 
+                       <Info size={18} />}
+                      {result.title}
+                    </h3>
+                    <p className="text-sm font-medium mb-3 opacity-90 leading-relaxed">{result.description}</p>
+                    {result.accountsAffected.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        <span className="text-xs font-bold uppercase tracking-wider opacity-60">Comptes impactés :</span>
+                        {result.accountsAffected.map(acc => (
+                           <span key={acc} className="px-2 py-0.5 rounded-md text-xs font-bold leading-none bg-black/5 dark:bg-white/10">
+                             {acc}
+                           </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            
+            <div className="flex justify-end pt-6 mt-2 border-t border-slate-100 dark:border-slate-800">
+               <button 
+                 onClick={() => setIsAuditModalOpen(false)}
+                 className="px-6 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold transition-colors"
+               >
+                 Compris
+               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Import Modal */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl p-6 elevate-3 flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 animate-in fade-in duration-200 overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl p-6 elevate-3 flex flex-col">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Upload size={24} className="text-brand-green" />
@@ -521,6 +686,20 @@ export function Accounts() {
                         {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
                     </div>
+
+                    <div className="grid grid-cols-2 gap-4 items-center mb-2">
+                      <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Code Taxe / TVA (Optionnel)
+                      </div>
+                      <select 
+                        value={columnMapping.tax_code}
+                        onChange={(e) => setColumnMapping({...columnMapping, tax_code: e.target.value})}
+                        className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:border-brand-green outline-none"
+                      >
+                        <option value="">Ignorer</option>
+                        {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
                     
                     <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl flex gap-3 text-blue-700 dark:text-blue-400 text-sm">
                       <AlertCircle className="shrink-0 mt-0.5" size={16} />
@@ -555,6 +734,92 @@ export function Accounts() {
           </div>
         </div>
       )}
-    </div>
+
+      {/* Pre-Import Validation Modal */}
+      {isImportValidationModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-start justify-center p-4 bg-slate-900/80 backdrop-blur-md transition-all animate-in fade-in duration-300 overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+            <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <div className="flex items-center gap-5">
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+                  <AlertCircle size={28} />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">Validation Pré-Import</h2>
+                  <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">
+                    Vérification des comptes antes l'import définitif
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsImportValidationModalOpen(false);
+                  setPendingAccountsToImport([]);
+                }}
+                className="p-3 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-all"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-8 overflow-y-auto flex-1 min-h-0 w-full space-y-6">
+              {(() => {
+                const missingTax = pendingAccountsToImport.filter(acc => 
+                  (String(acc.class_code) === '6' || String(acc.class_code) === '7') && !acc.tax_code
+                );
+
+                return (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-col gap-2">
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total des comptes</span>
+                        <span className="text-2xl font-black text-slate-900 dark:text-white">{pendingAccountsToImport.length}</span>
+                      </div>
+                      <div className={cn("p-4 rounded-2xl border flex flex-col gap-2 transition-colors", missingTax.length > 0 ? "border-amber-200 bg-amber-50 dark:border-amber-900/30 dark:bg-amber-900/10 text-amber-600" : "border-emerald-200 bg-emerald-50 dark:border-emerald-900/30 dark:bg-emerald-900/10 text-emerald-600")}>
+                        <span className="text-[10px] font-black uppercase tracking-widest opacity-80">Taxes potentielles manquantes</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-2xl font-black">{missingTax.length}</span>
+                          {missingTax.length > 0 && <span className="text-xs font-medium opacity-80">Comptes de charges/produits sans code taxe</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {missingTax.length > 0 && (
+                      <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-400 text-sm flex gap-3 border border-amber-200 dark:border-amber-900/50">
+                        <AlertCircle className="shrink-0 mt-0.5" size={16} />
+                        <p>
+                          <strong>Attention :</strong> {missingTax.length} comptes de classe 6 ou 7 n'ont pas de code de taxe / TVA associé. Il est recommandé de configurer un code de taxe pour les comptes de charges et produits.
+                        </p>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 flex items-center justify-end gap-3 rounded-b-[2.5rem]">
+              <button 
+                onClick={() => {
+                  setIsImportValidationModalOpen(false);
+                  setPendingAccountsToImport([]);
+                }}
+                className="px-6 py-2.5 text-slate-600 dark:text-slate-400 font-bold hover:bg-slate-200 dark:hover:bg-slate-700/50 rounded-xl transition-colors"
+                disabled={isImporting}
+              >
+                Annuler
+              </button>
+              <button 
+                onClick={confirmImportAccounts}
+                disabled={isImporting}
+                className="px-8 py-2.5 bg-brand-green text-white rounded-xl font-bold shadow-lg shadow-brand-green/20 hover:bg-brand-green/90 transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                {isImporting ? <RefreshCw className="animate-spin" size={18} /> : <Check size={18} />}
+                Forcer l'importation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </motion.div>
   );
 }

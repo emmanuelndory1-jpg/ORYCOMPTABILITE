@@ -1,7 +1,7 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { PageHeader } from './ui/PageHeader';
-import { Users, UserPlus, Search, FileText, AlertTriangle, CheckCircle, X, Save, Trash2, Download, Briefcase, CreditCard, Calendar, FileSpreadsheet, Mail, Phone, History, ExternalLink, Contact2 } from 'lucide-react';
+import { Users, UserPlus, Search, FileText, AlertTriangle, CheckCircle, X, Save, Trash2, Download, Briefcase, CreditCard, Calendar, FileSpreadsheet, Mail, Phone, History, ExternalLink, Contact2, RefreshCw, Target } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useFiscalYear } from '@/context/FiscalYearContext';
 import { cn } from '@/lib/utils';
@@ -27,7 +27,12 @@ interface ThirdParty {
   is_occasional: boolean;
 }
 
+import { Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
+
 export function ThirdPartyManager() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
   const { alert: dialogAlert } = useDialog();
   const { confirm, alert } = useDialog();
   const { formatCurrency, currency } = useCurrency();
@@ -35,12 +40,20 @@ export function ThirdPartyManager() {
   const [activeTab, setActiveTab] = useState<'client' | 'supplier'>('client');
   const [parties, setParties] = useState<ThirdParty[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('search') || '');
   const [isFormOpen, setIsFormOpen] = useState(false);
+
+  useEffect(() => {
+    if (location.state?.action === 'new') {
+      setIsFormOpen(true);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
   const [editingParty, setEditingParty] = useState<ThirdParty | null>(null);
   const [showAgedBalance, setShowAgedBalance] = useState(false);
   const [agedBalanceData, setAgedBalanceData] = useState<any[]>([]);
   const [isSettingUpOccasional, setIsSettingUpOccasional] = useState(false);
+  const [displayCount, setDisplayCount] = useState(20);
 
   // Payment Modal State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -246,6 +259,23 @@ export function ThirdPartyManager() {
     p.account_code.includes(searchTerm)
   );
 
+  
+  const handleSync = async () => {
+    try {
+      const res = await apiFetch('/api/third-parties/sync', { method: 'POST' });
+      if (res.ok) {
+        dialogAlert('Tiers et opérations synchronisés avec succès', 'success');
+        fetchParties();
+      } else {
+        const error = await res.json();
+        dialogAlert(error.error || 'Erreur lors de la synchronisation', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      dialogAlert('Erreur de connexion', 'error');
+    }
+  };
+
   const handleExportCSV = () => {
     const csvData = filteredParties.map(p => ({
       name: p.name,
@@ -313,7 +343,22 @@ export function ThirdPartyManager() {
         icon={<Contact2 size={24} />}
         actions={
           <div className="flex flex-wrap items-center justify-end gap-3">
-             <button 
+             <Link 
+               to="/crm"
+               className="flex items-center gap-2 px-4 py-2 bg-brand-green/10 text-brand-green dark:text-brand-green-light font-bold rounded-xl hover:bg-brand-green/20 transition-all shadow-sm"
+             >
+               <Briefcase size={18} />
+               <span>Ouvrir CRM</span>
+             </Link>
+             
+            <button 
+              onClick={handleSync}
+              className="bg-brand-green/20 dark:bg-brand-green/10 border border-brand-green/30 hover:bg-brand-green/30 text-brand-green dark:text-brand-green-light p-2.5 rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-2"
+              title="Synchroniser les opérations"
+            >
+              <RefreshCw size={20} />
+            </button>
+            <button 
               onClick={handleExportCSV}
               className="hidden sm:flex bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 p-2.5 rounded-xl transition-all shadow-sm active:scale-95"
               title="Exporter CSV"
@@ -341,7 +386,7 @@ export function ThirdPartyManager() {
 
       {/* Tabs & Search Row */}
       <div className="flex flex-col lg:flex-row gap-4 items-center">
-        <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full lg:w-fit overflow-x-auto no-scrollbar">
+        <div className="flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl w-full lg: overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab('client')}
             className={cn(
@@ -398,10 +443,19 @@ export function ThirdPartyManager() {
             </button>
           </div>
         ) : (
-          filteredParties.map((party) => (
+          filteredParties.slice(0, displayCount).map((party) => (
             <div key={party.id} className="bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 shadow-sm hover:shadow-2xl hover:shadow-slate-200/50 dark:hover:shadow-none transition-all group relative overflow-hidden">
               {/* Hover Actions */}
               <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0 flex gap-2 z-10">
+                {activeTab === 'client' && (
+                  <button 
+                    onClick={() => navigate(`/crm?client=${party.name}`)}
+                    className="p-3 bg-white dark:bg-slate-800 hover:bg-brand-green hover:text-white rounded-xl text-slate-400 shadow-xl border border-slate-100 dark:border-slate-700 transition-all active:scale-90"
+                    title="Opportunités CRM"
+                  >
+                    <Target size={18} />
+                  </button>
+                )}
                 <button 
                   onClick={() => openEdit(party)}
                   className="p-3 bg-white dark:bg-slate-800 hover:bg-slate-900 hover:text-white rounded-xl text-slate-400 shadow-xl border border-slate-100 dark:border-slate-700 transition-all active:scale-90"
@@ -531,10 +585,21 @@ export function ThirdPartyManager() {
         )}
       </div>
 
+      {filteredParties.length > displayCount && (
+        <div className="flex justify-center mt-12 mb-8">
+          <button 
+            onClick={() => setDisplayCount(prev => prev + 20)}
+            className="px-8 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-full font-bold text-sm hover:shadow-lg transition-all active:scale-95 text-slate-700 dark:text-slate-300"
+          >
+            Charger plus de tiers ({filteredParties.length - displayCount} restants)
+          </button>
+        </div>
+      )}
+
       {/* Payment Modal */}
       {isPaymentModalOpen && selectedPartyForPayment && (
-        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4 backdrop-blur-xl">
-          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-md shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden">
+        <div className="fixed inset-0 bg-slate-900/40 flex justify-center z-50 p-4 backdrop-blur-xl items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-md shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col">
             <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/50">
               <div className="space-y-1">
                 <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight uppercase">
@@ -634,8 +699,8 @@ export function ThirdPartyManager() {
 
       {/* History Modal */}
       {isHistoryOpen && historyParty && (
-        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4 backdrop-blur-xl">
-          <div className="bg-white dark:bg-slate-900 rounded-[3rem] w-full max-w-5xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 bg-slate-900/40 flex justify-center z-50 p-4 backdrop-blur-xl items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-[3rem] w-full max-w-5xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col">
             <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/50">
               <div className="space-y-1">
                 <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight uppercase">
@@ -655,8 +720,8 @@ export function ThirdPartyManager() {
                   <p className="text-slate-500 font-bold tracking-tight">Chargement de l'historique...</p>
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-[2rem] border border-slate-100 dark:border-slate-800">
-                  <table className="w-full text-sm text-left border-collapse">
+                <div className="w-full min-w-0 overflow-auto  rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                  <table className="w-full text-sm text-left border-collapse min-w-[800px]">
                     <thead>
                       <tr className="bg-slate-900 text-white text-[10px] font-black uppercase tracking-[0.2em]">
                         <th className="px-6 py-6">Date</th>
@@ -687,7 +752,7 @@ export function ThirdPartyManager() {
                           <td className="px-6 py-5 text-center">
                             {tx.invoice_id && (
                               <button 
-                                onClick={() => window.location.href = `/invoices/${tx.invoice_id}`}
+                                onClick={() => navigate('/invoicing')}
                                 className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-900 hover:text-white rounded-lg text-slate-400 transition-all active:scale-90"
                                 title="Voir Facture"
                               >
@@ -713,8 +778,8 @@ export function ThirdPartyManager() {
         </div>
       )}
       {isFormOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4 backdrop-blur-xl">
-          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 bg-slate-900/40 flex justify-center z-50 p-4 backdrop-blur-xl items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] w-full max-w-lg shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col">
             <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/50">
               <div className="space-y-1">
                 <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight uppercase">
@@ -837,8 +902,8 @@ export function ThirdPartyManager() {
 
       {/* Aged Balance Modal */}
       {showAgedBalance && (
-        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4 backdrop-blur-xl">
-          <div className="bg-white dark:bg-slate-900 rounded-[3rem] w-full max-w-5xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 bg-slate-900/40 flex justify-center z-50 p-4 backdrop-blur-xl items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-[3rem] w-full max-w-5xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col">
             <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/50">
               <div className="space-y-1">
                 <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight uppercase">
@@ -861,8 +926,8 @@ export function ThirdPartyManager() {
             </div>
             
             <div className="p-8 overflow-y-auto">
-              <div className="overflow-x-auto rounded-[2rem] border border-slate-100 dark:border-slate-800">
-                <table className="w-full text-sm text-left border-collapse">
+              <div className="w-full min-w-0 overflow-auto  rounded-[2rem] border border-slate-100 dark:border-slate-800">
+                <table className="w-full text-sm text-left border-collapse min-w-[800px]">
                   <thead>
                     <tr className="bg-slate-900 text-white text-[10px] font-black uppercase tracking-[0.2em]">
                       <th className="px-6 py-6">Tiers</th>

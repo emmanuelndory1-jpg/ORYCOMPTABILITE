@@ -1,11 +1,12 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { PageHeader } from './ui/PageHeader';
-import { Wallet, ArrowUpRight, ArrowDownLeft, CreditCard, Smartphone, Loader2, ArrowRightLeft, X, AlertCircle, PiggyBank, RefreshCw } from 'lucide-react';
+import { Wallet, ArrowUpRight, ArrowDownLeft, CreditCard, Smartphone, Loader2, ArrowRightLeft, X, AlertCircle, PiggyBank, RefreshCw, Activity } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useFiscalYear } from '@/context/FiscalYearContext';
 import { apiFetch as fetch } from '@/lib/api';
+import { CashFlowForecast } from './CashFlowForecast';
 
 interface TreasuryAccount {
   name: string;
@@ -28,7 +29,10 @@ interface ForecastPoint {
   solde: number;
 }
 
+import { useNavigate } from 'react-router-dom';
+
 export function Treasury() {
+  const navigate = useNavigate();
   const { formatCurrency, currency, getCurrencyIcon } = useCurrency();
   const { activeYear } = useFiscalYear();
   const [loading, setLoading] = useState(true);
@@ -42,6 +46,7 @@ export function Treasury() {
   });
   const [transferError, setTransferError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showForecast, setShowForecast] = useState(false);
   const [data, setData] = useState<{
     summary: {
       totalCash: number;
@@ -182,14 +187,23 @@ export function Treasury() {
         subtitle="Suivi en temps réel et prévisions de flux"
         icon={<PiggyBank size={24} />}
         actions={
-          <button 
-            onClick={() => setIsTransferModalOpen(true)}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm text-sm active:scale-95"
-          >
-            <ArrowRightLeft size={18} />
-            <span className="hidden sm:inline">Virement Interne</span>
-            <span className="sm:hidden">Virement</span>
-          </button>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setShowForecast(true)}
+              className="bg-brand-green text-white px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-brand-green/20 text-sm active:scale-95"
+            >
+              <Activity size={18} />
+              <span className="hidden sm:inline">Prévisions IA</span>
+            </button>
+            <button 
+              onClick={() => setIsTransferModalOpen(true)}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm text-sm active:scale-95"
+            >
+              <ArrowRightLeft size={18} />
+              <span className="hidden sm:inline">Virement Interne</span>
+              <span className="sm:hidden">Virement</span>
+            </button>
+          </div>
         }
       />
 
@@ -345,7 +359,11 @@ export function Treasury() {
           </div>
           <div className="flex-1 overflow-y-auto max-h-[400px] divide-y divide-slate-50 dark:divide-slate-800">
             {data.recentTransactions.map((item, i) => (
-              <div key={i} className="p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+              <div 
+                key={i} 
+                onClick={() => navigate('/journal?search=' + encodeURIComponent(item.label))}
+                className="p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer group"
+              >
                 <div className="flex items-center gap-3">
                   <div className={`p-2 rounded-xl ${item.type === 'in' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400' : 'bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400'}`}>
                     {item.type === 'in' ? <ArrowDownLeft size={14} /> : <ArrowUpRight size={14} />}
@@ -374,8 +392,8 @@ export function Treasury() {
 
       {/* Transfer Modal */}
       {isTransferModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800 flex flex-col">
             <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
               <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">Virement Interne</h3>
               <button onClick={() => setIsTransferModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
@@ -481,6 +499,8 @@ export function Treasury() {
           </div>
         </div>
       )}
+
+      {showForecast && <CashFlowForecast onClose={() => setShowForecast(false)} />}
     </div>
   );
 }

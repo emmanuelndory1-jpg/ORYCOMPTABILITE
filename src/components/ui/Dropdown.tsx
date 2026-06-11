@@ -10,9 +10,10 @@ interface DropdownProps {
   className?: string;
   align?: 'left' | 'right' | 'center';
   width?: string;
+  closeOnContentClick?: boolean;
 }
 
-export function Dropdown({ trigger, children, className, align = 'right', width = 'w-64' }: DropdownProps) {
+export function Dropdown({ trigger, children, className, align = 'right', width = 'w-64', closeOnContentClick = true }: DropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -115,7 +116,11 @@ export function Dropdown({ trigger, children, className, align = 'right', width 
             )}
           >
             <div 
-              onClick={() => setIsOpen(false)}
+              onClick={() => {
+                if (closeOnContentClick) {
+                  setIsOpen(false);
+                }
+              }}
               className="max-h-[80vh] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-800"
             >
               {children}

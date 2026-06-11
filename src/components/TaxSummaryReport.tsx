@@ -22,6 +22,7 @@ import {
   PDF_CONFIG, 
   addPDFHeader, 
   addPDFFooter, 
+  addOHADAComplianceSignature,
   CompanySettings, 
   formatCurrencyPDF,
   exportToCSV
@@ -174,6 +175,9 @@ export function TaxSummaryReport() {
         columnStyles: { 1: { halign: 'right' } }
       });
 
+      const finalY = (doc as any).lastAutoTable?.finalY || 150;
+      addOHADAComplianceSignature(doc, finalY + 20, settings.manager_name || "L'Administrateur");
+
       addPDFFooter(doc);
       doc.save(`Rapport_Fiscal_${monthName}_${selectedYear}.pdf`);
     } catch (err) {
@@ -307,8 +311,8 @@ export function TaxSummaryReport() {
                     Détails des Calculs de TVA
                   </h3>
                 </div>
-                <div className="p-0">
-                  <table className="w-full text-sm">
+                <div className="w-full min-w-0 overflow-auto p-0 ">
+                  <table className="w-full text-sm min-w-[600px]">
                     <thead>
                       <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
                         <th className="px-6 py-4 text-left">Désignation</th>

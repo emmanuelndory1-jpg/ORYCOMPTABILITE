@@ -2,6 +2,23 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Check, Layout, Eye, EyeOff, GripVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 export interface WidgetConfig {
   id: string;
@@ -15,9 +32,91 @@ interface DashboardCustomizerProps {
   widgets: WidgetConfig[];
   onToggleWidget: (id: string) => void;
   onReset: () => void;
+  onReorder?: (newWidgets: WidgetConfig[]) => void;
 }
 
-export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, onReset }: DashboardCustomizerProps) {
+function SortableItem({ widget, onToggle }: { widget: WidgetConfig; onToggle: (id: string) => void }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: widget.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "flex items-center justify-between p-4 rounded-2xl border transition-all duration-300",
+        widget.visible 
+          ? "bg-brand-green/5 border-brand-green/20" 
+          : "bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-800 opacity-60",
+        isDragging && "shadow-2xl shadow-brand-green/20 scale-[1.02] bg-white dark:bg-slate-800 border-brand-green opacity-100"
+      )}
+    >
+      <div className="flex items-center gap-4">
+        <button 
+          className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-grab active:cursor-grabbing"
+          {...attributes} 
+          {...listeners}
+        >
+          <GripVertical size={16} />
+        </button>
+        <div className={cn(
+          "p-2 rounded-xl",
+          widget.visible ? "bg-brand-green/10 text-brand-green" : "bg-slate-200 dark:bg-slate-700 text-slate-400"
+        )}>
+          <Layout size={18} />
+        </div>
+        <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{widget.label}</span>
+      </div>
+      
+      <button 
+        onClick={() => onToggle(widget.id)}
+        className={cn(
+          "p-2 rounded-xl transition-all active:scale-90",
+          widget.visible 
+            ? "bg-brand-green text-white shadow-lg shadow-brand-green/20" 
+            : "bg-slate-200 dark:bg-slate-700 text-slate-500"
+        )}
+      >
+        {widget.visible ? <Eye size={18} /> : <EyeOff size={18} />}
+      </button>
+    </div>
+  );
+}
+
+export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, onReset, onReorder }: DashboardCustomizerProps) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id && onReorder) {
+      const oldIndex = widgets.findIndex((w) => w.id === active.id);
+      const newIndex = widgets.findIndex((w) => w.id === over.id);
+      onReorder(arrayMove(widgets, oldIndex, newIndex));
+    }
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -51,7 +150,7 @@ export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, 
             <div className="flex-1 overflow-y-auto p-6 sm:p-8 space-y-8">
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Visibilité des Widgets</h3>
+                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Réorganiser & Visibilité</h3>
                   <button 
                     onClick={onReset}
                     className="text-[10px] font-black text-brand-green uppercase tracking-widest hover:underline"
@@ -60,41 +159,22 @@ export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, 
                   </button>
                 </div>
                 
-                <div className="space-y-3">
-                  {widgets.map((widget) => (
-                    <div 
-                      key={widget.id}
-                      className={cn(
-                        "flex items-center justify-between p-4 rounded-2xl border transition-all duration-300",
-                        widget.visible 
-                          ? "bg-brand-green/5 border-brand-green/20" 
-                          : "bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-800 opacity-60"
-                      )}
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className={cn(
-                          "p-2 rounded-xl",
-                          widget.visible ? "bg-brand-green/10 text-brand-green" : "bg-slate-200 dark:bg-slate-700 text-slate-400"
-                        )}>
-                          <Layout size={18} />
-                        </div>
-                        <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{widget.label}</span>
-                      </div>
-                      
-                      <button 
-                        onClick={() => onToggleWidget(widget.id)}
-                        className={cn(
-                          "p-2 rounded-xl transition-all active:scale-90",
-                          widget.visible 
-                            ? "bg-brand-green text-white shadow-lg shadow-brand-green/20" 
-                            : "bg-slate-200 dark:bg-slate-700 text-slate-500"
-                        )}
-                      >
-                        {widget.visible ? <Eye size={18} /> : <EyeOff size={18} />}
-                      </button>
+                <DndContext 
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext 
+                    items={widgets.map(w => w.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <div className="space-y-3">
+                      {widgets.map((widget) => (
+                        <SortableItem key={widget.id} widget={widget} onToggle={onToggleWidget} />
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </SortableContext>
+                </DndContext>
               </div>
 
               <div className="p-6 bg-slate-900 dark:bg-slate-800 rounded-3xl text-white space-y-4 shadow-xl shadow-slate-900/20">
@@ -102,10 +182,10 @@ export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, 
                   <div className="p-2 bg-brand-green/20 rounded-lg">
                     <Check size={16} className="text-brand-green" />
                   </div>
-                  <p className="text-xs font-bold uppercase tracking-wider">Enregistrement Auto</p>
+                  <p className="text-xs font-bold uppercase tracking-wider">Réorganisation Intuitive</p>
                 </div>
                 <p className="text-[11px] text-slate-400 dark:text-slate-300 leading-relaxed">
-                  Vos préférences sont automatiquement sauvegardées et seront appliquées lors de votre prochaine visite.
+                  Utilisez les poignées de glissement pour réorganiser vos widgets. L'ordre sera appliqué sur le tableau de bord principal.
                 </p>
               </div>
             </div>
@@ -115,7 +195,7 @@ export function DashboardCustomizer({ isOpen, onClose, widgets, onToggleWidget, 
                 onClick={onClose}
                 className="w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-slate-900/20 transition-all active:scale-95"
               >
-                Terminer
+                Appliquer les modifications
               </button>
             </div>
           </motion.div>

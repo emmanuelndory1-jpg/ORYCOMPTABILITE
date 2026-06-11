@@ -38,6 +38,9 @@ export function AuditLogViewer() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterAction, setFilterAction] = useState('all');
+  const [userFilter, setUserFilter] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [limit] = useState(50);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
@@ -83,6 +86,8 @@ export function AuditLogViewer() {
     }
   };
 
+  const uniqueUsers = Array.from(new Set(logs.map(log => log.user))).filter(Boolean);
+
   const filteredLogs = logs.filter(log => {
     const matchesSearch = 
       log.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -90,8 +95,24 @@ export function AuditLogViewer() {
       (log.action && log.action.toLowerCase().includes(searchTerm.toLowerCase()));
     
     const matchesAction = filterAction === 'all' || log.action === filterAction;
+    const matchesUser = userFilter === 'all' || log.user === userFilter;
     
-    return matchesSearch && matchesAction;
+    let matchesDate = true;
+    if (startDate || endDate) {
+      const logDate = new Date(log.date);
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        if (logDate < start) matchesDate = false;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        if (logDate > end) matchesDate = false;
+      }
+    }
+
+    return matchesSearch && matchesAction && matchesUser && matchesDate;
   });
 
   const getActionBadgeColor = (action: string) => {
@@ -100,6 +121,7 @@ export function AuditLogViewer() {
       case 'UPDATE': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
       case 'DELETE': return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400';
       case 'LOGIN': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
+      case 'SESSION_DURATION': return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400';
       case 'VALIDATE': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400';
       default: return 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400';
     }
@@ -164,22 +186,34 @@ export function AuditLogViewer() {
 
       {/* Filters */}
       <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="relative">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+          <div className="md:col-span-4 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input
               type="text"
-              placeholder="Rechercher un utilisateur, entité..."
+              placeholder="Rechercher utilisateur, entité..."
               className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-green/20 outline-none transition-all dark:text-white"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
 
-          <div className="flex items-center gap-2">
-            <Filter size={18} className="text-slate-400" />
+          <div className="md:col-span-8 flex flex-wrap items-center gap-2">
+            <Filter size={18} className="text-slate-400 hidden lg:block" />
+            
             <select
-              className="flex-1 bg-slate-50 dark:bg-slate-800 border-none rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-green/20 outline-none transition-all dark:text-white"
+              className="flex-1 min-w-[140px] bg-slate-50 dark:bg-slate-800 border-none rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-green/20 outline-none transition-all dark:text-white"
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+            >
+              <option value="all">Tous les utilisateurs</option>
+              {uniqueUsers.map(user => (
+                <option key={user} value={user}>{user}</option>
+              ))}
+            </select>
+
+            <select
+              className="flex-1 min-w-[140px] bg-slate-50 dark:bg-slate-800 border-none rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-green/20 outline-none transition-all dark:text-white"
               value={filterAction}
               onChange={(e) => setFilterAction(e.target.value)}
             >
@@ -188,16 +222,35 @@ export function AuditLogViewer() {
               <option value="UPDATE">Modification</option>
               <option value="DELETE">Suppression</option>
               <option value="LOGIN">Connexion</option>
+              <option value="SESSION_DURATION">Durée de session</option>
               <option value="VALIDATE">Validation</option>
               <option value="PROCESS_RECURRING">Récurrence</option>
             </select>
+
+            <div className="flex items-center gap-2 flex-1 min-w-[300px]">
+              <input 
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-green/20 outline-none transition-all dark:text-white"
+                title="Date de début"
+              />
+              <span className="text-slate-400">-</span>
+              <input 
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-green/20 outline-none transition-all dark:text-white"
+                title="Date de fin"
+              />
+            </div>
           </div>
         </div>
       </div>
 
       {/* Logs Table */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden transition-colors">
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-auto ">
           <table className="w-full text-left">
             <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-bold tracking-wider">
               <tr>
@@ -285,8 +338,8 @@ export function AuditLogViewer() {
 
       {/* Details Modal */}
       {selectedLog && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200 dark:border-slate-800">
+        <div className="fixed inset-0 bg-black/50 z-50 flex justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col">
             <div className="bg-slate-50 dark:bg-slate-800/50 p-6 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-brand-green/10 text-brand-green rounded-xl">
@@ -321,13 +374,23 @@ export function AuditLogViewer() {
 
               <div className="space-y-2">
                 <p className="text-[10px] text-slate-400 uppercase font-bold ml-1">Données techniques</p>
-                <div className="bg-slate-50 dark:bg-slate-800/30 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 overflow-auto max-h-[400px]">
+                <div className="w-full bg-slate-50 dark:bg-slate-800/30 rounded-2xl p-4 border border-slate-100 dark:border-slate-800 overflow-auto max-h-[400px]">
                   {(() => {
                     let details: any = {};
                     try {
                       details = parseSafeJSON(selectedLog.details || '{}');
                     } catch (e) {
                       console.error("Failed to parse log details:", e);
+                    }
+                    if (selectedLog.action === 'SESSION_DURATION' && details.duration_formatted) {
+                       return (
+                         <div className="flex items-center justify-center p-6 text-center">
+                           <div>
+                             <p className="text-sm text-slate-500 mb-2">L'utilisateur est resté connecté pendant</p>
+                             <p className="text-3xl font-black text-brand-green">{details.duration_formatted}</p>
+                           </div>
+                         </div>
+                       );
                     }
                     if (details.previous && details.current) {
                       return (

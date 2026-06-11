@@ -1,5 +1,36 @@
 {
   "entities": {
+    "Tenant": {
+      "title": "Tenant Organization",
+      "description": "Represents a paying client / company using the SaaS",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "taxId": { "type": "string" },
+        "address": { "type": "string" },
+        "planId": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "suspended", "canceled"] },
+        "stripeCustomerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "status"]
+    },
+    "Subscription": {
+      "title": "SaaS Subscription",
+      "description": "Subscription details for a tenant",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string" },
+        "planName": { "type": "string" },
+        "price": { "type": "number" },
+        "currency": { "type": "string" },
+        "billingCycle": { "type": "string", "enum": ["monthly", "yearly"] },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["tenantId", "planName", "isActive"]
+    },
     "UserProfile": {
       "title": "User Profile",
       "description": "User account information",
@@ -200,6 +231,14 @@
     }
   },
   "firestore": {
+    "/tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Information about paying organizations"
+    },
+    "/tenants/{tenantId}/subscriptions/{subId}": {
+      "schema": "Subscription",
+      "description": "Tenant subscription plans and billing"
+    },
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "User profile documents"

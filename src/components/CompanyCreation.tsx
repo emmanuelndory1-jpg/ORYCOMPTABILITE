@@ -208,9 +208,11 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
       fiscalYearStart: `${new Date().getFullYear()}-01-01`,
       fiscalYearDuration: 12,
       taxRegime: 'RNI',
+      taxesEnabled: true,
       vatSubject: true,
       vatRate: defaultCountry.vatRate,
       capitalAmount: 1000000,
+      cashCalledPercentage: 100,
       partners: [],
       constitutionCosts: 0,
       treasury: [
@@ -701,7 +703,30 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                                   return;
                                 }
                                 const reader = new FileReader();
-                                reader.onloadend = () => updateFormData({ logoUrl: reader.result as string });
+                                reader.onloadend = () => {
+                                  const img = new Image();
+                                  img.onload = () => {
+                                    const canvas = document.createElement('canvas');
+                                    const MAX_DIM = 512;
+                                    let { width, height } = img;
+                                    if (width > height && width > MAX_DIM) {
+                                      height *= MAX_DIM / width;
+                                      width = MAX_DIM;
+                                    } else if (height > MAX_DIM) {
+                                      width *= MAX_DIM / height;
+                                      height = MAX_DIM;
+                                    }
+                                    canvas.width = width;
+                                    canvas.height = height;
+                                    const ctx = canvas.getContext('2d');
+                                    if (ctx) {
+                                      ctx.drawImage(img, 0, 0, width, height);
+                                      const dataUrl = canvas.toDataURL(file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.85);
+                                      updateFormData({ logoUrl: dataUrl });
+                                    }
+                                  };
+                                  img.src = reader.result as string;
+                                };
                                 reader.readAsDataURL(file);
                               }
                             }} 
@@ -709,6 +734,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                         </label>
                         {formData.logoUrl && (
                           <button 
+                            type="button"
                             onClick={() => updateFormData({ logoUrl: '' })}
                             className="text-rose-500 text-xs font-bold hover:underline"
                           >
@@ -950,63 +976,88 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                   />
                 </div>
 
-                <div className="col-span-2">
-                  <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-4">Régime Fiscal</label>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {getTaxRegimes(formData.currency).map(r => (
-                      <button
-                        key={r.id}
-                        onClick={() => updateFormData({ taxRegime: r.id })}
-                        className={cn(
-                          "p-4 rounded-2xl border text-left transition-all",
-                          formData.taxRegime === r.id 
-                            ? "bg-blue-50 dark:bg-blue-900/20 border-blue-500 ring-2 ring-blue-500/20" 
-                            : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-blue-200"
-                        )}
-                      >
-                        <div className="font-bold text-slate-900 dark:text-slate-100">{r.label}</div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">{r.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="col-span-2 bg-slate-50 dark:bg-slate-800/50 p-6 rounded-3xl border border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <div className="col-span-2 bg-slate-50 dark:bg-slate-800/50 p-6 rounded-3xl border border-slate-100 dark:border-slate-800 flex items-center justify-between mt-4">
                   <div>
-                    <div className="font-bold text-slate-900 dark:text-slate-100">Assujettissement à la TVA</div>
-                    <div className="text-sm text-slate-500 dark:text-slate-400">L'entreprise collecte et déduit la TVA</div>
+                    <div className="font-bold text-slate-900 dark:text-slate-100">Activer la section Impôts & Taxes</div>
+                    <div className="text-sm text-slate-500 dark:text-slate-400">Si désactivé, l'application fonctionnera sans la notion de TVA et d'impôts</div>
                   </div>
                   <div className="flex items-center gap-4">
-                    {formData.vatSubject && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-slate-700 dark:text-slate-300">Taux :</span>
-                        <select 
-                          value={formData.vatRate}
-                          onChange={(e) => updateFormData({ vatRate: parseFloat(e.target.value) })}
-                          className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
-                        >
-                          <option value={currentCountryData.vatRate}>{currentCountryData.vatRate}% (Standard {currentCountryData.name})</option>
-                          {currentCountryData.vatRate !== 18 && <option value={18}>18% (Standard UEMOA)</option>}
-                          <option value={10}>10% (Réduit)</option>
-                          <option value={5}>5% (Super Réduit)</option>
-                          <option value={0}>0% (Exonéré)</option>
-                        </select>
-                      </div>
-                    )}
                     <button
-                      onClick={() => updateFormData({ vatSubject: !formData.vatSubject })}
+                      onClick={() => updateFormData({ taxesEnabled: formData.taxesEnabled === false ? true : false })}
                       className={cn(
                         "w-14 h-8 rounded-full transition-all relative",
-                        formData.vatSubject ? "bg-brand-green" : "bg-slate-300 dark:bg-slate-700"
+                        formData.taxesEnabled !== false ? "bg-brand-green" : "bg-slate-300 dark:bg-slate-700"
                       )}
                     >
                       <div className={cn(
                         "absolute top-1 w-6 h-6 bg-white rounded-full transition-all shadow-sm",
-                        formData.vatSubject ? "left-7" : "left-1"
+                        formData.taxesEnabled !== false ? "left-7" : "left-1"
                       )} />
                     </button>
                   </div>
                 </div>
+
+                {formData.taxesEnabled !== false && (
+                  <>
+                    <div className="col-span-2 mt-4">
+                      <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-4">Régime Fiscal</label>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {getTaxRegimes(formData.currency).map(r => (
+                          <button
+                            key={r.id}
+                            onClick={() => updateFormData({ taxRegime: r.id })}
+                            className={cn(
+                              "p-4 rounded-2xl border text-left transition-all",
+                              formData.taxRegime === r.id 
+                                ? "bg-blue-50 dark:bg-blue-900/20 border-blue-500 ring-2 ring-blue-500/20" 
+                                : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-blue-200"
+                            )}
+                          >
+                            <div className="font-bold text-slate-900 dark:text-slate-100">{r.label}</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400">{r.desc}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="col-span-2 bg-slate-50 dark:bg-slate-800/50 p-6 rounded-3xl border border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-slate-100">Assujettissement à la TVA</div>
+                        <div className="text-sm text-slate-500 dark:text-slate-400">L'entreprise collecte et déduit la TVA</div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        {formData.vatSubject && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-slate-700 dark:text-slate-300">Taux :</span>
+                            <select 
+                              value={formData.vatRate}
+                              onChange={(e) => updateFormData({ vatRate: parseFloat(e.target.value) })}
+                              className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
+                            >
+                              <option value={currentCountryData.vatRate}>{currentCountryData.vatRate}% (Standard {currentCountryData.name})</option>
+                              {currentCountryData.vatRate !== 18 && <option value={18}>18% (Standard UEMOA)</option>}
+                              <option value={10}>10% (Réduit)</option>
+                              <option value={5}>5% (Super Réduit)</option>
+                              <option value={0}>0% (Exonéré)</option>
+                            </select>
+                          </div>
+                        )}
+                        <button
+                          onClick={() => updateFormData({ vatSubject: !formData.vatSubject })}
+                          className={cn(
+                            "w-14 h-8 rounded-full transition-all relative",
+                            formData.vatSubject ? "bg-brand-green" : "bg-slate-300 dark:bg-slate-700"
+                          )}
+                        >
+                          <div className={cn(
+                            "absolute top-1 w-6 h-6 bg-white rounded-full transition-all shadow-sm",
+                            formData.vatSubject ? "left-7" : "left-1"
+                          )} />
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
 
                 <div className="pt-8 flex justify-between">
@@ -1049,21 +1100,43 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
 
                 <div className="space-y-8">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  <div className="bg-slate-900 dark:bg-slate-950 p-8 rounded-3xl text-white flex flex-col justify-between shadow-xl">
-                    <div>
+                  <div className="bg-slate-900 dark:bg-slate-950 p-8 rounded-3xl text-white flex flex-col justify-between shadow-xl relative overflow-hidden">
+                    <div className="absolute top-0 right-0 p-6 opacity-10">
+                      <Briefcase size={120} />
+                    </div>
+                    <div className="relative z-10">
                       <div className="text-slate-400 text-sm font-bold uppercase tracking-wider mb-1">Capital Social Total</div>
                       <div className="text-4xl font-bold font-mono">
                         {formData.capitalAmount.toLocaleString()} <span className="text-xl text-slate-500">{formData.currency}</span>
                       </div>
                     </div>
-                    <div className="mt-8">
-                      <label className="text-xs text-slate-400 mb-2 block">Modifier le montant</label>
-                      <input 
-                        type="number"
-                        value={isNaN(formData.capitalAmount) ? '' : formData.capitalAmount}
-                        onChange={(e) => updateFormData({ capitalAmount: parseFloat(e.target.value) || 0 })}
-                        className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 font-mono focus:outline-none focus:ring-2 focus:ring-brand-green"
-                      />
+                    <div className="mt-8 space-y-4 relative z-10">
+                      <div>
+                        <label className="text-xs text-slate-400 mb-2 block font-bold uppercase tracking-widest">Montant du capital</label>
+                        <input 
+                          type="number"
+                          value={isNaN(formData.capitalAmount) ? '' : formData.capitalAmount}
+                          onChange={(e) => updateFormData({ capitalAmount: parseFloat(e.target.value) || 0 })}
+                          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 font-mono focus:outline-none focus:ring-2 focus:ring-brand-green transition-all shadow-sm"
+                        />
+                      </div>
+                      <div className="pt-2 border-t border-white/10">
+                        <label className="text-xs text-slate-400 mb-2 block font-bold uppercase tracking-widest flex items-center justify-between">
+                          <span>Libération à la constitution (Numéraire)</span>
+                          <span className="text-brand-green bg-brand-green/20 px-2 py-0.5 rounded text-[10px]">{formData.cashCalledPercentage}%</span>
+                        </label>
+                        <select 
+                          value={formData.cashCalledPercentage}
+                          onChange={(e) => updateFormData({ cashCalledPercentage: parseInt(e.target.value) || 100 })}
+                          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 font-bold focus:outline-none focus:ring-2 focus:ring-brand-green appearance-none transition-all shadow-sm"
+                        >
+                          <option value={25} className="text-slate-900">25% (1er Quart)</option>
+                          <option value={50} className="text-slate-900">50% (La Moitié)</option>
+                          <option value={75} className="text-slate-900">75% (3 Quarts)</option>
+                          <option value={100} className="text-slate-900">100% (Totale)</option>
+                        </select>
+                        <p className="text-[10px] text-slate-500 mt-2 font-medium">Note: Les apports en nature sont libérés à 100% par défaut.</p>
+                      </div>
                     </div>
                   </div>
 
@@ -1118,7 +1191,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                           <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Nom de l'associé</label>
                           <input 
                             type="text"
-                            value={p.name}
+                            value={p.name || ''}
                             onChange={(e) => updatePartner(i, { name: e.target.value })}
                             className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
                             placeholder="Nom complet"
@@ -1380,7 +1453,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                         <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Nom du compte</label>
                         <input 
                           type="text"
-                          value={t.name}
+                          value={t.name || ''}
                           onChange={(e) => updateTreasury(i, { name: e.target.value })}
                           className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
                           placeholder="Ex: BOA - Compte Courant"
@@ -1493,7 +1566,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                         <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Nom complet</label>
                         <input 
                           type="text"
-                          value={u.name}
+                          value={u.name || ''}
                           onChange={(e) => updateUser(i, { name: e.target.value })}
                           className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
                         />
@@ -1502,7 +1575,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                         <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Email</label>
                         <input 
                           type="email"
-                          value={u.email}
+                          value={u.email || ''}
                           onChange={(e) => updateUser(i, { email: e.target.value })}
                           className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
                         />

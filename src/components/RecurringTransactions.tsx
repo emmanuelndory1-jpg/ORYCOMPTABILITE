@@ -412,7 +412,7 @@ export function RecurringTransactions() {
             <p className="text-slate-500 animate-pulse">Chargement des récurrences...</p>
           </div>
         ) : filteredTransactions.length > 0 ? (
-          <div className="overflow-x-auto">
+          <div className="w-full min-w-0 overflow-auto ">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/50 border-b border-slate-200">
@@ -600,12 +600,12 @@ export function RecurringTransactions() {
       {/* Add Modal */}
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex justify-center p-4 bg-slate-900/60 backdrop-blur-sm items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden"
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col"
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">

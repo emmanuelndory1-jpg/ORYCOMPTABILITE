@@ -3,6 +3,7 @@ import {
   Settings as SettingsIcon, 
   ChevronRight, 
   Building2, 
+  Briefcase,
   Calculator, 
   Package, 
   Palette, 
@@ -12,13 +13,15 @@ import {
   ArrowLeft,
   Sun,
   Moon,
-  Check
+  Check,
+  DatabaseBackup
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { FiscalYearManager } from './FiscalYearManager';
 import { SystemHealthCheck } from './SystemHealthCheck';
 import { AuditTrail } from './AuditTrail';
 import { CompanySettingsManager } from './CompanySettingsManager';
+import { WorkspacesManager } from './WorkspacesManager';
 import { CurrencyManager } from './CurrencyManager';
 import { InvoiceReminderSettings } from './InvoiceReminderSettings';
 import { PayrollSettingsManager } from './PayrollSettingsManager';
@@ -27,24 +30,30 @@ import { VATSettingsManager } from './VATSettingsManager';
 import { LanguageSettings } from './LanguageSettings';
 import { ModuleManager } from './ModuleManager';
 import { JournalSettingsManager } from './JournalSettingsManager';
+import { BackupManager } from './BackupManager';
 import { useLanguage } from '@/context/LanguageContext';
 import { useModules } from '@/context/ModuleContext';
 import { useTheme } from '@/context/ThemeContext';
 import { Link, useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 
+import { NotificationSettings } from './NotificationSettings';
+import { SecuritySettings } from './SecuritySettings';
+
 export function Settings() {
   const { t } = useLanguage();
   const { isActive } = useModules();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('company');
+  const [activeTab, setActiveTab] = useState('workspaces');
 
   const tabs = [
+    { id: 'workspaces', label: 'Dossiers', icon: <Briefcase size={18} /> },
     { id: 'company', label: t('settings.tabs.company') || 'Entreprise', icon: <Building2 size={18} /> },
     { id: 'accounting', label: t('settings.tabs.accounting') || 'Comptabilité', icon: <Calculator size={18} /> },
     { id: 'modules', label: t('settings.tabs.modules') || 'Modules', icon: <Package size={18} /> },
     { id: 'appearance', label: t('settings.tabs.appearance') || 'Apparence', icon: <Palette size={18} /> },
+    { id: 'backup', label: 'Sauvegarde', icon: <DatabaseBackup size={18} /> },
     { id: 'notifications', label: t('settings.tabs.notifications') || 'Notifications', icon: <Bell size={18} /> },
     { id: 'security', label: t('settings.tabs.security') || 'Sécurité', icon: <ShieldCheck size={18} /> },
     { id: 'system', label: t('settings.tabs.system') || 'Système', icon: <Cpu size={18} /> },
@@ -52,6 +61,12 @@ export function Settings() {
 
   const renderContent = () => {
     switch (activeTab) {
+      case 'workspaces':
+        return (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <WorkspacesManager />
+          </div>
+        );
       case 'company':
         return (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -133,22 +148,12 @@ export function Settings() {
             </div>
           </div>
         );
+      case 'backup':
+        return <BackupManager />;
       case 'notifications':
-        return (
-          <div className="p-12 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm">
-            <Bell className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white">Alertes & Notifications</h3>
-            <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-2">Configurez vos préférences de réception pour les échéances fiscales et les relances clients.</p>
-          </div>
-        );
+        return <NotificationSettings />;
       case 'security':
-        return (
-          <div className="p-12 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm">
-            <ShieldCheck className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white">Sécurité du Compte</h3>
-            <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-2">Gérez vos identifiants, activez la double authentification et consultez l'historique des connexions.</p>
-          </div>
-        );
+        return <SecuritySettings />;
       case 'system':
         return (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">

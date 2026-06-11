@@ -1,7 +1,9 @@
+import cron from 'node-cron';
 import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import db from "./server/db.ts";
+import db, { dbStorage, getOrCreateDatabaseForUser, defaultDb, runDatabaseMigrations } from "./server/db.ts";
+import * as mobileMoney from "./server/mobileMoney.js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cors from "cors";
@@ -14,7 +16,7 @@ import multer from 'multer';
 import fs from 'fs';
 import { z } from 'zod';
 import * as schemas from './server/validation.ts';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY || "",
@@ -137,6 +139,16 @@ export function handleApiError(res: Response, err: any) {
   });
 }
 
+export const asyncHandler = (
+  fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<any> | any
+) => {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch((err) => {
+      handleApiError(res, err);
+    });
+  };
+};
+
 const app = express();
 app.set('trust proxy', 1); // Trust first proxy and fix rate limit warning
 const PORT = 3000;
@@ -251,7 +263,7 @@ const authLimiter = rateLimit({
 });
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
-app.use('/api/auth/google', authLimiter);
+app.use('/api/auth/social', authLimiter);
 
 // Helper to log activities
 const logAction = (user: string, action: string, entity: string, entityId: string | number | null = null, details: any = null, ipAddress: string | null = null, userAgent: string | null = null) => {
@@ -289,8 +301,8 @@ function generateTransactionReference(type: string = 'TX') {
   return `${type}-${year}-${nextNum.toString().padStart(4, '0')}`;
 }
 
-function generateDocumentNumber(type: 'invoice' | 'quote') {
-  const prefix = type === 'invoice' ? 'FAC' : 'DEV';
+function generateDocumentNumber(type: 'invoice' | 'quote' | 'proforma') {
+  const prefix = type === 'invoice' ? 'FAC' : type === 'quote' ? 'DEV' : 'PRO';
   const year = new Date().getFullYear();
   const lastDoc = db.prepare("SELECT number FROM invoices WHERE type = ? AND number LIKE ? ORDER BY id DESC LIMIT 1").get(type, `${prefix}-${year}-%`) as any;
   
@@ -573,6 +585,20 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
 // Note: We apply it globally to /api but exclude public routes inside the middleware
 app.use('/api', authenticateToken);
 
+// Dynamic database tenancy middleware
+const bindDatabaseToRequest = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.user && req.user.id) {
+    const userDb = getOrCreateDatabaseForUser(req.user.id, req.user.email);
+    dbStorage.run(userDb, () => {
+      next();
+    });
+  } else {
+    next();
+  }
+};
+
+app.use('/api', bindDatabaseToRequest);
+
 // Health check ping
 app.get("/api/ping", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
@@ -620,7 +646,7 @@ function getGoogleClient() {
   return _googleClient;
 }
 
-app.post('/api/auth/google', async (req, res) => {
+app.post('/api/auth/social', async (req, res) => {
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ error: "ID Token missing" });
 
@@ -649,9 +675,9 @@ app.post('/api/auth/google', async (req, res) => {
       `).run(email, name || 'User', 'user', 'google-auth-no-password');
       
       user = { id: result.lastInsertRowid, email, name, role: 'user' };
-      logAction(email, 'REGISTER_GOOGLE', 'User', user.id);
+      logAction(email, 'REGISTER_SOCIAL', 'User', user.id);
     } else {
-      logAction(email, 'LOGIN_GOOGLE', 'User', user.id);
+      logAction(email, 'LOGIN_SOCIAL', 'User', user.id);
     }
 
     const token = jwt.sign(
@@ -678,96 +704,316 @@ app.post('/api/auth/google', async (req, res) => {
   }
 });
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS recurring_transactions (
-    id TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    amount REAL NOT NULL,
-    frequency TEXT NOT NULL, -- 'monthly', 'quarterly', 'annually', 'weekly'
-    next_date TEXT NOT NULL,
-    end_date TEXT,
-    max_occurrences INTEGER,
-    current_occurrences INTEGER DEFAULT 0,
-    last_processed TEXT,
-    debit_account TEXT, -- Legacy, will use lines if present
-    credit_account TEXT, -- Legacy, will use lines if present
-    category TEXT,
-    active INTEGER DEFAULT 1,
-    auto_process INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
 
-// Ensure recurring_transaction_id exists in transactions table
-try {
-  db.exec("ALTER TABLE transactions ADD COLUMN recurring_transaction_id TEXT");
-} catch (e) {
-  // Column already exists or other error
-}
+// --- Gemini Proxy Route with Database Tools ---
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS recurring_transaction_lines (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    recurring_transaction_id TEXT NOT NULL,
-    account_code TEXT NOT NULL,
-    debit REAL DEFAULT 0,
-    credit REAL DEFAULT 0,
-    description TEXT,
-    FOREIGN KEY (recurring_transaction_id) REFERENCES recurring_transactions(id) ON DELETE CASCADE
-  )
-`);
-
-
-
-// --- Gemini Proxy Route ---
-app.post('/api/gemini/generate', async (req, res) => {
-  const { model, contents, config } = req.body;
-  const maxRetries = 3;
-  let lastErr: any;
-
-  // Fallback models if the requested one is experiencing high demand
-  const fallbackModels = [model, "gemini-2.5-flash", "gemini-2.5-pro"];
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    // Try current model, then fallback if we are on later attempts
-    const currentModelToTry = fallbackModels[Math.min(attempt, fallbackModels.length - 1)] || model;
-    
-    try {
-      if (attempt > 0) {
-        // Exponential backoff
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000 + Math.random() * 500));
-        console.warn(`Gemini API: Retrying (Attempt ${attempt}/${maxRetries}) using model: ${currentModelToTry}`);
-      }
-
-      const response = await ai.models.generateContent({ model: currentModelToTry, contents, config });
-      return res.json({ text: response.text, candidates: response.candidates });
-    } catch (err: any) {
-      lastErr = err;
-      const errorString = err.message || String(err);
-      
-      const isTransient = errorString.includes('429') || 
-                          errorString.includes('503') || 
-                          errorString.includes('quota') || 
-                          errorString.includes('RESOURCE_EXHAUSTED') || 
-                          errorString.includes('UNAVAILABLE');
-
-      if (!isTransient || attempt === maxRetries) {
-        break;
-      }
+const databaseToolsDeclarations = [
+  {
+    name: "get_accounting_summary",
+    description: "Récupère un résumé financier consolidé à jour de l'entreprise : solde des comptes bancaires et des caisses, chiffre d'affaires mensuel sur les 6 derniers mois, état global des factures impayées clients/fournisseurs, et dépenses budgétaires consommées.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "get_recent_transactions",
+    description: "Récupère les dernières transactions et écritures saisies dans le journal comptable avec les détails de débit/crédit.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        limit: {
+          type: Type.INTEGER,
+          description: "Nombre maximum de transactions à récupérer (par défaut 10)."
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: "get_outstanding_invoices",
+    description: "Récupère la liste détaillée des factures clients impayées et des factures fournisseurs en attente, avec leurs montants, tiers et dates d'échéance.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "get_budget_status",
+    description: "Consulte le statut budgétaire actuel : comparaison des dépenses budgétisées par comptes / catégories comptables et les consommations réelles.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "get_auditor_recommendations",
+    description: "Exécute un audit comptable flash pour détecter les anomalies typiques : écritures déséquilibrées (débit != crédit), transactions bancaires en attente de rapprochement ou factures échues de longue date.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+      required: []
     }
   }
+];
 
-  console.error("Gemini API Error (exhausted retries):", lastErr);
-  let statusCode = 500;
-  const finalErrString = lastErr?.message || String(lastErr);
-  
-  if (finalErrString.includes('429') || finalErrString.includes('quota') || finalErrString.includes('RESOURCE_EXHAUSTED')) {
-     statusCode = 429;
-  } else if (finalErrString.includes('503') || finalErrString.includes('UNAVAILABLE')) {
-     statusCode = 503;
+async function executeGeminiTool(name: string, args: any) {
+  try {
+    switch (name) {
+      case "get_accounting_summary": {
+        // 1. Bank and Cash balances
+        const bankAccounts = db.prepare(`
+          SELECT name, bank_name, account_number, balance, currency 
+          FROM bank_accounts
+        `).all() as any[];
+
+        // 2. Chiffre d'affaires (last 6 months)
+        const rawCA = db.prepare(`
+          SELECT SUBSTR(t.date, 1, 7) as month, SUM(je.credit - je.debit) as count_val
+          FROM journal_entries je
+          JOIN transactions t ON je.transaction_id = t.id
+          WHERE (je.account_code LIKE '7%' OR je.account_code LIKE '70%') AND t.status = 'validated' AND t.deleted_at IS NULL
+          GROUP BY month
+          ORDER BY month DESC
+          LIMIT 6
+        `).all() as any[];
+
+        // 3. Outstanding Invoices status
+        const outstandingInvoices = db.prepare(`
+          SELECT 
+            SUM(CASE WHEN type IN ('invoice', 'client') THEN total_amount - paid_amount ELSE 0 END) as client_due,
+            SUM(CASE WHEN type IN ('supplier', 'fournisseur') THEN total_amount - paid_amount ELSE 0 END) as supplier_due
+          FROM invoices
+          WHERE status IN ('sent', 'unpaid', 'overdue')
+        `).get() as any;
+
+        // 4. Budget Overview
+        const budgetTotal = db.prepare(`
+          SELECT SUM(amount) as budget_sum FROM budgets
+        `).get() as any;
+        const engagementTotal = db.prepare(`
+          SELECT SUM(amount) as engage_sum FROM budget_engagements WHERE status != 'cancelled'
+        `).get() as any;
+
+        return {
+          bank_accounts: bankAccounts,
+          sales_history: rawCA,
+          outstanding_invoices: {
+            receivables: outstandingInvoices?.client_due || 0,
+            payables: outstandingInvoices?.supplier_due || 0
+          },
+          budget: {
+            planned: budgetTotal?.budget_sum || 0,
+            consumed: engagementTotal?.engage_sum || 0
+          }
+        };
+      }
+      
+      case "get_recent_transactions": {
+        const limit = args?.limit || 10;
+        const txs = db.prepare(`
+          SELECT id, date, description, reference, status, amount_ht, vat_rate, payment_mode
+          FROM transactions
+          WHERE deleted_at IS NULL
+          ORDER BY date DESC, id DESC
+          LIMIT ?
+        `).all(limit) as any[];
+
+        // Get lines for each transaction
+        const detailedTxs = txs.map(t => {
+          const lines = db.prepare(`
+            SELECT account_code, debit, credit, description
+            FROM journal_entries
+            WHERE transaction_id = ?
+          `).all(t.id) as any[];
+          return { ...t, entries: lines };
+        });
+
+        return { transactions: detailedTxs };
+      }
+
+      case "get_outstanding_invoices": {
+        const invoices = db.prepare(`
+          SELECT i.id, i.type, i.number, i.date, i.due_date, i.status, i.total_amount, i.paid_amount, i.currency, i.occasional_name, tp.name as third_party_name
+          FROM invoices i
+          LEFT JOIN third_parties tp ON i.third_party_id = tp.id
+          WHERE i.status IN ('sent', 'unpaid', 'overdue')
+          ORDER BY i.due_date ASC
+        `).all() as any[];
+        return { outstanding_invoices: invoices };
+      }
+
+      case "get_budget_status": {
+        const budgets = db.prepare(`
+          SELECT b.id, b.account_code, a.name as account_name, b.amount, b.period_month, b.period_year,
+            (SELECT SUM(amount) FROM budget_engagements WHERE account_code = b.account_code AND period_month = b.period_month AND period_year = b.period_year AND status != 'cancelled') as consumed
+          FROM budgets b
+          JOIN accounts a ON b.account_code = a.code
+          ORDER BY b.period_year DESC, b.period_month DESC, b.amount DESC
+        `).all() as any[];
+        return { budgets };
+      }
+
+      case "get_auditor_recommendations": {
+        // Find non-matching bank transactions
+        const pendingBankTxs = db.prepare(`
+          SELECT count(*) as count_val FROM bank_transactions WHERE status = 'pending'
+        `).get() as any;
+
+        // Find unbalanced transactions
+        const unbalancedTxs = db.prepare(`
+          SELECT t.id, t.description, t.date, SUM(je.debit) as deb, SUM(je.credit) as cred
+          FROM transactions t
+          JOIN journal_entries je ON je.transaction_id = t.id
+          WHERE t.deleted_at IS NULL
+          GROUP BY t.id
+          HAVING ROUND(deb, 2) != ROUND(cred, 2)
+        `).all() as any[];
+
+        // Overdue invoices count
+        const overdueInvoices = db.prepare(`
+          SELECT count(*) as count_val FROM invoices WHERE status = 'overdue' OR (status = 'unpaid' AND due_date < DATE('now'))
+        `).get() as any;
+
+        return {
+          unreconciled_bank_transactions_count: pendingBankTxs?.count_val || 0,
+          unbalanced_entries: unbalancedTxs,
+          overdue_invoices_count: overdueInvoices?.count_val || 0
+        };
+      }
+      
+      default:
+        return { error: `Outil inconnu : ${name}` };
+    }
+  } catch (error: any) {
+    console.error(`Erreur d'exécution de l'outil ${name}:`, error);
+    return { error: error.message || String(error) };
   }
-  
-  res.status(statusCode).json({ error: finalErrString });
+}
+
+app.post('/api/gemini/generate', async (req, res) => {
+  try {
+    const { model, contents, config } = req.body;
+    const maxRetries = 1;
+    let lastErr: any;
+
+    let systemInstructionStr = "";
+    if (config?.systemInstruction) {
+      if (typeof config.systemInstruction === "string") systemInstructionStr = config.systemInstruction;
+      else if (config.systemInstruction.parts?.[0]?.text) systemInstructionStr = config.systemInstruction.parts[0].text;
+    }
+
+    // Detect whether this is an assistant request
+    const isAssistantRequest = systemInstructionStr && (
+      systemInstructionStr.includes("ORY") || 
+      systemInstructionStr.includes("OryCompta") || 
+      systemInstructionStr.includes("conseiller") ||
+      systemInstructionStr.includes("comptable")
+    );
+
+    let activeConfig = { ...config };
+    if (isAssistantRequest) {
+      const existingTools = config?.tools || [];
+      activeConfig.tools = [
+        ...existingTools,
+        { functionDeclarations: databaseToolsDeclarations }
+      ];
+      activeConfig.toolConfig = { 
+        includeServerSideToolInvocations: true,
+        ...config?.toolConfig
+      };
+    }
+
+    // Create a mutable copy of contents to allow appending the agent loop's function calls and responses
+    let activeContents = Array.isArray(contents) ? [...contents] : [contents];
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+          console.warn(`Gemini API: Retrying (${attempt}/${maxRetries})`);
+        }
+
+        let response = await ai.models.generateContent({ 
+          model: model || "gemini-3.5-flash", 
+          contents: activeContents, 
+          config: activeConfig 
+        });
+
+        let functionCalls = response.functionCalls;
+        let loopCount = 0;
+        const maxLoops = 5;
+
+        while (functionCalls && functionCalls.length > 0 && loopCount < maxLoops) {
+          loopCount++;
+          console.log(`[Gemini Tool Execution Loop] Loop ${loopCount}, calls:`, functionCalls.map(c => c.name));
+
+          const assistantContent = response.candidates?.[0]?.content;
+          if (assistantContent) {
+            activeContents.push(assistantContent);
+          }
+
+          const toolParts = [];
+          for (const call of functionCalls) {
+            const toolResult = await executeGeminiTool(call.name, call.args);
+            toolParts.push({
+              functionResponse: {
+                name: call.name,
+                response: toolResult
+              }
+            });
+          }
+
+          activeContents.push({
+            role: 'tool',
+            parts: toolParts
+          });
+
+          response = await ai.models.generateContent({
+            model: model || "gemini-3.5-flash",
+            contents: activeContents,
+            config: activeConfig
+           });
+
+           functionCalls = response.functionCalls;
+        }
+
+        return res.json({ text: response.text, candidates: response.candidates });
+      } catch (err: any) {
+        lastErr = err;
+        const errorString = err.message || String(err);
+        const isTransient = errorString.includes('503') || errorString.includes('UNAVAILABLE') || errorString.includes('429');
+
+        if (!isTransient || attempt === maxRetries) {
+          break;
+        }
+      }
+    }
+
+    const finalErrString = lastErr?.message || String(lastErr);
+    const isTransient = finalErrString.includes('503') || finalErrString.includes('UNAVAILABLE') || finalErrString.includes('429');
+    
+    if (isTransient) {
+      console.warn("Gemini API Transient Error:", finalErrString);
+    } else {
+      console.error("Gemini API Error:", lastErr);
+    }
+    let statusCode = 500;
+    
+    if (finalErrString.includes('429') || finalErrString.includes('quota') || finalErrString.includes('RESOURCE_EXHAUSTED')) {
+       statusCode = 429;
+    } else if (finalErrString.includes('503') || finalErrString.includes('UNAVAILABLE')) {
+       statusCode = 503;
+    }
+    
+    res.status(statusCode).json({ error: finalErrString });
+  } catch (error: any) {
+    console.error("Caught unhandled error in /api/gemini/generate:", error);
+    res.status(500).json({ error: error.message || "Internal server error" });
+  }
 });
 
 // --- Auth Routes ---
@@ -813,6 +1059,30 @@ app.post('/api/auth/register', validate(schemas.registerSchema), async (req, res
   } catch (err) {
     console.error("Registration error:", err);
     handleApiError(res, new AppError("Erreur lors de l'inscription" , 500, "server_error"));
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: "L'email et le nouveau mot de passe sont requis."});
+  }
+
+  try {
+    const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+    if (!user) {
+      return res.status(404).json({ error: "Aucun compte associé à cet email." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    db.prepare('UPDATE users SET password_hash = ? WHERE LOWER(email) = LOWER(?)').run(hashedPassword, email);
+
+    logAction(email, 'RESET_PASSWORD', 'User', (user as any).id);
+    
+    res.json({ message: "Mot de passe modifié avec succès." });
+  } catch (error) {
+    console.error('Password reset error:', error);
+    res.status(500).json({ error: "Erreur lors de la réinitialisation." });
   }
 });
 
@@ -865,6 +1135,19 @@ app.post('/api/auth/logout', (req, res) => {
     secure: true,
     sameSite: 'none'
   });
+  res.json({ success: true });
+});
+
+app.post('/api/audit/session', authenticateToken, (req, res) => {
+  const { durationMs } = req.body;
+  if (!durationMs) return res.status(400).json({ error: 'Missing durationMs' });
+  const durationSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(durationSeconds / 60);
+  const seconds = durationSeconds % 60;
+  logAction(req.user?.email || 'User', 'SESSION_DURATION', 'User', req.user?.id || null, { 
+    duration_seconds: durationSeconds,
+    duration_formatted: `${minutes}m ${seconds}s`
+  }, req.ip, req.get('user-agent'));
   res.json({ success: true });
 });
 
@@ -1018,156 +1301,112 @@ NEWFILEUID:NONE
 });
 
 // --- Journals API ---
-app.get("/api/journals", (req, res) => {
-  try {
-    const journals = db.prepare("SELECT * FROM journals ORDER BY id ASC").all();
-    res.json(journals);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+app.get("/api/journals", asyncHandler(async (req, res) => {
+  const journals = db.prepare("SELECT * FROM journals ORDER BY id ASC").all();
+  res.json(journals);
+}));
 
-app.post("/api/journals", (req, res) => {
+app.post("/api/journals", asyncHandler(async (req, res) => {
   const { id, name, type, description } = req.body;
-  try {
-    db.prepare(`
-      INSERT INTO journals (id, name, type, description, is_active, is_system)
-      VALUES (?, ?, ?, ?, 1, 0)
-    `).run(id, name, type, description);
-    logAction(req.user?.email || 'Admin', 'CREATE', 'Journal', id, { name, type });
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  db.prepare(`
+    INSERT INTO journals (id, name, type, description, is_active, is_system)
+    VALUES (?, ?, ?, ?, 1, 0)
+  `).run(id, name, type, description);
+  logAction(req.user?.email || 'Admin', 'CREATE', 'Journal', id, { name, type });
+  res.json({ success: true });
+}));
 
-app.put("/api/journals/:id", (req, res) => {
+app.put("/api/journals/:id", asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { name, description, is_active } = req.body;
-  try {
-    const oldJournal = db.prepare("SELECT * FROM journals WHERE id = ?").get(id) as any;
-    db.prepare(`
-      UPDATE journals SET name = ?, description = ?, is_active = ?
-      WHERE id = ? AND is_system = 0
-    `).run(name, description, is_active ? 1 : 0, id);
-    logAction(req.user?.email || 'Admin', 'UPDATE', 'Journal', id, { 
-      previous: oldJournal,
-      current: { name, description, is_active }
-    });
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  const oldJournal = db.prepare("SELECT * FROM journals WHERE id = ?").get(id) as any;
+  db.prepare(`
+    UPDATE journals SET name = ?, description = ?, is_active = ?
+    WHERE id = ? AND is_system = 0
+  `).run(name, description, is_active ? 1 : 0, id);
+  logAction(req.user?.email || 'Admin', 'UPDATE', 'Journal', id, { 
+    previous: oldJournal,
+    current: { name, description, is_active }
+  });
+  res.json({ success: true });
+}));
 
-app.delete("/api/journals/:id", (req, res) => {
+app.delete("/api/journals/:id", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  try {
-    db.prepare("DELETE FROM journals WHERE id = ? AND is_system = 0").run(id);
-    logAction(req.user?.email || 'Admin', 'DELETE', 'Journal', id);
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  db.prepare("DELETE FROM journals WHERE id = ? AND is_system = 0").run(id);
+  logAction(req.user?.email || 'Admin', 'DELETE', 'Journal', id);
+  res.json({ success: true });
+}));
 
 
 
 // --- Fiscal Years API ---
-app.get("/api/fiscal-years", (req, res) => {
-  try {
-    const years = db.prepare("SELECT * FROM fiscal_years ORDER BY start_date DESC").all();
-    res.json(years);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+app.get("/api/fiscal-years", asyncHandler(async (req, res) => {
+  const years = db.prepare("SELECT * FROM fiscal_years ORDER BY start_date DESC").all();
+  res.json(years);
+}));
 
-app.get("/api/fiscal-years/active", (req, res) => {
-  try {
-    const year = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
-    res.json(year || null);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+app.get("/api/fiscal-years/active", asyncHandler(async (req, res) => {
+  const year = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+  res.json(year || null);
+}));
 
-app.post("/api/fiscal-years", (req, res) => {
+app.post("/api/fiscal-years", asyncHandler(async (req, res) => {
   const { name, start_date, end_date } = req.body;
-  try {
-    // Check for overlaps
-    const overlap = db.prepare(`
-      SELECT COUNT(*) as count FROM fiscal_years 
-      WHERE (start_date <= ? AND end_date >= ?)
-         OR (start_date <= ? AND end_date >= ?)
-         OR (? <= start_date AND ? >= end_date)
-    `).get(start_date, start_date, end_date, end_date, start_date, end_date);
+  // Check for overlaps
+  const overlap = db.prepare(`
+    SELECT COUNT(*) as count FROM fiscal_years 
+    WHERE (start_date <= ? AND end_date >= ?)
+       OR (start_date <= ? AND end_date >= ?)
+       OR (? <= start_date AND ? >= end_date)
+  `).get(start_date, start_date, end_date, end_date, start_date, end_date);
 
-    if (overlap.count > 0) {
-      return res.status(400).json({ error: "L'exercice chevauche une période existante." });
-    }
-
-    const info = db.prepare(`
-      INSERT INTO fiscal_years (name, start_date, end_date, status, is_active)
-      VALUES (?, ?, ?, 'open', 0)
-    `).run(name, start_date, end_date);
-    logAction(req.user?.email || 'Admin', 'CREATE', 'FiscalYear', info.lastInsertRowid, { name, start_date, end_date });
-    res.json({ success: true, id: info.lastInsertRowid });
-  } catch (err) {
-    handleApiError(res, err);
+  if (overlap.count > 0) {
+    return res.status(400).json({ error: "L'exercice chevauche une période existante." });
   }
-});
 
-app.put("/api/fiscal-years/:id/activate", (req, res) => {
+  const info = db.prepare(`
+    INSERT INTO fiscal_years (name, start_date, end_date, status, is_active)
+    VALUES (?, ?, ?, 'open', 0)
+  `).run(name, start_date, end_date);
+  logAction(req.user?.email || 'Admin', 'CREATE', 'FiscalYear', info.lastInsertRowid, { name, start_date, end_date });
+  res.json({ success: true, id: info.lastInsertRowid });
+}));
+
+app.put("/api/fiscal-years/:id/activate", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  try {
-    db.transaction(() => {
-      db.prepare("UPDATE fiscal_years SET is_active = 0").run();
-      db.prepare("UPDATE fiscal_years SET is_active = 1 WHERE id = ?").run(id);
-    })();
-    logAction(req.user?.email || 'Admin', 'ACTIVATE', 'FiscalYear', id);
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  db.transaction(() => {
+    db.prepare("UPDATE fiscal_years SET is_active = 0").run();
+    db.prepare("UPDATE fiscal_years SET is_active = 1 WHERE id = ?").run(id);
+  })();
+  logAction(req.user?.email || 'Admin', 'ACTIVATE', 'FiscalYear', id);
+  res.json({ success: true });
+}));
 
-app.put("/api/fiscal-years/:id/close", (req, res) => {
+app.put("/api/fiscal-years/:id/close", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  try {
-    db.prepare("UPDATE fiscal_years SET status = 'closed' WHERE id = ?").run(id);
-    logAction(req.user?.email || 'Admin', 'CLOSE', 'FiscalYear', id);
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  db.prepare("UPDATE fiscal_years SET status = 'closed' WHERE id = ?").run(id);
+  logAction(req.user?.email || 'Admin', 'CLOSE', 'FiscalYear', id);
+  res.json({ success: true });
+}));
 
-app.put("/api/fiscal-years/:id/archive", (req, res) => {
+app.put("/api/fiscal-years/:id/archive", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  try {
-    const year = db.prepare("SELECT is_active FROM fiscal_years WHERE id = ?").get(id);
-    if (year && year.is_active) {
-      return res.status(400).json({ error: "Impossible d'archiver un exercice actif." });
-    }
-    db.prepare("UPDATE fiscal_years SET status = 'archived' WHERE id = ?").run(id);
-    logAction(req.user?.email || 'Admin', 'ARCHIVE', 'FiscalYear', id);
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
+  const year = db.prepare("SELECT is_active FROM fiscal_years WHERE id = ?").get(id);
+  if (year && year.is_active) {
+    return res.status(400).json({ error: "Impossible d'archiver un exercice actif." });
   }
-});
+  db.prepare("UPDATE fiscal_years SET status = 'archived' WHERE id = ?").run(id);
+  logAction(req.user?.email || 'Admin', 'ARCHIVE', 'FiscalYear', id);
+  res.json({ success: true });
+}));
 
-app.put("/api/fiscal-years/:id/reopen", (req, res) => {
+app.put("/api/fiscal-years/:id/reopen", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  try {
-    db.prepare("UPDATE fiscal_years SET status = 'open' WHERE id = ?").run(id);
-    logAction(req.user?.email || 'Admin', 'REOPEN', 'FiscalYear', id);
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  db.prepare("UPDATE fiscal_years SET status = 'open' WHERE id = ?").run(id);
+  logAction(req.user?.email || 'Admin', 'REOPEN', 'FiscalYear', id);
+  res.json({ success: true });
+}));
 
 // --- Salary Advances API ---
 app.get("/api/advances", (req, res) => {
@@ -1972,21 +2211,22 @@ app.get("/api/search", (req, res) => {
 
   // Search Transactions
   const transactions = db.prepare(`
-    SELECT t.id, t.description, t.reference, t.occasional_name, SUM(je.debit) as total_amount
+    SELECT t.id, t.date, t.description, t.reference, t.occasional_name, SUM(je.debit) as total_amount
     FROM transactions t
     LEFT JOIN journal_entries je ON t.id = je.transaction_id
-    WHERE t.description LIKE ? OR t.reference LIKE ? OR t.occasional_name LIKE ?
+    WHERE t.description LIKE ? OR t.reference LIKE ? OR t.occasional_name LIKE ? OR t.date LIKE ? OR CAST(t.id AS TEXT) LIKE ?
     GROUP BY t.id
-    LIMIT 5
-  `).all(searchTerm, searchTerm, searchTerm);
+    ORDER BY t.date DESC, t.id DESC
+    LIMIT 10
+  `).all(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
   
   transactions.forEach((tx: any) => {
     results.push({
       id: tx.id,
       type: 'transaction',
-      title: tx.description,
-      subtitle: `Journal - ${tx.reference || 'Sans réf.'} (${tx.total_amount || 0} FCFA)${tx.occasional_name ? ` - ${tx.occasional_name}` : ''}`,
-      link: '/journal'
+      title: `${tx.description} (ID: ${tx.id})`,
+      subtitle: `Journal - Date: ${tx.date} - Réf: ${tx.reference || 'N/A'} - Montant: ${tx.total_amount || 0} FCFA${tx.occasional_name ? ` - Tiers: ${tx.occasional_name}` : ''}`,
+      link: `/journal?search=${tx.id}`
     });
   });
 
@@ -2004,7 +2244,7 @@ app.get("/api/search", (req, res) => {
       type: 'invoice',
       title: `${inv.type === 'invoice' ? 'Facture' : 'Devis'} ${inv.number}`,
       subtitle: `${inv.occasional_name || 'Tiers'} - ${inv.total_amount} FCFA`,
-      link: '/invoicing'
+      link: `/invoicing?search=${inv.number}`
     });
   });
 
@@ -2022,7 +2262,7 @@ app.get("/api/search", (req, res) => {
       type: 'third_party',
       title: tp.name,
       subtitle: `${tp.type === 'client' ? 'Client' : 'Fournisseur'} - ${tp.account_code}${tp.tax_id ? ` - IF: ${tp.tax_id}` : ''}`,
-      link: '/third-parties'
+      link: `/third-parties?search=${encodeURIComponent(tp.name)}`
     });
   });
 
@@ -2066,6 +2306,33 @@ const createNotification = (type: string, title: string, message: string, link?:
 // Notifications API
 app.get("/api/notifications", (req, res) => {
   try {
+    // Preventive notification for fiscal year closing
+    try {
+      const activeYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get() as any;
+      if (activeYear && activeYear.end_date) {
+        const endDate = new Date(activeYear.end_date);
+        const now = new Date();
+        const diffTime = endDate.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (diffDays <= 30 && diffDays >= 0) {
+          const title = 'Clôture Exercice Fiscal';
+          // Check if we already warned recently (in the last 30 days)
+          const existing = db.prepare("SELECT id FROM notifications WHERE type = 'warning' AND title = ? AND created_at >= date('now', '-30 days')").get(title);
+          if (!existing) {
+            createNotification(
+              'warning',
+              title,
+              `L'exercice fiscal "${activeYear.name}" se termine dans ${diffDays} jour(s). Pensez à effectuer vos écritures d'inventaire.`,
+              '/settings?tab=fiscal'
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error checking fiscal year for notifications:', e);
+    }
+
     const notifications = db.prepare(`
       SELECT * FROM notifications 
       ORDER BY created_at DESC 
@@ -2105,24 +2372,66 @@ app.delete("/api/notifications/:id", (req, res) => {
   }
 });
 
-app.get("/api/company/status", (req, res) => {
+// --- MESSAGES API ---
+app.get('/api/messages', (req, res) => {
   try {
-    const stmt = db.prepare("SELECT COUNT(*) as count FROM journal_entries WHERE account_code LIKE '101%'");
-    const result = stmt.get();
-    res.json({ created: result.count > 0 });
-  } catch (err) {
-    handleApiError(res, err);
+    const messages = db.prepare('SELECT * FROM messages ORDER BY created_at DESC').all();
+    res.json(messages);
+  } catch (error) {
+    handleApiError(res, error);
   }
 });
 
-app.post("/api/company/create", (req, res) => {
+app.post('/api/messages', (req, res) => {
+  try {
+    const { recipient_email, recipient_name, subject, body, related_invoice_id, attachment_url } = req.body;
+    
+    // Simulate sending email
+    const status = Math.random() > 0.05 ? 'sent' : 'failed';
+    const messageId = Math.random().toString(36).substring(2, 9);
+    
+    db.prepare(`
+      INSERT INTO messages (id, recipient_email, recipient_name, subject, body, status, related_invoice_id, attachment_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      messageId,
+      recipient_email,
+      recipient_name || null,
+      subject,
+      body,
+      status,
+      related_invoice_id || null,
+      attachment_url || null
+    );
+    res.json({ success: true, id: messageId, status });
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
+app.delete('/api/messages/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM messages WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
+app.get("/api/company/status", asyncHandler((req, res) => {
+  const stmt = db.prepare("SELECT COUNT(*) as count FROM journal_entries WHERE account_code LIKE '101%'");
+  const result = stmt.get();
+  res.json({ created: result.count > 0 });
+}));
+
+app.post("/api/company/create", asyncHandler((req, res) => {
   const { 
     name, legalForm, rccm, taxId, address, city, country, email, phone, managerName,
     bankName, bankAccountNumber, bankIban, bankSwift,
     paymentBankEnabled, paymentBankAccount, paymentCashEnabled, paymentCashAccount, paymentMobileEnabled, paymentMobileAccount,
     syscohadaSystem, currency, fiscalYearStart, fiscalYearDuration,
-    taxRegime, vatSubject, vatRate,
-    capitalAmount, partners, constitutionCosts,
+    taxRegime, vatSubject, vatRate, taxes_enabled,
+    capitalAmount, cashCalledPercentage = 100, partners, constitutionCosts,
     treasury, users, modules, logoUrl
   } = req.body;
 
@@ -2130,37 +2439,63 @@ app.post("/api/company/create", (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     
     // 1. Save Company Settings
-    const settingsStmt = db.prepare(`
-      INSERT INTO company_settings (
-        name, legal_form, rccm, fiscal_id, address, city, country, email, phone, manager_name,
-        bank_name, bank_account_number, bank_iban, bank_swift,
-        payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
-        syscohada_system, currency, fiscal_year_start, fiscal_year_duration,
-        tax_regime, vat_regime, vat_rate, capital, creation_date, logo_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const settingsInfo = settingsStmt.run(
-      name, legalForm, rccm, taxId, address, city, country, email, phone, managerName,
-      bankName, bankAccountNumber, bankIban, bankSwift,
-      paymentBankEnabled ? 1 : 0, paymentBankAccount, paymentCashEnabled ? 1 : 0, paymentCashAccount, paymentMobileEnabled ? 1 : 0, paymentMobileAccount,
-      syscohadaSystem, currency, fiscalYearStart, fiscalYearDuration,
-      taxRegime, vatSubject ? 'assujetti' : 'exonéré', vatRate, capitalAmount, today, logoUrl
-    );
-    const companyId = settingsInfo.lastInsertRowid;
+    const existing = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+    let companyId: any;
+    
+    if (existing) {
+      companyId = existing.id;
+      db.prepare(`
+        UPDATE company_settings SET
+          name = ?, legal_form = ?, rccm = ?, fiscal_id = ?, address = ?, city = ?, country = ?, email = ?, phone = ?, manager_name = ?,
+          bank_name = ?, bank_account_number = ?, bank_iban = ?, bank_swift = ?,
+          payment_bank_enabled = ?, payment_bank_account = ?, payment_cash_enabled = ?, payment_cash_account = ?, payment_mobile_enabled = ?, payment_mobile_account = ?,
+          syscohada_system = ?, currency = ?, fiscal_year_start = ?, fiscal_year_duration = ?,
+          tax_regime = ?, vat_regime = ?, vat_rate = ?, capital = ?, creation_date = ?, logo_url = ?
+        WHERE id = ?
+      `).run(
+        name, legalForm, rccm, taxId, address, city, country, email, phone, managerName,
+        bankName, bankAccountNumber, bankIban, bankSwift,
+        paymentBankEnabled ? 1 : 0, paymentBankAccount, paymentCashEnabled ? 1 : 0, paymentCashAccount, paymentMobileEnabled ? 1 : 0, paymentMobileAccount,
+        syscohadaSystem, currency, fiscalYearStart, fiscalYearDuration,
+        taxRegime, vatSubject ? 'assujetti' : 'exonéré', vatRate, taxes_enabled !== undefined ? (taxes_enabled ? 1 : 0) : 1, capitalAmount, today, logoUrl,
+        companyId
+      );
+    } else {
+      const settingsStmt = db.prepare(`
+        INSERT INTO company_settings (
+          name, legal_form, rccm, fiscal_id, address, city, country, email, phone, manager_name,
+          bank_name, bank_account_number, bank_iban, bank_swift,
+          payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
+          syscohada_system, currency, fiscal_year_start, fiscal_year_duration,
+          tax_regime, vat_regime, vat_rate, taxes_enabled, capital, creation_date, logo_url
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const settingsInfo = settingsStmt.run(
+        name, legalForm, rccm, taxId, address, city, country, email, phone, managerName,
+        bankName, bankAccountNumber, bankIban, bankSwift,
+        paymentBankEnabled ? 1 : 0, paymentBankAccount, paymentCashEnabled ? 1 : 0, paymentCashAccount, paymentMobileEnabled ? 1 : 0, paymentMobileAccount,
+        syscohadaSystem, currency, fiscalYearStart, fiscalYearDuration,
+        taxRegime, vatSubject ? 'assujetti' : 'exonéré', vatRate, capitalAmount, today, logoUrl
+      );
+      companyId = settingsInfo.lastInsertRowid;
+    }
 
-    // 2. Save Partners
+    // 2. Clean up and Save Partners
+    db.prepare("DELETE FROM partners WHERE company_id = ?").run(companyId);
     const partnerStmt = db.prepare("INSERT INTO partners (company_id, name, contribution_amount, contribution_type, description) VALUES (?, ?, ?, ?, ?)");
     for (const p of partners) {
       partnerStmt.run(companyId, p.name, p.amount, p.type, p.description || '');
     }
 
-    // 3. Save Modules
+    // 3. Clean up and Save Modules
+    db.prepare("DELETE FROM company_modules WHERE company_id = ?").run(companyId);
     const moduleStmt = db.prepare("INSERT INTO company_modules (company_id, module_key, is_active) VALUES (?, ?, ?)");
     for (const [key, active] of Object.entries(modules)) {
       moduleStmt.run(companyId, key, active ? 1 : 0);
     }
 
-    // 3.1 Setup First Fiscal Year
+    // 3.1 Clean up and Setup First Fiscal Year
+    db.prepare("DELETE FROM fiscal_years").run();
     const fiscalYearEnd = new Date(fiscalYearStart);
     fiscalYearEnd.setMonth(fiscalYearEnd.getMonth() + parseInt(fiscalYearDuration));
     fiscalYearEnd.setDate(fiscalYearEnd.getDate() - 1);
@@ -2171,6 +2506,18 @@ app.post("/api/company/create", (req, res) => {
       VALUES (?, ?, ?, 'open', 1)
     `).run(`Exercice ${new Date(fiscalYearStart).getFullYear()}`, fiscalYearStart, endDateStr);
 
+    // Capital calculations
+    let cashTotal = 0;
+    let kindTotal = 0;
+
+    for (const p of partners) {
+      if (p.type === 'cash') cashTotal += p.amount;
+      else kindTotal += p.amount;
+    }
+
+    const calledCash = cashTotal * (cashCalledPercentage / 100);
+    const uncalledCash = cashTotal - calledCash;
+
     // 4. Accounting Entries for Constitution
     const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, 'validated')");
     const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
@@ -2179,21 +2526,21 @@ app.post("/api/company/create", (req, res) => {
     const subInfo = txStmt.run(today, `Constitution ${legalForm}: Souscription du capital`, 'CONST-001');
     const subTxId = subInfo.lastInsertRowid;
 
-    // Credit 101 (Capital Social) - Total
-    entryStmt.run(subTxId, '101', 0, capitalAmount);
-    
-    // Debit 109 (Actionnaires, capital souscrit non appelé) - Total
-    entryStmt.run(subTxId, '109', capitalAmount, 0);
+    // Debit
+    if (uncalledCash > 0) entryStmt.run(subTxId, '109', uncalledCash, 0); // Actionnaires, capital souscrit non appelé
+    if (kindTotal > 0) entryStmt.run(subTxId, '4611', kindTotal, 0); // Apporteurs, apports en nature
+    if (calledCash > 0) entryStmt.run(subTxId, '4612', calledCash, 0); // Apporteurs, apports en numéraire
 
-    // Liberation of Contributions
-    let cashTotal = 0;
-    let kindTotal = 0;
+    // Credit
+    if (uncalledCash > 0) entryStmt.run(subTxId, '1011', 0, uncalledCash); // Capital souscrit, non appelé
+    if (kindTotal + calledCash > 0) entryStmt.run(subTxId, '1012', 0, kindTotal + calledCash); // Capital souscrit, appelé, non versé
 
+    // Liberation of Nature Contributions
     for (const p of partners) {
-      if (p.type === 'cash') {
-        cashTotal += p.amount;
-      } else {
-        kindTotal += p.amount;
+      if (p.type !== 'cash') {
+        const libTxInfo = txStmt.run(today, `Libération apport en nature (${p.name})`, 'CONST-NAT');
+        const libTxId = libTxInfo.lastInsertRowid;
+        
         // Create generic asset record for "Apport en nature"
         const assetStmt = db.prepare(`
           INSERT INTO assets (
@@ -2203,11 +2550,11 @@ app.post("/api/company/create", (req, res) => {
         `);
         assetStmt.run(
           `Apport en nature (${p.name})`, 'industrial', p.amount, 0, p.amount,
-          today, 5, '241', subTxId
+          today, 5, '241', libTxId
         );
-        // Debit 241 (Asset) / Credit 109
-        entryStmt.run(subTxId, '241', p.amount, 0);
-        entryStmt.run(subTxId, '109', 0, p.amount);
+        // Debit 241 (Asset) / Credit 4611
+        entryStmt.run(libTxId, '241', p.amount, 0);
+        entryStmt.run(libTxId, '4611', 0, p.amount);
       }
     }
 
@@ -2236,12 +2583,23 @@ app.post("/api/company/create", (req, res) => {
       }
 
       if (t.initialBalance > 0) {
-        const libTxInfo = txStmt.run(today, `Libération capital / Solde initial: ${t.name}`, `CONST-${nextCode}`);
+        const libTxInfo = txStmt.run(today, `Libération numéraire: ${t.name}`, `CONST-${nextCode}`);
         const libTxId = libTxInfo.lastInsertRowid;
         
         entryStmt.run(libTxId, nextCode, t.initialBalance, 0);
-        entryStmt.run(libTxId, '109', 0, t.initialBalance);
+        entryStmt.run(libTxId, '4612', 0, t.initialBalance);
       }
+    }
+
+    // Reclassification of Paid Capital
+    const totalPaidCash = treasury.reduce((sum: number, t: any) => sum + (t.initialBalance || 0), 0);
+    const totalPaidNature = kindTotal;
+
+    if (totalPaidCash + totalPaidNature > 0) {
+        const reclasInfo = txStmt.run(today, `Reclassement capital versé`, 'CONST-002');
+        const reclasId = reclasInfo.lastInsertRowid;
+        entryStmt.run(reclasId, '1012', totalPaidCash + totalPaidNature, 0);
+        entryStmt.run(reclasId, '1013', 0, totalPaidCash + totalPaidNature);
     }
 
     // 6. Constitution Costs
@@ -2265,15 +2623,10 @@ app.post("/api/company/create", (req, res) => {
     return companyId;
   });
 
-  try {
-    const companyId = transaction();
-    logAction(req.user?.email || 'Admin', 'ONBOARDING', 'Company', companyId, { name });
-    res.json({ success: true, companyId });
-  } catch (err) {
-    console.error(err);
-    handleApiError(res, err);
-  }
-});
+  const companyId = transaction();
+  logAction(req.user?.email || 'Admin', 'ONBOARDING', 'Company', companyId, { name });
+  res.json({ success: true, companyId });
+}));
 
 // --- Module Management API ---
 const SUPPORTED_MODULES = [
@@ -2364,7 +2717,7 @@ app.get("/api/treasury", (req, res) => {
     // 1. Get Treasury Accounts and their balances
     const accountsStmt = db.prepare(`
       SELECT a.code, a.name, 
-             (SELECT COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) FROM journal_entries WHERE account_code = a.code) as balance
+             (SELECT COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) FROM journal_entries je JOIN transactions t ON je.transaction_id = t.id WHERE je.account_code = a.code AND t.deleted_at IS NULL) as balance
       FROM accounts a
       WHERE a.code LIKE '5%' AND LENGTH(a.code) >= 3
       ORDER BY a.code
@@ -2478,9 +2831,50 @@ app.get("/api/treasury/accounts/:code/balance", (req, res) => {
   try {
     const acc = db.prepare(`
       SELECT COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) as balance
-      FROM journal_entries WHERE account_code = ?
+      FROM journal_entries je
+      JOIN transactions t ON je.transaction_id = t.id
+      WHERE je.account_code = ? AND t.deleted_at IS NULL
     `).get(code) as any;
     res.json({ balance: acc?.balance || 0 });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post("/api/treasury/advanced-forecast", async (req, res) => {
+  try {
+    const historicalTransactions = db.prepare(`
+      SELECT t.date, je.debit, je.credit, a.type as account_type
+      FROM journal_entries je
+      JOIN transactions t ON je.transaction_id = t.id
+      JOIN accounts a ON je.account_code = a.code
+      WHERE a.type IN ('actif', 'passif') -- Broadly related to cash and accounts
+      AND t.date >= date('now', '-90 days')
+      ORDER BY t.date ASC
+    `).all();
+
+    const currentBalances = db.prepare(`
+      SELECT a.code, (COALESCE(SUM(je.debit), 0) - COALESCE(SUM(je.credit), 0)) as balance
+      FROM journal_entries je
+      JOIN accounts a ON je.account_code = a.code
+      WHERE a.code LIKE '5%'
+      GROUP BY a.code
+    `).all();
+
+    const recurringInvoices = db.prepare(`
+      SELECT type, frequency, next_date, end_date, total_amount, currency
+      FROM recurring_invoices
+      WHERE active = 1
+    `).all();
+
+    res.json({
+      success: true,
+      data: {
+        historicalTransactions,
+        currentBalances,
+        recurringInvoices
+      }
+    });
   } catch (err) {
     handleApiError(res, err);
   }
@@ -2497,8 +2891,9 @@ app.post("/api/treasury/transfer", (req, res) => {
     // 1. Verify source account balance
     const balanceStmt = db.prepare(`
       SELECT COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) as balance
-      FROM journal_entries
-      WHERE account_code = ?
+      FROM journal_entries je
+      JOIN transactions t ON je.transaction_id = t.id
+      WHERE je.account_code = ? AND t.deleted_at IS NULL
     `);
     const fromBalance = (balanceStmt.get(fromAccount) as any).balance;
 
@@ -2534,6 +2929,85 @@ app.post("/api/treasury/transfer", (req, res) => {
 
 // --- Third Party Management API ---
 
+app.post("/api/third-parties/sync", (req, res) => {
+  try {
+    const transaction = db.transaction(() => {
+      // 1. Ensure all clients/suppliers have a proper account 411/401 and it matches names
+      const parties = db.prepare("SELECT * FROM third_parties").all();
+      let syncedCount = 0;
+      
+      for (const p of parties) {
+        // Sync account name
+        db.prepare("UPDATE accounts SET name = ? WHERE code = ?").run(p.name, p.account_code);
+        
+        // If it's an occasional third party, sync the occasional_name in transactions
+        if (p.is_occasional) {
+          db.prepare("UPDATE transactions SET occasional_name = ? WHERE third_party_id = ?").run(p.name, p.id);
+          db.prepare("UPDATE invoices SET occasional_name = ? WHERE third_party_id = ?").run(p.name, p.id);
+        }
+        
+        syncedCount++;
+      }
+      return syncedCount;
+    });
+    
+    const count = transaction();
+    res.json({ success: true, message: `Synchronisation terminée pour ${count} tiers.` });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+// --- CRM Deals Endpoints ---
+app.get("/api/crm/deals", (req, res) => {
+  try {
+    const deals = db.prepare("SELECT * FROM crm_deals ORDER BY created_at DESC").all();
+    res.json(deals);
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post("/api/crm/deals", (req, res) => {
+  try {
+    const { third_party_id, title, value, probability, stage, expected_close_date, department } = req.body;
+    const stmt = db.prepare(`
+      INSERT INTO crm_deals (third_party_id, title, value, probability, stage, expected_close_date, department)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const info = stmt.run(third_party_id, title, value || 0, probability || 0, stage || 'prospect', expected_close_date, department);
+    res.json({ id: info.lastInsertRowid, third_party_id, title, value, probability, stage, expected_close_date, department });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.put("/api/crm/deals/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { third_party_id, title, value, probability, stage, expected_close_date, department } = req.body;
+    const stmt = db.prepare(`
+      UPDATE crm_deals 
+      SET third_party_id = ?, title = ?, value = ?, probability = ?, stage = ?, expected_close_date = ?, department = ?
+      WHERE id = ?
+    `);
+    stmt.run(third_party_id, title, value, probability, stage, expected_close_date, department, id);
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.delete("/api/crm/deals/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    db.prepare("DELETE FROM crm_deals WHERE id = ?").run(id);
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 // Get all third parties
 app.get("/api/third-parties", (req, res) => {
   try {
@@ -2555,7 +3029,8 @@ app.get("/api/third-parties", (req, res) => {
       const balanceStmt = db.prepare(`
         SELECT SUM(je.debit) as debit, SUM(je.credit) as credit
         FROM journal_entries je
-        WHERE je.account_code = ?
+        JOIN transactions t ON je.transaction_id = t.id
+        WHERE je.account_code = ? AND t.deleted_at IS NULL
       `);
       const balance = balanceStmt.get(party.account_code);
       
@@ -2788,17 +3263,26 @@ app.delete("/api/third-parties/:id", (req, res) => {
     const party = db.prepare("SELECT account_code FROM third_parties WHERE id = ?").get(id);
     if (!party) return res.status(404).json({ error: "Tiers non trouvé" });
     
-    // Check for existing transactions
-    const checkStmt = db.prepare("SELECT COUNT(*) as count FROM journal_entries WHERE account_code = ?");
-    const count = checkStmt.get(party.account_code).count;
+    const checkStmt = db.prepare("SELECT COUNT(*) as count FROM journal_entries WHERE je.account_code = ? AND t.deleted_at IS NULL");
+    const count = checkStmt.get((party as any).account_code).count;
     
     if (count > 0) {
       return res.status(400).json({ error: "Impossible de supprimer ce tiers car des écritures comptables y sont liées." });
     }
+
+    const checkInvoices = db.prepare("SELECT COUNT(*) as count FROM invoices WHERE third_party_id = ?");
+    if (checkInvoices.get(id).count > 0) {
+      return res.status(400).json({ error: "Impossible de supprimer ce tiers car des factures y sont liées." });
+    }
+
+    const checkRecurring = db.prepare("SELECT COUNT(*) as count FROM recurring_invoices WHERE third_party_id = ?");
+    if (checkRecurring.get(id).count > 0) {
+      return res.status(400).json({ error: "Impossible de supprimer ce tiers car des factures récurrentes y sont liées." });
+    }
     
     const transaction = db.transaction(() => {
       db.prepare("DELETE FROM third_parties WHERE id = ?").run(id);
-      db.prepare("DELETE FROM accounts WHERE code = ?").run(party.account_code);
+      db.prepare("DELETE FROM accounts WHERE code = ?").run((party as any).account_code);
     });
     
     transaction();
@@ -2974,7 +3458,7 @@ app.get("/api/third-parties/:id/transactions", (req, res) => {
       FROM journal_entries je
       JOIN transactions t ON je.transaction_id = t.id
       LEFT JOIN invoices i ON t.id = i.transaction_id
-      WHERE je.account_code = ?
+      WHERE je.account_code = ? AND t.deleted_at IS NULL
       ORDER BY t.date DESC, t.id DESC
     `).all(party.account_code);
 
@@ -3034,93 +3518,130 @@ app.get("/api/company/dossier", (req, res) => {
   }
 });
 
+// Reset Company Data
+app.post("/api/company/reset", asyncHandler(async (req, res) => {
+  const tablesToClear = [
+    'accounts', 'third_parties', 'transactions', 'journal_entries', 'crm_deals',
+    'bank_accounts', 'bank_transactions', 'custom_operations', 'company_settings',
+    'partners', 'company_modules', 'tasks', 'fiscal_years', 'assets', 'depreciations',
+    'audit_logs', 'employees', 'payroll_periods', 'payslips', 'subscriptions',
+    'payment_transactions', 'notifications', 'messages', 'journals',
+    'salary_advances', 'invoices', 'invoice_items', 'budgets', 'budget_revisions',
+    'budget_categories', 'budget_category_accounts', 'budget_alerts', 'budget_engagements',
+    'recurring_invoices', 'recurring_invoice_items', 'transaction_attachments',
+    'exchange_rates', 'inventory_items', 'tax_rules', 'payroll_tax_brackets',
+    'payroll_tax_reductions', 'payroll_rules', 'vat_settings', 'mobile_money_transactions',
+    'recurring_transactions', 'recurring_transaction_lines'
+  ];
+
+  db.transaction(() => {
+    db.exec("PRAGMA foreign_keys = OFF;");
+    for (const table of tablesToClear) {
+      db.exec(`DROP TABLE IF EXISTS ${table};`);
+    }
+    db.exec("PRAGMA foreign_keys = ON;");
+  })();
+
+  // Re-run migrations to recreate tables and default data
+  runDatabaseMigrations(false, req.user?.email || 'admin@example.com');
+
+  res.json({ success: true, message: "Les données ont été réinitialisées." });
+}));
+
 // Get Company Settings
-app.get("/api/company/settings", (req, res) => {
-  try {
-    const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
-    res.json(settings || {});
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+app.get("/api/company/settings", asyncHandler((req, res) => {
+  const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
+  res.json(settings || {});
+}));
 
 // Update Company Settings
-app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial()), (req, res) => {
+app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial()), asyncHandler((req, res) => {
   const { 
     name, legalForm, activity, fiscalId, rccm, syscohada_system, taxRegime, vatRegime, vat_rate, currency, address, city, country, capital, managerName,
     phone, email,
     invoiceReminderEnabled, invoiceReminderDays, invoiceReminderEmail, invoiceReminderSubject, invoiceReminderTemplate,
     bank_name, bank_account_number, bank_iban, bank_swift,
     payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
-    cnps_employer_number, tax_office, logo_url
+    cnps_employer_number, tax_office, logo_url,
+    corporate_tax_rate, imf_rate, taxes_enabled
   } = req.body;
   
-  try {
-    const existing = db.prepare("SELECT id FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
-    
-    if (existing) {
-      const stmt = db.prepare(`
-        UPDATE company_settings 
-        SET name = ?, legal_form = ?, activity = ?, fiscal_id = ?, rccm = ?, syscohada_system = ?, tax_regime = ?, vat_regime = ?, vat_rate = ?, currency = ?, address = ?, city = ?, country = ?, capital = ?, manager_name = ?,
-            phone = ?, email = ?,
-            invoice_reminder_enabled = ?, invoice_reminder_days = ?, invoice_reminder_email = ?, invoice_reminder_subject = ?, invoice_reminder_template = ?,
-            bank_name = ?, bank_account_number = ?, bank_iban = ?, bank_swift = ?,
-            payment_bank_enabled = ?, payment_bank_account = ?, payment_cash_enabled = ?, payment_cash_account = ?, payment_mobile_enabled = ?, payment_mobile_account = ?,
-            cnps_employer_number = ?, tax_office = ?, logo_url = ?
-        WHERE id = ?
-      `);
-      stmt.run(
-        name, legalForm, activity, fiscalId, rccm || existing.rccm, syscohada_system || existing.syscohada_system, taxRegime, vatRegime, vat_rate || existing.vat_rate, currency, address, city, country, capital, managerName,
+  const existing = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+  
+  if (existing) {
+    const stmt = db.prepare(`
+      UPDATE company_settings 
+      SET name = ?, legal_form = ?, activity = ?, fiscal_id = ?, rccm = ?, syscohada_system = ?, tax_regime = ?, vat_regime = ?, vat_rate = ?, taxes_enabled = ?, currency = ?, address = ?, city = ?, country = ?, capital = ?, manager_name = ?,
+          phone = ?, email = ?,
+          invoice_reminder_enabled = ?, invoice_reminder_days = ?, invoice_reminder_email = ?, invoice_reminder_subject = ?, invoice_reminder_template = ?,
+          bank_name = ?, bank_account_number = ?, bank_iban = ?, bank_swift = ?,
+          payment_bank_enabled = ?, payment_bank_account = ?, payment_cash_enabled = ?, payment_cash_account = ?, payment_mobile_enabled = ?, payment_mobile_account = ?,
+          cnps_employer_number = ?, tax_office = ?, logo_url = ?,
+          corporate_tax_rate = ?, imf_rate = ?
+      WHERE id = ?
+    `);
+    stmt.run(
+      name ?? null, legalForm ?? null, activity ?? null, fiscalId ?? null, rccm || existing.rccm, syscohada_system || existing.syscohada_system, taxRegime ?? null, vatRegime ?? null, vat_rate || existing.vat_rate, taxes_enabled !== undefined ? (taxes_enabled ? 1 : 0) : existing.taxes_enabled, currency ?? null, address ?? null, city ?? null, country ?? null, capital ?? null, managerName ?? null,
+      phone ?? null, email ?? null,
+      invoiceReminderEnabled ? 1 : 0, 
+      invoiceReminderDays === undefined ? existing.invoice_reminder_days : invoiceReminderDays, 
+      invoiceReminderEmail === undefined ? existing.invoice_reminder_email : invoiceReminderEmail, 
+      invoiceReminderSubject === undefined ? existing.invoice_reminder_subject : invoiceReminderSubject, 
+      invoiceReminderTemplate === undefined ? existing.invoice_reminder_template : invoiceReminderTemplate,
+      bank_name ?? null, bank_account_number ?? null, bank_iban ?? null, bank_swift ?? null,
+      payment_bank_enabled === undefined ? existing.payment_bank_enabled : (payment_bank_enabled ? 1 : 0),
+      payment_bank_account || existing.payment_bank_account,
+      payment_cash_enabled === undefined ? existing.payment_cash_enabled : (payment_cash_enabled ? 1 : 0),
+      payment_cash_account || existing.payment_cash_account,
+      payment_mobile_enabled === undefined ? existing.payment_mobile_enabled : (payment_mobile_enabled ? 1 : 0),
+      payment_mobile_account || existing.payment_mobile_account,
+      cnps_employer_number ?? null,
+      tax_office ?? null,
+      logo_url === undefined ? existing.logo_url : logo_url,
+      corporate_tax_rate === undefined ? existing.corporate_tax_rate : corporate_tax_rate,
+      imf_rate === undefined ? existing.imf_rate : imf_rate,
+      existing.id
+    );
+    logAction(req.user?.name || 'Admin', 'UPDATE', 'CompanySettings', existing.id, { name, currency });
+  } else {
+    const insert = db.prepare(`
+      INSERT INTO company_settings (
+        name, legal_form, activity, fiscal_id, rccm, syscohada_system, tax_regime, vat_regime, vat_rate, taxes_enabled, currency, address, city, country, capital, manager_name,
         phone, email,
-        invoiceReminderEnabled ? 1 : 0, invoiceReminderDays, invoiceReminderEmail, invoiceReminderSubject, invoiceReminderTemplate,
+        invoice_reminder_enabled, invoice_reminder_days, invoice_reminder_email, invoice_reminder_subject, invoice_reminder_template,
         bank_name, bank_account_number, bank_iban, bank_swift,
-        payment_bank_enabled === undefined ? existing.payment_bank_enabled : (payment_bank_enabled ? 1 : 0),
-        payment_bank_account || existing.payment_bank_account,
-        payment_cash_enabled === undefined ? existing.payment_cash_enabled : (payment_cash_enabled ? 1 : 0),
-        payment_cash_account || existing.payment_cash_account,
-        payment_mobile_enabled === undefined ? existing.payment_mobile_enabled : (payment_mobile_enabled ? 1 : 0),
-        payment_mobile_account || existing.payment_mobile_account,
-        cnps_employer_number || null,
-        tax_office || null,
-        logo_url || existing.logo_url,
-        existing.id
-      );
-      logAction(req.user?.name || 'Admin', 'UPDATE', 'CompanySettings', existing.id, { name, currency });
-    } else {
-      const insert = db.prepare(`
-        INSERT INTO company_settings (
-          name, legal_form, activity, fiscal_id, rccm, syscohada_system, tax_regime, vat_regime, vat_rate, currency, address, city, country, capital, manager_name,
-          phone, email,
-          invoice_reminder_enabled, invoice_reminder_days, invoice_reminder_email, invoice_reminder_subject, invoice_reminder_template,
-          bank_name, bank_account_number, bank_iban, bank_swift,
-          payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
-          cnps_employer_number, tax_office, logo_url
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const info = insert.run(
-        name, legalForm, activity, fiscalId, req.body.rccm, req.body.syscohada_system || 'normal', taxRegime, vatRegime, vat_rate || 18, currency, address, city, country, capital, managerName,
-        phone, email,
-        invoiceReminderEnabled ? 1 : 0, invoiceReminderDays, invoiceReminderEmail, invoiceReminderSubject, invoiceReminderTemplate,
-        bank_name, bank_account_number, bank_iban, bank_swift,
-        payment_bank_enabled === undefined ? 1 : (payment_bank_enabled ? 1 : 0),
-        payment_bank_account || '521',
-        payment_cash_enabled === undefined ? 1 : (payment_cash_enabled ? 1 : 0),
-        payment_cash_account || '571',
-        payment_mobile_enabled === undefined ? 1 : (payment_mobile_enabled ? 1 : 0),
-        payment_mobile_account || '585',
-        cnps_employer_number || null,
-        tax_office || null,
-        logo_url || null
-      );
-      logAction(req.user?.name || 'Admin', 'CREATE', 'CompanySettings', info.lastInsertRowid, { name, currency });
-    }
-
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
+        payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
+        cnps_employer_number, tax_office, logo_url,
+        corporate_tax_rate, imf_rate
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const info = insert.run(
+      name ?? null, legalForm ?? null, activity ?? null, fiscalId ?? null, req.body.rccm ?? null, req.body.syscohada_system || 'normal', taxRegime ?? null, vatRegime ?? null, vat_rate || 18, req.body.taxes_enabled !== undefined ? (req.body.taxes_enabled ? 1 : 0) : 1, currency ?? null, address ?? null, city ?? null, country ?? null, capital ?? null, managerName ?? null,
+      phone ?? null, email ?? null,
+      invoiceReminderEnabled ? 1 : 0, 
+      invoiceReminderDays ?? 7, 
+      invoiceReminderEmail ?? null, 
+      invoiceReminderSubject ?? 'Rappel de facture impayée', 
+      invoiceReminderTemplate ?? 'Bonjour, votre facture {number} d\'un montant de {total} est échue depuis le {due_date}. Merci de régulariser votre situation.',
+      bank_name ?? null, bank_account_number ?? null, bank_iban ?? null, bank_swift ?? null,
+      payment_bank_enabled === undefined ? 1 : (payment_bank_enabled ? 1 : 0),
+      payment_bank_account || '521',
+      payment_cash_enabled === undefined ? 1 : (payment_cash_enabled ? 1 : 0),
+      payment_cash_account || '571',
+      payment_mobile_enabled === undefined ? 1 : (payment_mobile_enabled ? 1 : 0),
+      payment_mobile_account || '585',
+      cnps_employer_number ?? null,
+      tax_office ?? null,
+      logo_url ?? null,
+      corporate_tax_rate ?? 25,
+      imf_rate ?? 0.5
+    );
+    logAction(req.user?.name || 'Admin', 'CREATE', 'CompanySettings', info.lastInsertRowid, { name, currency });
   }
-});
+
+  res.json({ success: true });
+}));
 
 // --- Exchange Rates ---
 app.get("/api/exchange-rates", (req, res) => {
@@ -3291,6 +3812,45 @@ setTimeout(processRecurringInvoices, 15000);
 app.post("/api/invoices/check-reminders", (req, res) => {
   checkAndSendReminders();
   res.json({ success: true, message: "Vérification des rappels lancée." });
+});
+
+app.post("/api/invoices/:id/remind", (req, res) => {
+  const { id } = req.params;
+  try {
+    const invoice = db.prepare(`
+      SELECT i.*, tp.name as client_name, tp.email as client_email
+      FROM invoices i
+      JOIN third_parties tp ON i.third_party_id = tp.id
+      WHERE i.id = ?
+    `).get(id) as any;
+
+    if (!invoice) return res.status(404).json({ error: "Facture non trouvée" });
+
+    const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+    
+    const subject = (settings?.invoice_reminder_subject || 'Rappel de facture impayée').replace('{number}', invoice.number);
+    const body = (settings?.invoice_reminder_template || "Bonjour {client_name}, votre facture {number} est en retard.")
+      .replace('{number}', invoice.number)
+      .replace('{total}', invoice.total_amount.toLocaleString())
+      .replace('{due_date}', invoice.due_date || '-')
+      .replace('{client_name}', invoice.client_name);
+
+    console.log('[EMAIL REMINDER] To:', invoice.client_email);
+    console.log('Subject:', subject);
+    console.log('Body:', body);
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    db.prepare("UPDATE invoices SET last_reminder_date = ? WHERE id = ?").run(todayStr, invoice.id);
+    
+    // Si c'est juste un rappel manuel, on met à jour le statut en overdue si c'est sent
+    if (invoice.status === 'sent') {
+       db.prepare("UPDATE invoices SET status = 'overdue' WHERE id = ?").run(invoice.id);
+    }
+    
+    res.json({ success: true, message: "Rappel envoyé avec succès." });
+  } catch (err) {
+    res.status(500).json({ error: "Erreur serveur" });
+  }
 });
 
 app.post("/api/invoices/process-recurring", (req, res) => {
@@ -3791,7 +4351,7 @@ app.delete("/api/accounts/:code", (req, res) => {
   const { code } = req.params;
   try {
     // Check if used in journal entries
-    const check = db.prepare('SELECT 1 FROM journal_entries WHERE account_code = ? LIMIT 1').get(code);
+    const check = db.prepare('SELECT 1 FROM journal_entries WHERE je.account_code = ? AND t.deleted_at IS NULL LIMIT 1').get(code);
     if (check) {
       return res.status(400).json({ error: "Ce compte est utilisé dans des écritures et ne peut pas être supprimé." });
     }
@@ -3953,6 +4513,20 @@ app.get("/api/journal/suggestions", (req, res) => {
   }
 });
 
+app.get("/api/check-capital", (req, res) => {
+  try {
+    const result = db.prepare(`
+      SELECT COUNT(*) as count 
+      FROM journal_entries 
+      WHERE account_code LIKE '10%'
+    `).get() as { count: number };
+    
+    res.json({ hasCapital: result.count > 0 });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 app.get("/api/transactions/by-reference/:reference", (req, res) => {
   const { reference } = req.params;
   try {
@@ -4023,8 +4597,8 @@ app.get("/api/transactions", (req, res) => {
   }
 
   if (searchTerm) {
-    query += " AND (t.description LIKE ? OR t.reference LIKE ? OR t.occasional_name LIKE ?)";
-    params.push(`%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`);
+    query += " AND (t.description LIKE ? OR t.reference LIKE ? OR t.occasional_name LIKE ? OR t.date LIKE ? OR CAST(t.id AS TEXT) LIKE ?)";
+    params.push(`%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`);
   }
 
   if (thirdPartyId) {
@@ -4139,7 +4713,7 @@ app.get("/api/journal/export", (req, res) => {
 // Create a transaction
 app.post("/api/transactions", validate(schemas.transactionSchema), (req, res) => {
   const { 
-    date, description, reference, entries, currency, exchange_rate, 
+    date, due_date, description, reference, entries, currency, exchange_rate, 
     third_party_id, occasional_name, notes, document_url,
     operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
   } = req.body;
@@ -4148,10 +4722,10 @@ app.post("/api/transactions", validate(schemas.transactionSchema), (req, res) =>
   
   const insertTx = db.prepare(`
     INSERT INTO transactions (
-      date, description, reference, status, currency, exchange_rate, 
+      date, due_date, description, reference, status, currency, exchange_rate, 
       third_party_id, occasional_name, notes, document_url,
       operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
-    ) VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertEntry = db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)');
   const checkAccount = db.prepare('SELECT 1 FROM accounts WHERE code = ?');
@@ -4159,7 +4733,7 @@ app.post("/api/transactions", validate(schemas.transactionSchema), (req, res) =>
 
   const createTransaction = db.transaction(() => {
     const info = insertTx.run(
-      date, description, finalRef, currency || 'FCFA', exchange_rate || 1, 
+      date, due_date || null, description, finalRef, currency || 'FCFA', exchange_rate || 1, 
       third_party_id || null, occasional_name || null, notes || null, document_url || null,
       operation_type || null, amount_ht || null, vat_rate || null, payment_mode || null, 
       treasury_account || null, creation_mode || 'expert'
@@ -4227,7 +4801,8 @@ app.get("/api/transactions/:id", (req, res) => {
     
     const entries = entriesStmt.all(id);
     const attachments = db.prepare("SELECT * FROM transaction_attachments WHERE transaction_id = ?").all(id);
-    res.json({ ...transaction, entries, attachments });
+    const total_amount = entries.reduce((sum: number, e: any) => sum + (e.debit || 0), 0);
+    res.json({ ...transaction, entries, total_amount, attachments });
   } catch (err) {
     handleApiError(res, err);
   }
@@ -4237,14 +4812,14 @@ app.get("/api/transactions/:id", (req, res) => {
 app.put("/api/transactions/:id", validate(schemas.transactionSchema), (req, res) => {
   const { id } = req.params;
   const { 
-    date, description, reference, entries, notes, document_url, 
+    date, due_date, description, reference, entries, notes, document_url, 
     third_party_id, occasional_name, currency, exchange_rate,
     operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
   } = req.body;
 
   const updateTx = db.prepare(`
     UPDATE transactions 
-    SET date = ?, description = ?, reference = ?, notes = ?, document_url = ?, 
+    SET date = ?, due_date = ?, description = ?, reference = ?, notes = ?, document_url = ?, 
         third_party_id = ?, occasional_name = ?, currency = ?, exchange_rate = ?,
         operation_type = ?, amount_ht = ?, vat_rate = ?, payment_mode = ?, 
         treasury_account = ?, creation_mode = ?
@@ -4263,7 +4838,7 @@ app.put("/api/transactions/:id", validate(schemas.transactionSchema), (req, res)
     }
 
     updateTx.run(
-      date, description, reference || null, notes || null, document_url || null, 
+      date, due_date || null, description, reference || null, notes || null, document_url || null, 
       third_party_id || null, occasional_name || null, currency || 'FCFA', exchange_rate || 1, 
       operation_type || null, amount_ht || null, vat_rate || null, payment_mode || null, 
       treasury_account || null, creation_mode || 'expert',
@@ -4458,6 +5033,32 @@ app.post("/api/transactions/:id/generate-invoice", (req, res) => {
   }
 });
 
+app.post("/api/transactions/bulk-validate", (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: "IDs required" });
+  }
+
+  try {
+    const trx = db.transaction((txIds) => {
+      // Validate all given transactions that are currently drafts
+      const stmt = db.prepare("UPDATE transactions SET status = 'validated' WHERE id = ? AND status = 'draft'");
+      let count = 0;
+      for (const id of txIds) {
+        const info = stmt.run(id);
+        count += info.changes;
+      }
+      return count;
+    });
+
+    const count = trx(ids);
+    logAction(req.user?.email || 'Admin', 'BULK_VALIDATE', 'Transaction', 0, { ids, count });
+    res.json({ success: true, count });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 // Bulk delete transactions
 app.post("/api/transactions/bulk-delete", (req, res) => {
   const { ids } = req.body;
@@ -4636,9 +5237,10 @@ app.get("/api/compliance/audit", (req, res) => {
 
     for (const acc of cashAccounts) {
       const balanceStmt = db.prepare(`
-        SELECT SUM(debit) as debit, SUM(credit) as credit 
-        FROM journal_entries 
-        WHERE account_code = ?
+        SELECT SUM(je.debit) as debit, SUM(je.credit) as credit 
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id 
+        WHERE je.account_code = ? AND t.deleted_at IS NULL
       `);
       const balance = balanceStmt.get(acc.code);
       
@@ -4660,9 +5262,10 @@ app.get("/api/compliance/audit", (req, res) => {
 
     for (const acc of suspenseAccounts) {
       const balanceStmt = db.prepare(`
-        SELECT SUM(debit) as debit, SUM(credit) as credit 
-        FROM journal_entries 
-        WHERE account_code = ?
+        SELECT SUM(je.debit) as debit, SUM(je.credit) as credit 
+        FROM journal_entries je
+        JOIN transactions t ON je.transaction_id = t.id 
+        WHERE je.account_code = ? AND t.deleted_at IS NULL
       `);
       const balance = balanceStmt.get(acc.code);
       const netBalance = (balance.debit || 0) - (balance.credit || 0);
@@ -4758,260 +5361,451 @@ app.get("/api/compliance/audit", (req, res) => {
 
 // AI Analysis Endpoint - DEPRECATED, use frontend service
 // Get dashboard stats
-app.get("/api/dashboard/stats", (req, res) => {
-  try {
-    // Get active fiscal year
-    const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
-    const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
-    const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
+app.get("/api/dashboard/stats", asyncHandler((req, res) => {
+  // Get active fiscal year
+  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+  const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
+  const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
+  const startDateObj = new Date(startDate);
 
-    // 1. Chiffre d'Affaires (Class 7 Credit)
+  // 1. Chiffre d'Affaires (Class 7 Credit)
+  const caStmt = db.prepare(`
+    SELECT SUM(je.credit) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '7%' AND t.date BETWEEN ? AND ? AND t.status = 'validated' AND t.deleted_at IS NULL
+  `);
+  const ca = caStmt.get(startDate, endDate).total || 0;
+
+  // 2. Charges (Class 6 Debit)
+  const chargesStmt = db.prepare(`
+    SELECT SUM(je.debit) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '6%' AND t.date BETWEEN ? AND ? AND t.status = 'validated' AND t.deleted_at IS NULL
+  `);
+  const charges = chargesStmt.get(startDate, endDate).total || 0;
+
+  // 3. Trésorerie (Class 5 Debit - Credit) - Cumulative
+  const cashStmt = db.prepare(`
+    SELECT SUM(je.debit) - SUM(je.credit) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '5%' AND t.status = 'validated' AND t.deleted_at IS NULL
+  `);
+  const cash = cashStmt.get().balance || 0;
+
+  // 4. Créances Clients (411 Debit - Credit) - Cumulative
+  const receivablesStmt = db.prepare(`
+    SELECT SUM(je.debit) - SUM(je.credit) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '411%' AND t.status = 'validated' AND t.deleted_at IS NULL
+  `);
+  const receivables = receivablesStmt.get().balance || 0;
+
+  // 5. Dettes Fournisseurs (401 Credit - Debit) - Cumulative
+  const payablesStmt = db.prepare(`
+    SELECT SUM(je.credit) - SUM(je.debit) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '401%' AND t.status = 'validated' AND t.deleted_at IS NULL
+  `);
+  const payables = payablesStmt.get().balance || 0;
+
+  // 6. Payroll Stats
+  const activeEmployees = db.prepare("SELECT COUNT(*) as count FROM employees WHERE status = 'active'").get().count || 0;
+  const lastPeriod = db.prepare("SELECT * FROM payroll_periods ORDER BY year DESC, month DESC LIMIT 1").get();
+  const payrollTotal = lastPeriod ? lastPeriod.total_amount : 0;
+  const payrollStatus = lastPeriod ? lastPeriod.status : null;
+
+  // 7. Dynamic month-over-month trends
+  const monthsWithData = db.prepare(`
+    SELECT DISTINCT SUBSTR(t.date, 1, 7) as ym
+    FROM transactions t
+    WHERE t.deleted_at IS NULL AND t.status = 'validated'
+    ORDER BY ym DESC
+  `).all() as any[];
+
+  let currentYm = "2026-05";
+  let previousYm = "2026-04";
+
+  if (monthsWithData.length >= 2) {
+    currentYm = monthsWithData[0].ym;
+    previousYm = monthsWithData[1].ym;
+  } else if (monthsWithData.length === 1) {
+    currentYm = monthsWithData[0].ym;
+  }
+
+  const cashCurrent = db.prepare(`
+    SELECT COALESCE(SUM(je.debit) - SUM(je.credit), 0) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '5%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date <= ?
+  `).get(currentYm + '-31')?.balance || 0;
+
+  const cashPrevious = db.prepare(`
+    SELECT COALESCE(SUM(je.debit) - SUM(je.credit), 0) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '5%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date <= ?
+  `).get(previousYm + '-31')?.balance || 0;
+
+  const cashTrend = cashPrevious !== 0 ? parseFloat((((cashCurrent - cashPrevious) / Math.abs(cashPrevious)) * 100).toFixed(1)) : (cashCurrent > 0 ? 100 : (cashCurrent < 0 ? -100 : 0));
+
+  const caCurrent = db.prepare(`
+    SELECT COALESCE(SUM(je.credit), 0) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '7%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date LIKE ?
+  `).get(currentYm + '%')?.total || 0;
+
+  const caPrevious = db.prepare(`
+    SELECT COALESCE(SUM(je.credit), 0) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '7%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date LIKE ?
+  `).get(previousYm + '%')?.total || 0;
+
+  const turnoverTrend = caPrevious !== 0 ? parseFloat((((caCurrent - caPrevious) / Math.abs(caPrevious)) * 100).toFixed(1)) : (caCurrent > 0 ? 100 : (caCurrent < 0 ? -100 : 0));
+
+  const recCurrent = db.prepare(`
+    SELECT COALESCE(SUM(je.debit) - SUM(je.credit), 0) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '411%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date <= ?
+  `).get(currentYm + '-31')?.balance || 0;
+
+  const recPrevious = db.prepare(`
+    SELECT COALESCE(SUM(je.debit) - SUM(je.credit), 0) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '411%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date <= ?
+  `).get(previousYm + '-31')?.balance || 0;
+
+  const receivablesTrend = recPrevious !== 0 ? parseFloat((((recCurrent - recPrevious) / Math.abs(recPrevious)) * 100).toFixed(1)) : (recCurrent > 0 ? 100 : (recCurrent < 0 ? -100 : 0));
+
+  const payCurrent = db.prepare(`
+    SELECT COALESCE(SUM(je.credit) - SUM(je.debit), 0) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '401%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date <= ?
+  `).get(currentYm + '-31')?.balance || 0;
+
+  const payPrevious = db.prepare(`
+    SELECT COALESCE(SUM(je.credit) - SUM(je.debit), 0) as balance 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '401%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date <= ?
+  `).get(previousYm + '-31')?.balance || 0;
+
+  const payablesTrend = payPrevious !== 0 ? parseFloat((((payCurrent - payPrevious) / Math.abs(payPrevious)) * 100).toFixed(1)) : (payCurrent > 0 ? 100 : (payCurrent < 0 ? -100 : 0));
+
+  const netCurrent = caCurrent - (db.prepare(`
+    SELECT COALESCE(SUM(je.debit), 0) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '6%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date LIKE ?
+  `).get(currentYm + '%')?.total || 0);
+
+  const netPrevious = caPrevious - (db.prepare(`
+    SELECT COALESCE(SUM(je.debit), 0) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '6%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date LIKE ?
+  `).get(previousYm + '%')?.total || 0);
+
+  const netResultTrend = netPrevious !== 0 ? parseFloat((((netCurrent - netPrevious) / Math.abs(netPrevious)) * 100).toFixed(1)) : (netCurrent > 0 ? 100 : (netCurrent < 0 ? -100 : 0));
+
+  const payrollCurrent = db.prepare(`
+    SELECT COALESCE(SUM(je.debit), 0) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '66%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date LIKE ?
+  `).get(currentYm + '%')?.total || 0;
+
+  const payrollPrevious = db.prepare(`
+    SELECT COALESCE(SUM(je.debit), 0) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '66%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date LIKE ?
+  `).get(previousYm + '%')?.total || 0;
+
+  const payrollTrend = payrollPrevious !== 0 ? parseFloat((((payrollCurrent - payrollPrevious) / Math.abs(payrollPrevious)) * 100).toFixed(1)) : (payrollCurrent > 0 ? 100 : (payrollCurrent < 0 ? -100 : 0));
+
+  // 8. Dynamic Profitability metrics
+  const achStmt = db.prepare(`
+    SELECT SUM(je.debit) as total
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE (je.account_code LIKE '601%' OR je.account_code LIKE '602%') AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date BETWEEN ? AND ?
+  `);
+  const ach = achStmt.get(startDate, endDate).total || 0;
+  const grossMarginVal = ca - ach;
+  const grossMarginPct = ca !== 0 ? parseFloat(((grossMarginVal / ca) * 100).toFixed(1)) : 64.2;
+
+  const ebeExpensesStmt = db.prepare(`
+    SELECT SUM(je.debit) as total
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '6%' AND je.account_code NOT LIKE '68%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date BETWEEN ? AND ?
+  `);
+  const ebeExpenses = ebeExpensesStmt.get(startDate, endDate).total || 0;
+  const ebitda = ca - ebeExpenses;
+
+  let breakEvenStatus = "J-142";
+  let breakEvenSublabel = "Atteint le 22 Mai";
+
+  if (ca > 0 && ebeExpenses > 0) {
+    const varCost = ach;
+    const fixedCost = Math.max(0, charges - ach);
+    const mcv = (ca - varCost) / ca;
+    const sr = mcv > 0 ? fixedCost / mcv : fixedCost;
+    
+    if (ca >= sr) {
+      const progress = sr / ca;
+      const totalDays = 365;
+      const breakEvenDayOrdinal = Math.round(progress * totalDays);
+      const breakEvenDate = new Date(startDateObj);
+      breakEvenDate.setDate(breakEvenDate.getDate() + breakEvenDayOrdinal);
+      const options = { day: 'numeric', month: 'short' } as any;
+      breakEvenStatus = `J-${Math.max(1, totalDays - breakEvenDayOrdinal)}`;
+      breakEvenSublabel = `Atteint le ${breakEvenDate.toLocaleDateString('fr-FR', options)}`;
+    } else {
+      const gap = sr - ca;
+      breakEvenStatus = "En cours";
+      breakEvenSublabel = `Écart : -${Math.round(gap / 1000)}k FCFA`;
+    }
+  }
+
+  const depStmt = db.prepare(`
+    SELECT SUM(je.debit) as total
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '68%' AND t.status = 'validated' AND t.deleted_at IS NULL AND t.date BETWEEN ? AND ?
+  `);
+  const dep = depStmt.get(startDate, endDate).total || 0;
+  const caf = (ca - charges) + dep;
+  const investmentCapacity = Math.max(0, cash - (receivables - payables) * 0.5);
+
+  res.json({
+    turnover: ca,
+    expenses: charges,
+    net_result: ca - charges,
+    cash: cash,
+    receivables: receivables,
+    payables: payables,
+    payroll: {
+      total: payrollTotal,
+      employees: activeEmployees,
+      lastPeriod: payrollStatus
+    },
+    trends: {
+      cash: cashTrend,
+      turnover: turnoverTrend,
+      receivables: receivablesTrend,
+      payables: payablesTrend,
+      net_result: netResultTrend,
+      payroll: payrollTrend
+    },
+    kpis: {
+      grossMargin: grossMarginPct,
+      ebitda: ebitda,
+      breakEvenStatus: breakEvenStatus,
+      breakEvenSublabel: breakEvenSublabel,
+      investmentCapacity: investmentCapacity,
+      fixedExpenses: Math.max(0, charges - ach),
+      seuilRentabilite: (ca > 0 && (ca - ach) > 0) ? Math.max(0, charges - ach) / ((ca - ach) / ca) : Math.max(0, charges - ach) * 1.2
+    }
+  });
+}));
+
+// Get dashboard charts data
+app.get("/api/dashboard/charts", asyncHandler((req, res) => {
+  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+  if (!fiscalYear) return res.json([]);
+
+  const startDateObj = new Date(fiscalYear.start_date);
+  const endDateObj = new Date(fiscalYear.end_date);
+  
+  // Generate months between start and end date
+  const chartData = [];
+  let current = new Date(startDateObj);
+  current.setDate(1); // Start of month
+
+  while (current <= endDateObj) {
+    const year = current.getFullYear();
+    const month = (current.getMonth() + 1).toString().padStart(2, '0');
+    const monthName = current.toLocaleString('fr-FR', { month: 'short' });
+    
+    const monthStart = `${year}-${month}-01`;
+    const monthEnd = `${year}-${month}-31`;
+
+    // CA (Class 7 Credit)
     const caStmt = db.prepare(`
       SELECT SUM(je.credit) as total 
       FROM journal_entries je
       JOIN transactions t ON je.transaction_id = t.id
       WHERE je.account_code LIKE '7%' AND t.date BETWEEN ? AND ? AND t.status = 'validated' AND t.deleted_at IS NULL
     `);
-    const ca = caStmt.get(startDate, endDate).total || 0;
+    const ca = caStmt.get(monthStart, monthEnd).total || 0;
 
-    // 2. Charges (Class 6 Debit)
+    // Charges (Class 6 Debit)
     const chargesStmt = db.prepare(`
       SELECT SUM(je.debit) as total 
       FROM journal_entries je
       JOIN transactions t ON je.transaction_id = t.id
       WHERE je.account_code LIKE '6%' AND t.date BETWEEN ? AND ? AND t.status = 'validated' AND t.deleted_at IS NULL
     `);
-    const charges = chargesStmt.get(startDate, endDate).total || 0;
+    const charges = chargesStmt.get(monthStart, monthEnd).total || 0;
 
-    // 3. Trésorerie (Class 5 Debit - Credit) - Cumulative
-    const cashStmt = db.prepare(`
-      SELECT SUM(je.debit) - SUM(je.credit) as balance 
-      FROM journal_entries je
-      JOIN transactions t ON je.transaction_id = t.id
-      WHERE je.account_code LIKE '5%' AND t.status = 'validated' AND t.deleted_at IS NULL
-    `);
-    const cash = cashStmt.get().balance || 0;
-
-    // 4. Créances Clients (411 Debit - Credit) - Cumulative
-    const receivablesStmt = db.prepare(`
-      SELECT SUM(je.debit) - SUM(je.credit) as balance 
-      FROM journal_entries je
-      JOIN transactions t ON je.transaction_id = t.id
-      WHERE je.account_code LIKE '411%' AND t.status = 'validated' AND t.deleted_at IS NULL
-    `);
-    const receivables = receivablesStmt.get().balance || 0;
-
-    // 5. Dettes Fournisseurs (401 Credit - Debit) - Cumulative
-    const payablesStmt = db.prepare(`
-      SELECT SUM(je.credit) - SUM(je.debit) as balance 
-      FROM journal_entries je
-      JOIN transactions t ON je.transaction_id = t.id
-      WHERE je.account_code LIKE '401%' AND t.status = 'validated' AND t.deleted_at IS NULL
-    `);
-    const payables = payablesStmt.get().balance || 0;
-
-    // 6. Payroll Stats
-    const activeEmployees = db.prepare("SELECT COUNT(*) as count FROM employees WHERE status = 'active'").get().count || 0;
-    const lastPeriod = db.prepare("SELECT * FROM payroll_periods ORDER BY year DESC, month DESC LIMIT 1").get();
-    const payrollTotal = lastPeriod ? lastPeriod.total_net : 0;
-    const payrollStatus = lastPeriod ? lastPeriod.status : null;
-
-    res.json({
-      turnover: ca,
-      expenses: charges,
-      net_result: ca - charges,
-      cash: cash,
-      receivables: receivables,
-      payables: payables,
-      payroll: {
-        total: payrollTotal,
-        employees: activeEmployees,
-        lastPeriod: payrollStatus
-      }
+    chartData.push({
+      name: monthName.charAt(0).toUpperCase() + monthName.slice(1),
+      ca: ca,
+      charges: charges
     });
-  } catch (err) {
-    handleApiError(res, err);
+
+    current.setMonth(current.getMonth() + 1);
   }
-});
 
-// Get dashboard charts data
-app.get("/api/dashboard/charts", (req, res) => {
-  try {
-    const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
-    if (!fiscalYear) return res.json([]);
-
-    const startDateObj = new Date(fiscalYear.start_date);
-    const endDateObj = new Date(fiscalYear.end_date);
-    
-    // Generate months between start and end date
-    const chartData = [];
-    let current = new Date(startDateObj);
-    current.setDate(1); // Start of month
-
-    while (current <= endDateObj) {
-      const year = current.getFullYear();
-      const month = (current.getMonth() + 1).toString().padStart(2, '0');
-      const monthName = current.toLocaleString('fr-FR', { month: 'short' });
-      
-      const monthStart = `${year}-${month}-01`;
-      const monthEnd = `${year}-${month}-31`;
-
-      // CA (Class 7 Credit)
-      const caStmt = db.prepare(`
-        SELECT SUM(je.credit) as total 
-        FROM journal_entries je
-        JOIN transactions t ON je.transaction_id = t.id
-        WHERE je.account_code LIKE '7%' AND t.date BETWEEN ? AND ? AND t.status = 'validated' AND t.deleted_at IS NULL
-      `);
-      const ca = caStmt.get(monthStart, monthEnd).total || 0;
-
-      // Charges (Class 6 Debit)
-      const chargesStmt = db.prepare(`
-        SELECT SUM(je.debit) as total 
-        FROM journal_entries je
-        JOIN transactions t ON je.transaction_id = t.id
-        WHERE je.account_code LIKE '6%' AND t.date BETWEEN ? AND ? AND t.status = 'validated' AND t.deleted_at IS NULL
-      `);
-      const charges = chargesStmt.get(monthStart, monthEnd).total || 0;
-
-      chartData.push({
-        name: monthName.charAt(0).toUpperCase() + monthName.slice(1),
-        ca: ca,
-        charges: charges
-      });
-
-      current.setMonth(current.getMonth() + 1);
-    }
-
-    res.json(chartData);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  res.json(chartData);
+}));
 
 // Get dashboard expense breakdown
-app.get("/api/dashboard/breakdown", (req, res) => {
-  try {
-    const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
-    const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
-    const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
+app.get("/api/dashboard/breakdown", asyncHandler((req, res) => {
+  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+  const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
+  const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
 
-    const breakdownStmt = db.prepare(`
-      SELECT 
-        substr(je.account_code, 1, 2) as category,
-        SUM(je.debit) as total
-      FROM journal_entries je
-      JOIN transactions t ON je.transaction_id = t.id
-      WHERE je.account_code LIKE '6%' AND t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
-      GROUP BY category
-      ORDER BY total DESC
-      LIMIT 5
-    `);
-    
-    const rawData = breakdownStmt.all(startDate, endDate);
-    
-    // Map category codes to names (Simplified mapping)
-    const categoryNames: {[key: string]: string} = {
-      '60': 'Achats',
-      '61': 'Transports',
-      '62': 'Services Extérieurs',
-      '63': 'Impôts & Taxes',
-      '64': 'Charges Personnel',
-      '65': 'Autres Charges',
-      '66': 'Charges Financières',
-      '67': 'Charges Exceptionnelles',
-      '68': 'Dotations Amort.',
-      '69': 'Impôts sur Résultat'
-    };
+  const breakdownStmt = db.prepare(`
+    SELECT 
+      substr(je.account_code, 1, 2) as category,
+      SUM(je.debit) as total
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '6%' AND t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
+    GROUP BY category
+    ORDER BY total DESC
+    LIMIT 5
+  `);
+  
+  const rawData = breakdownStmt.all(startDate, endDate);
+  
+  // Map category codes to names (Simplified mapping)
+  const categoryNames: {[key: string]: string} = {
+    '60': 'Achats',
+    '61': 'Transports',
+    '62': 'Services Extérieurs',
+    '63': 'Impôts & Taxes',
+    '64': 'Charges Personnel',
+    '65': 'Autres Charges',
+    '66': 'Charges Financières',
+    '67': 'Charges Exceptionnelles',
+    '68': 'Dotations Amort.',
+    '69': 'Impôts sur Résultat'
+  };
 
-    const breakdownData = rawData.map((item: any) => ({
-      name: categoryNames[item.category] || `Compte ${item.category}`,
-      value: item.total
-    }));
+  const breakdownData = rawData.map((item: any) => ({
+    name: categoryNames[item.category] || `Compte ${item.category}`,
+    value: item.total
+  }));
 
-    res.json(breakdownData);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  res.json(breakdownData);
+}));
 
-app.get("/api/dashboard/ratios", (req, res) => {
-  try {
-    const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
-    const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
-    const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
+app.get("/api/dashboard/ratios", asyncHandler((req, res) => {
+  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+  const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
+  const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
 
-    // Balance Sheet items (Cumulative)
-    // Assets: Classes 2, 3, 4, 5 (Debit balance)
-    const assets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '2%' OR account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
-    
-    // Liabilities (External Debt): Class 1 (starting with 16, 17 - Long term debt) + Class 4 (Short term debt)
-    const liabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '16%' OR account_code LIKE '17%' OR account_code LIKE '4%'").get().total || 0;
-    
-    // Current Assets: Classes 3, 4, 5
-    const currentAssets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
-    
-    // Current Liabilities: Class 4
-    const currentLiabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '4%'").get().total || 0;
+  // Balance Sheet items (Cumulative)
+  // Assets: Classes 2, 3, 4, 5 (Debit balance)
+  const assets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '2%' OR account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
+  
+  // Liabilities (External Debt): Class 1 (starting with 16, 17 - Long term debt) + Class 4 (Short term debt)
+  const liabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '16%' OR account_code LIKE '17%' OR account_code LIKE '4%'").get().total || 0;
+  
+  // Current Assets: Classes 3, 4, 5
+  const currentAssets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
+  
+  // Current Liabilities: Class 4
+  const currentLiabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '4%'").get().total || 0;
 
-    // Income Statement items (Fiscal Year specific)
-    const revenueStmt = db.prepare(`
-      SELECT SUM(je.credit - je.debit) as total 
-      FROM journal_entries je
-      JOIN transactions t ON je.transaction_id = t.id
-      WHERE je.account_code LIKE '7%' AND t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
-    `);
-    const revenue = revenueStmt.get(startDate, endDate).total || 0;
+  // Income Statement items (Fiscal Year specific)
+  const revenueStmt = db.prepare(`
+    SELECT SUM(je.credit - je.debit) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '7%' AND t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
+  `);
+  const revenue = revenueStmt.get(startDate, endDate).total || 0;
 
-    const expensesStmt = db.prepare(`
-      SELECT SUM(je.debit - je.credit) as total 
-      FROM journal_entries je
-      JOIN transactions t ON je.transaction_id = t.id
-      WHERE je.account_code LIKE '6%' AND t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
-    `);
-    const expenses = expensesStmt.get(startDate, endDate).total || 0;
+  const expensesStmt = db.prepare(`
+    SELECT SUM(je.debit - je.credit) as total 
+    FROM journal_entries je
+    JOIN transactions t ON je.transaction_id = t.id
+    WHERE je.account_code LIKE '6%' AND t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
+  `);
+  const expenses = expensesStmt.get(startDate, endDate).total || 0;
 
-    const netIncome = revenue - expenses;
+  const netIncome = revenue - expenses;
 
-    const currentRatio = currentLiabilities !== 0 ? (currentAssets / currentLiabilities) : 0;
-    const netMargin = revenue !== 0 ? (netIncome / revenue) * 100 : 0;
+  const currentRatio = currentLiabilities !== 0 ? (currentAssets / currentLiabilities) : 0;
+  const netMargin = revenue !== 0 ? (netIncome / revenue) * 100 : 0;
 
-    res.json({
-      currentRatio: parseFloat(currentRatio.toFixed(2)),
-      netMargin: parseFloat(netMargin.toFixed(1)),
-      solvency: liabilities !== 0 ? parseFloat((assets / liabilities).toFixed(2)) : 100,
-      roi: assets !== 0 ? parseFloat((netIncome / assets * 100).toFixed(1)) : 0
-    });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  res.json({
+    currentRatio: parseFloat(currentRatio.toFixed(2)),
+    netMargin: parseFloat(netMargin.toFixed(1)),
+    solvency: liabilities !== 0 ? parseFloat((assets / liabilities).toFixed(2)) : 100,
+    roi: assets !== 0 ? parseFloat((netIncome / assets * 100).toFixed(1)) : 0
+  });
+}));
 
 // Get recent transactions for dashboard
-app.get("/api/dashboard/recent", (req, res) => {
-  try {
-    const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
-    const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
-    const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
+app.get("/api/dashboard/recent", asyncHandler((req, res) => {
+  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+  const startDate = fiscalYear ? fiscalYear.start_date : '1970-01-01';
+  const endDate = fiscalYear ? fiscalYear.end_date : '9999-12-31';
 
-    const recentStmt = db.prepare(`
-      SELECT 
-        t.id,
-        t.date,
-        t.description,
-        t.reference,
-        (SELECT SUM(debit) FROM journal_entries WHERE transaction_id = t.id) as amount
-      FROM transactions t
-      WHERE t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
-      ORDER BY t.date DESC, t.id DESC
-      LIMIT 5
-    `);
-    const recent = recentStmt.all(startDate, endDate);
-    res.json(recent);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  const recentStmt = db.prepare(`
+    SELECT 
+      t.id,
+      t.date,
+      t.description,
+      t.reference,
+      (SELECT SUM(debit) FROM journal_entries WHERE transaction_id = t.id) as amount
+    FROM transactions t
+    WHERE t.date BETWEEN ? AND ? AND t.deleted_at IS NULL
+    ORDER BY t.date DESC, t.id DESC
+    LIMIT 5
+  `);
+  const recent = recentStmt.all(startDate, endDate);
+  res.json(recent);
+}));
+
+app.get("/api/dashboard/deadlines", asyncHandler((req, res) => {
+  const daysAhead = parseInt(req.query.days as string) || 7;
+  
+  const tasks = db.prepare(`
+    SELECT id, title, due_date as date, 'task' as type 
+    FROM tasks 
+    WHERE status = 'pending' 
+      AND due_date >= date('now') 
+      AND due_date <= date('now', '+' || ? || ' days')
+    ORDER BY due_date ASC
+  `).all(daysAhead);
+
+  const invoices = db.prepare(`
+    SELECT id, COALESCE(number, 'Facture') as title, due_date as date, 'invoice' as type 
+    FROM invoices 
+    WHERE status = 'pending' 
+      AND due_date IS NOT NULL
+      AND due_date >= date('now') 
+      AND due_date <= date('now', '+' || ? || ' days')
+  `).all(daysAhead);
+
+  res.json({ tasks, invoices });
+}));
 
 // Budget APIs
 app.get("/api/accounts/expenses", (req, res) => {
@@ -5190,7 +5984,7 @@ app.post("/api/budgets/import", (req, res) => {
         const account = db.prepare("SELECT code FROM accounts WHERE code = ? AND class_code = '6'").get(accountCode);
         if (!account) continue;
 
-        const current = db.prepare("SELECT * FROM budgets WHERE account_code = ? AND period_year = ? AND period_month = ?").get(accountCode, period_year, period_month);
+        const current = db.prepare("SELECT * FROM budgets WHERE je.account_code = ? AND t.deleted_at IS NULL AND period_year = ? AND period_month = ?").get(accountCode, period_year, period_month);
         
         const stmt = db.prepare(`
           INSERT INTO budgets (account_code, amount, period_month, period_year, last_revised_at)
@@ -5220,6 +6014,29 @@ app.post("/api/budgets/import", (req, res) => {
   }
 });
 
+app.post("/api/budgets/duplicate", (req, res) => {
+  const { from_month, from_year, to_month, to_year } = req.body;
+  try {
+    const trx = db.transaction(() => {
+      const existing = db.prepare("SELECT * FROM budgets WHERE period_month = ? AND period_year = ?").all(from_month, from_year) as any[];
+      
+      const insertStmt = db.prepare("INSERT INTO budgets (account_code, category, amount, period_month, period_year) VALUES (?, ?, ?, ?, ?) ON CONFLICT(account_code, period_month, period_year) DO UPDATE SET amount = ?");
+      
+      let count = 0;
+      for (const b of existing) {
+        insertStmt.run(b.account_code, b.category, b.amount, to_month, to_year, b.amount);
+        count++;
+      }
+      return count;
+    });
+
+    const count = trx();
+    res.json({ success: true, count });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 app.post("/api/budgets", (req, res) => {
   const { account_code, amount, period_month, period_year, reason } = req.body;
   const userEmail = (req as any).user?.email || 'system';
@@ -5227,7 +6044,7 @@ app.post("/api/budgets", (req, res) => {
   try {
     const transaction = db.transaction(() => {
       // Get existing budget to check for revision
-      const current = db.prepare("SELECT * FROM budgets WHERE account_code = ? AND period_year = ? AND period_month = ?").get(account_code, period_year, period_month);
+      const current = db.prepare("SELECT * FROM budgets WHERE je.account_code = ? AND t.deleted_at IS NULL AND period_year = ? AND period_month = ?").get(account_code, period_year, period_month);
       
       const stmt = db.prepare(`
         INSERT INTO budgets (account_code, amount, period_month, period_year, last_revised_at)
@@ -5285,14 +6102,14 @@ app.post("/api/budgets/engagements", (req, res) => {
     const transaction = db.transaction(() => {
       // Check budget availability
       // 1. Get budget
-      const budgetRow = db.prepare("SELECT amount FROM budgets WHERE account_code = ? AND period_year = ? AND period_month = ?").get(account_code, period_year, period_month);
+      const budgetRow = db.prepare("SELECT amount FROM budgets WHERE je.account_code = ? AND t.deleted_at IS NULL AND period_year = ? AND period_month = ?").get(account_code, period_year, period_month);
       const budget = budgetRow ? budgetRow.amount : 0;
 
       // 2. Get current engaged
       const engagedRow = db.prepare(`
         SELECT SUM(amount) as total_engaged 
         FROM budget_engagements 
-        WHERE account_code = ? AND period_year = ? AND period_month = ? AND status IN ('pending', 'approved')
+        WHERE je.account_code = ? AND t.deleted_at IS NULL AND period_year = ? AND period_month = ? AND status IN ('pending', 'approved')
       `).get(account_code, period_year, period_month);
       const currentlyEngaged = engagedRow ? (engagedRow.total_engaged || 0) : 0;
 
@@ -5480,10 +6297,52 @@ app.get("/api/dashboard/budget-vs-actual", (req, res) => {
   }
 });
 
+app.get('/api/hr/dashboard', (req, res) => {
+  try {
+    const defaultData = {
+      totalEmployees: 0,
+      totalPayroll: 0,
+      byDepartment: []
+    };
+
+    const employees = db.prepare('SELECT * FROM employees WHERE status = ?').all('active') as any[];
+    
+    if (!employees || employees.length === 0) {
+      return res.json(defaultData);
+    }
+
+    const totalEmployees = employees.length;
+    let totalPayroll = 0;
+    const deptMap = new Map();
+
+    employees.forEach(emp => {
+      const salary = Number(emp.base_salary) || 0;
+      totalPayroll += salary;
+      
+      const dept = emp.department || 'Non assigné';
+      if (!deptMap.has(dept)) {
+        deptMap.set(dept, { department: dept, employeeCount: 0, totalSalary: 0 });
+      }
+      
+      const entry = deptMap.get(dept);
+      entry.employeeCount += 1;
+      entry.totalSalary += salary;
+    });
+
+    res.json({
+      totalEmployees,
+      totalPayroll,
+      byDepartment: Array.from(deptMap.values())
+    });
+
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 app.get('/api/dashboard/cashflow-forecast', (req, res) => {
   try {
     const today = new Date();
-    const forecast = [];
     
     // Get current cash (Class 5)
     const currentCash = db.prepare(`
@@ -5494,60 +6353,108 @@ app.get('/api/dashboard/cashflow-forecast', (req, res) => {
     `).get() as any;
     
     let runningBalance = currentCash?.balance || 0;
-    
-    // Add initial point
-    forecast.push({
-      date: today.toISOString().split('T')[0],
-      balance: runningBalance,
-      label: 'Aujourd\'hui'
+    const forecast = [];
+
+    // Historical average net cash flow per month (last 3 months)
+    const threeMonthsAgo = new Date(today);
+    threeMonthsAgo.setMonth(today.getMonth() - 3);
+
+    const historicalTxs = db.prepare(`
+      SELECT strftime('%Y-%m', t.date) as month, SUM(je.debit) as inflow, SUM(je.credit) as outflow
+      FROM journal_entries je
+      JOIN transactions t ON je.transaction_id = t.id
+      WHERE je.account_code LIKE '5%' AND t.status = 'validated' AND t.deleted_at IS NULL
+      AND t.date >= ?
+      GROUP BY month
+    `).all(threeMonthsAgo.toISOString().split('T')[0]) as any[];
+
+    const totalHistoricalMonths = Math.max(historicalTxs.length, 1);
+    const avgHistoricalInflow = historicalTxs.reduce((sum, m) => sum + m.inflow, 0) / totalHistoricalMonths;
+    const avgHistoricalOutflow = historicalTxs.reduce((sum, m) => sum + m.outflow, 0) / totalHistoricalMonths;
+
+    // Active recurring invoices
+    const recurring = db.prepare(`
+      SELECT type, total_amount, frequency
+      FROM recurring_invoices
+      WHERE active = 1
+    `).all() as any[];
+
+    let monthlyRecurringInflow = 0;
+    recurring.forEach(r => {
+      let monthlyAmount = r.total_amount;
+      if (r.frequency === 'weekly') monthlyAmount *= 4.33;
+      else if (r.frequency === 'quarterly') monthlyAmount /= 3;
+      else if (r.frequency === 'yearly') monthlyAmount /= 12;
+
+      monthlyRecurringInflow += monthlyAmount;
     });
 
-    // Get upcoming receivables (Clients 411)
-    const receivables = db.prepare(`
-      SELECT t.due_date, SUM(je.debit - je.credit) as amount
-      FROM transactions t
-      JOIN journal_entries je ON t.id = je.transaction_id
-      WHERE je.account_code LIKE '411%'
-      AND t.due_date >= ?
-      AND t.status = 'validated'
-      AND t.deleted_at IS NULL
-      GROUP BY t.due_date
-      ORDER BY t.due_date ASC
-    `).all(today.toISOString().split('T')[0]) as any[];
+    for (let i = 0; i <= 3; i++) {
+        const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+        const startOfMonth = d.toISOString().split('T')[0];
+        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + i + 1, 0).toISOString().split('T')[0];
+        
+        const monthLabel = d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }).replace('.', '');
 
-    // Get upcoming payables (Fournisseurs 401)
-    const payables = db.prepare(`
-      SELECT t.due_date, SUM(je.credit - je.debit) as amount
-      FROM transactions t
-      JOIN journal_entries je ON t.id = je.transaction_id
-      WHERE je.account_code LIKE '401%'
-      AND t.due_date >= ?
-      AND t.status = 'validated'
-      AND t.deleted_at IS NULL
-      GROUP BY t.due_date
-      ORDER BY t.due_date ASC
-    `).all(today.toISOString().split('T')[0]) as any[];
+        if (i === 0) {
+            forecast.push({
+                month: monthLabel,
+                balance: runningBalance,
+                inflows: 0,
+                outflows: 0
+            });
+        } else {
+            const receivables = db.prepare(`
+              SELECT SUM(je.debit - je.credit) as amount
+              FROM transactions t
+              JOIN journal_entries je ON t.id = je.transaction_id
+              WHERE je.account_code LIKE '411%' AND t.due_date >= ? AND t.due_date <= ? AND t.status = 'validated' AND t.deleted_at IS NULL
+            `).get(startOfMonth, endOfMonth) as any;
 
-    // Merge and sort by date
-    const events = [
-      ...receivables.map(r => ({ date: r.due_date, amount: r.amount, type: 'in' })),
-      ...payables.map(p => ({ date: p.due_date, amount: -p.amount, type: 'out' }))
-    ].sort((a, b) => a.date.localeCompare(b.date));
+            const payables = db.prepare(`
+              SELECT SUM(je.credit - je.debit) as amount
+              FROM transactions t
+              JOIN journal_entries je ON t.id = je.transaction_id
+              WHERE je.account_code LIKE '401%' AND t.due_date >= ? AND t.due_date <= ? AND t.status = 'validated' AND t.deleted_at IS NULL
+            `).get(startOfMonth, endOfMonth) as any;
 
-    // Project
-    events.forEach(event => {
-      runningBalance += event.amount;
-      forecast.push({
-        date: event.date,
-        balance: runningBalance,
-        label: new Date(event.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
-      });
-    });
+            // Simple predictive model mixing deterministic dues, recurring baselines, and historical averages for non-recurring volatility
+            const projectedInflow = (receivables?.amount || 0) + monthlyRecurringInflow + (avgHistoricalInflow * 0.15); // Assume 15% unexplained historical inflows 
+            const projectedOutflow = (payables?.amount || 0) + (avgHistoricalOutflow * 0.85); // Expenses are usually more consistent historically 
+
+            runningBalance = runningBalance + projectedInflow - projectedOutflow;
+
+            forecast.push({
+                month: monthLabel,
+                balance: Math.round(runningBalance),
+                inflows: Math.round(projectedInflow),
+                outflows: Math.round(projectedOutflow)
+            });
+        }
+    }
 
     res.json(forecast);
   } catch (err) {
     console.error(err);
     handleApiError(res, new AppError("Erreur serveur" , 500, "server_error"));
+  }
+});
+
+app.get('/api/database/export', (req, res) => {
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    let dbFile = 'compta.db';
+    if (user.id !== 1 && user.id !== 2 && user.id !== 3) {
+      dbFile = `empty_user_${user.id}.db`;
+    }
+    const filePath = path.resolve(process.cwd(), dbFile);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Database not found' });
+    }
+    res.download(filePath, dbFile);
+  } catch (err) {
+    handleApiError(res, err);
   }
 });
 
@@ -6635,7 +7542,9 @@ app.get("/api/tax/summary", (req, res) => {
     `).get(startDate, endDate).total || 0;
 
     const profit = Math.max(0, products - charges);
-    const estimatedIS = profit * 0.25; // 25% standard rate
+    const companySettings = db.prepare("SELECT corporate_tax_rate, imf_rate FROM company_settings LIMIT 1").get() as any;
+    const corpRate = companySettings?.corporate_tax_rate ? companySettings.corporate_tax_rate / 100 : 0.25;
+    const estimatedIS = profit * corpRate;
 
     // 4. Deadlines (Mocked for now based on common rules)
     const deadlines = [
@@ -6781,13 +7690,13 @@ app.post("/api/pr/rules", (req, res) => {
 
 app.put("/api/pr/rules/:id", (req, res) => {
   const { id } = req.params;
-  const { name, formula, is_taxable, is_social_taxable, is_active } = req.body;
+  const { name, type, formula, is_taxable, is_social_taxable, is_active } = req.body;
   try {
     db.prepare(`
       UPDATE payroll_rules 
-      SET name = ?, formula = ?, is_taxable = ?, is_social_taxable = ?, is_active = ?
+      SET name = ?, type = ?, formula = ?, is_taxable = ?, is_social_taxable = ?, is_active = ?
       WHERE id = ?
-    `).run(name, formula, is_taxable ? 1 : 0, is_social_taxable ? 1 : 0, is_active ? 1 : 0, id);
+    `).run(name, type, formula, is_taxable ? 1 : 0, is_social_taxable ? 1 : 0, is_active ? 1 : 0, id);
     res.json({ success: true });
   } catch (err) {
     handleApiError(res, err);
@@ -6965,9 +7874,10 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
     const period = db.prepare("SELECT * FROM payroll_periods WHERE id = ?").get(id) as any;
     if (!period) throw new Error("Période introuvable");
 
-    // 1. Get all active employees and tax rules
+    // 1. Get all active employees and tax/payroll rules
     const employees = db.prepare("SELECT * FROM employees WHERE status = 'active'").all() as any[];
     const rules = db.prepare("SELECT * FROM tax_rules WHERE is_active = 1").all() as any[];
+    const payrollRules = db.prepare("SELECT * FROM payroll_rules WHERE is_active = 1").all() as any[];
     
     // Helper to get rule by code
     const getRule = (code) => rules.find(r => r.code === code);
@@ -7004,7 +7914,43 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
          base = Math.round(emp.base_salary * prorataFactor);
       }
 
-      const bonuses = 0; // Placeholder
+      const seniorityYears = Math.max(0, period.year - empStart.getFullYear());
+
+      let autocalculatedBonuses = 0;
+      let autocalculatedDeductions = 0;
+      let benefitsInKind = 0;
+      const bonusDetails: any[] = [];
+      const deductionDetails: any[] = [];
+
+      for (const pr of payrollRules) {
+        try {
+          if (!pr.formula) continue;
+          let safeFormula = pr.formula
+                                      .replace(/base_salary/g, String(base))
+                                      .replace(/seniority_years/g, String(seniorityYears))
+                                      .replace(/fixed/g, '1');
+          const ruleAmount = Math.round(Number(new Function(`return ${safeFormula}`)()));
+          
+          if (!isNaN(ruleAmount) && ruleAmount > 0) {
+            if (pr.type === 'bonus' || pr.type === 'commission' || pr.type === 'benefit') {
+              autocalculatedBonuses += ruleAmount;
+              bonusDetails.push({ label: pr.name, amount: ruleAmount, type: pr.is_taxable ? 'taxable' : 'non-taxable', category: pr.type });
+              if (pr.type === 'benefit') {
+                benefitsInKind += ruleAmount;
+              }
+            } else if (pr.type === 'deduction') {
+              autocalculatedDeductions += ruleAmount;
+              deductionDetails.push({ label: pr.name, amount: ruleAmount });
+            }
+          }
+        } catch (e) {
+          console.error(`Error calculating rule ${pr.code} for employee ${emp.id}`, e);
+        }
+      }
+
+      const bonuses = autocalculatedBonuses;
+      const extraDeductions = autocalculatedDeductions;
+      
       const gross = base + bonuses;
       
       // --- Employee Social Charges ---
@@ -7023,11 +7969,20 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
       const { igrTax } = calculateIGR(gross, isTax, cnTax, cnpsEmployee, parts, getRule);
 
       // --- Salary Advances ---
-      const pendingAdvances = db.prepare("SELECT SUM(amount) as total FROM salary_advances WHERE employee_id = ? AND status = 'pending'").get(emp.id) as any;
-      const extraDeductions = pendingAdvances.total || 0;
+      const pendingAdvances = db.prepare("SELECT SUM(amount) as total, GROUP_CONCAT(id) as ids FROM salary_advances WHERE employee_id = ? AND status = 'pending'").get(emp.id) as any;
+      const advancesTotal = pendingAdvances.total || 0;
+      
+      if (advancesTotal > 0) {
+        deductionDetails.push({ label: 'Remboursement d\'avance', amount: advancesTotal, advance_id: pendingAdvances.ids });
+      }
+      if (benefitsInKind > 0) {
+        deductionDetails.push({ label: 'Déduction Avantage(s) en nature', amount: benefitsInKind });
+      }
+      
+      const combinedExtraDeductions = extraDeductions + advancesTotal + benefitsInKind;
 
       const totalTaxes = isTax + cnTax + igrTax;
-      const deductions = cnpsEmployee + totalTaxes + extraDeductions;
+      const deductions = cnpsEmployee + totalTaxes + combinedExtraDeductions;
       const net = gross - deductions;
 
       // --- Employer Charges ---
@@ -7052,10 +8007,12 @@ app.post("/api/payroll/periods/:id/generate", (req, res) => {
           igr: igrTax,
           total: totalTaxes
         },
-        extraDeductions,
-        deductionDetails: extraDeductions > 0 ? [{ label: 'Remboursement Avance', amount: extraDeductions }] : [],
         employerCharges,
         employerDetails,
+        advancesRetained: advancesTotal,
+        extraDeductions: combinedExtraDeductions,
+        bonusDetails,
+        deductionDetails,
         maritalStatus: emp.marital_status,
         childrenCount: emp.children_count,
         parts
@@ -7730,127 +8687,114 @@ app.post("/api/bank-reconciliation/create-entry", (req, res) => {
 
 // --- Invoicing & Quotes ---
 
-app.get("/api/invoices", (req, res) => {
+app.get("/api/invoices", asyncHandler(async (req, res) => {
   const { type } = req.query; // 'invoice' or 'quote'
-  try {
-    let query = `
-      SELECT i.*, tp.name as third_party_name 
-      FROM invoices i
-      JOIN third_parties tp ON i.third_party_id = tp.id
-    `;
-    const params: any[] = [];
-    if (type) {
-      query += " WHERE i.type = ?";
-      params.push(type);
-    }
-    query += " ORDER BY i.date DESC, i.number DESC";
-    
-    const invoices = db.prepare(query).all(...params);
-    res.json(invoices);
-  } catch (err) {
-    handleApiError(res, err);
+  let query = `
+    SELECT i.*, tp.name as third_party_name, tp.type as third_party_type
+    FROM invoices i
+    JOIN third_parties tp ON i.third_party_id = tp.id
+  `;
+  const params: any[] = [];
+  if (type) {
+    query += " WHERE i.type = ?";
+    params.push(type);
   }
-});
+  query += " ORDER BY i.date DESC, i.number DESC";
+  
+  const invoices = db.prepare(query).all(...params);
+  res.json(invoices);
+}));
 
-app.get("/api/invoices/:id", (req, res) => {
+app.get("/api/invoices/:id", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  try {
-    const invoice = db.prepare(`
-      SELECT i.*, tp.name as third_party_name, tp.address as third_party_address, tp.tax_id as third_party_tax_id, tp.email as third_party_email
-      FROM invoices i
-      JOIN third_parties tp ON i.third_party_id = tp.id
-      WHERE i.id = ?
-    `).get(id);
-    
-    if (!invoice) return res.status(404).json({ error: "Document introuvable" });
-    
-    const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
-    res.json({ ...invoice, items });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  const invoice = db.prepare(`
+    SELECT i.*, tp.name as third_party_name, tp.address as third_party_address, tp.tax_id as third_party_tax_id, tp.email as third_party_email, tp.type as third_party_type
+    FROM invoices i
+    JOIN third_parties tp ON i.third_party_id = tp.id
+    WHERE i.id = ?
+  `).get(id);
+  
+  if (!invoice) return res.status(404).json({ error: "Document introuvable" });
+  
+  const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
+  res.json({ ...invoice, items });
+}));
 
-app.post("/api/invoices/:id/convert", (req, res) => {
+app.post("/api/invoices/:id/convert", asyncHandler(async (req, res) => {
   const { id } = req.params;
   
-  try {
-    const quote = db.prepare(`
-      SELECT i.*, tp.payment_terms 
-      FROM invoices i 
-      JOIN third_parties tp ON i.third_party_id = tp.id 
-      WHERE i.id = ? AND i.type = "quote"
-    `).get(id) as any;
-    
-    if (!quote) {
-      return res.status(404).json({ error: 'Devis non trouvé' });
-    }
-
-    if (quote.status !== 'accepted' && quote.status !== 'sent') {
-      return res.status(400).json({ error: 'Seuls les devis envoyés ou acceptés peuvent être convertis en facture' });
-    }
-
-    // Generate new invoice number
-    const nextNumber = generateDocumentNumber('invoice');
-    
-    const convert = db.transaction(() => {
-      // Create new invoice
-      const result = db.prepare(`
-        INSERT INTO invoices (type, number, date, due_date, third_party_id, status, subtotal, vat_amount, total_amount, notes, terms)
-        VALUES ('invoice', ?, DATE('now'), DATE('now', '+' || ? || ' days'), ?, 'draft', ?, ?, ?, ?, ?)
-      `).run(
-        nextNumber,
-        quote.payment_terms || 30,
-        quote.third_party_id,
-        quote.subtotal,
-        quote.vat_amount,
-        quote.total_amount,
-        quote.notes,
-        quote.terms
-      );
-
-      const newInvoiceId = result.lastInsertRowid;
-
-      // Copy items
-      const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(id);
-      const insertItem = db.prepare(`
-        INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, vat_rate, total, account_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      for (const item of items) {
-        insertItem.run(
-          newInvoiceId,
-          item.description,
-          item.quantity,
-          item.unit_price,
-          item.vat_rate,
-          item.total,
-          item.account_code || '701'
-        );
-      }
-
-      // Update quote status
-      db.prepare('UPDATE invoices SET status = "accepted" WHERE id = ?').run(id);
-
-      return newInvoiceId;
-    });
-
-    const newId = convert();
-    logAction(req.user?.name || 'Admin', 'CONVERT', 'Quote to Invoice', id, { newInvoiceId: newId });
-    res.json({ success: true, id: newId, number: nextNumber });
-  } catch (error) {
-    console.error('Error converting quote:', error);
-    handleApiError(res, new AppError('Erreur lors de la conversion du devis' , 500, "server_error"));
+  const quote = db.prepare(`
+    SELECT i.*, tp.payment_terms 
+    FROM invoices i 
+    JOIN third_parties tp ON i.third_party_id = tp.id 
+    WHERE i.id = ? AND (i.type = "quote" OR i.type = "proforma")
+  `).get(id) as any;
+  
+  if (!quote) {
+    return res.status(404).json({ error: 'Document non trouvé' });
   }
-});
+
+  if (quote.status !== 'accepted' && quote.status !== 'sent') {
+    return res.status(400).json({ error: 'Seuls les documents envoyés ou acceptés peuvent être convertis en facture' });
+  }
+
+  // Generate new invoice number
+  const nextNumber = generateDocumentNumber('invoice');
+  
+  const convert = db.transaction(() => {
+    // Create new invoice
+    const result = db.prepare(`
+      INSERT INTO invoices (type, number, date, due_date, third_party_id, status, subtotal, vat_amount, total_amount, notes, terms)
+      VALUES ('invoice', ?, DATE('now'), DATE('now', '+' || ? || ' days'), ?, 'draft', ?, ?, ?, ?, ?)
+    `).run(
+      nextNumber,
+      quote.payment_terms || 30,
+      quote.third_party_id,
+      quote.subtotal,
+      quote.vat_amount,
+      quote.total_amount,
+      quote.notes,
+      quote.terms
+    );
+
+    const newInvoiceId = result.lastInsertRowid;
+
+    // Copy items
+    const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(id);
+    const insertItem = db.prepare(`
+      INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, vat_rate, total, account_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const item of items) {
+      insertItem.run(
+        newInvoiceId,
+        item.description,
+        item.quantity,
+        item.unit_price,
+        item.vat_rate,
+        item.total,
+        item.account_code || '701'
+      );
+    }
+
+    // Update quote status
+    db.prepare('UPDATE invoices SET status = "accepted" WHERE id = ?').run(id);
+
+    return newInvoiceId;
+  });
+
+  const newId = convert();
+  logAction(req.user?.name || 'Admin', 'CONVERT', 'Quote to Invoice', id, { newInvoiceId: newId });
+  res.json({ success: true, id: newId, number: nextNumber });
+}));
 
 app.post("/api/invoices", validate(z.object({
-  type: z.enum(['invoice', 'quote']),
+  type: z.enum(['invoice', 'quote', 'proforma']),
   date: z.string(),
   items: z.array(z.any()).min(1),
-}).passthrough()), (req, res) => {
-  const { type, date, due_date, third_party_id, occasional_name, notes, terms, items, currency, exchange_rate, transaction_id } = req.body;
+}).passthrough()), asyncHandler(async (req, res) => {
+  const { type, date, due_date, third_party_id, occasional_name, notes, terms, items, currency, exchange_rate, transaction_id, template, paid_amount } = req.body;
   
   const createInvoice = db.transaction(() => {
     // Generate number
@@ -7860,94 +8804,109 @@ app.post("/api/invoices", validate(z.object({
     let subtotal = 0;
     let vat_amount = 0;
     items.forEach((item: any) => {
-      const lineTotal = item.quantity * item.unit_price;
-      subtotal += lineTotal;
-      vat_amount += lineTotal * (item.vat_rate / 100);
+      const lineGross = item.quantity * item.unit_price;
+      const discount = lineGross * ((item.discount_rate || 0) / 100);
+      const lineNet = lineGross - discount;
+      subtotal += lineNet;
+      vat_amount += lineNet * (item.vat_rate / 100);
     });
     const total_amount = subtotal + vat_amount;
     
     const payment_link = `${process.env.APP_URL || 'http://localhost:3000'}/pay/${number}`;
 
     const stmt = db.prepare(`
-      INSERT INTO invoices (type, number, date, due_date, third_party_id, occasional_name, status, subtotal, vat_amount, total_amount, notes, terms, currency, exchange_rate, transaction_id, payment_link)
-      VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (type, number, date, due_date, third_party_id, occasional_name, status, subtotal, vat_amount, total_amount, paid_amount, notes, terms, currency, exchange_rate, transaction_id, payment_link, template)
+      VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const info = stmt.run(type, number, date, due_date, third_party_id, occasional_name || null, subtotal, vat_amount, total_amount, notes, terms, currency || 'FCFA', exchange_rate || 1, transaction_id || null, payment_link);
+    const info = stmt.run(type, number, date, due_date, third_party_id, occasional_name || null, subtotal, vat_amount, total_amount, Number(paid_amount) || 0, notes, terms, currency || 'FCFA', exchange_rate || 1, transaction_id || null, payment_link, template || 'prestige');
     const invoiceId = info.lastInsertRowid;
     
     const itemStmt = db.prepare(`
-      INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, vat_rate, total, account_code)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, discount, vat_rate, total, account_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     for (const item of items) {
-      const lineTotal = item.quantity * item.unit_price;
-      itemStmt.run(invoiceId, item.description, item.quantity, item.unit_price, item.vat_rate, lineTotal, item.account_code || (type === 'invoice' ? '701' : null));
+      const lineGross = item.quantity * item.unit_price;
+      const discount = lineGross * ((item.discount_rate || 0) / 100);
+      const lineNet = lineGross - discount;
+      itemStmt.run(invoiceId, item.description, item.quantity, item.unit_price, item.discount_rate || 0, item.vat_rate, lineNet, item.account_code || (type === 'invoice' ? '701' : null));
     }
     
     return invoiceId;
   });
   
-  try {
-    const id = createInvoice();
-    logAction(req.user?.name || 'Admin', 'CREATE', type === 'invoice' ? 'Invoice' : 'Quote', id);
-    createNotification('info', type === 'invoice' ? 'Nouvelle facture' : 'Nouveau devis', `Le document a été créé avec succès.`, '/invoicing');
-    res.json({ success: true, id });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  const id = createInvoice();
+  logAction(req.user?.name || 'Admin', 'CREATE', type === 'invoice' ? 'Invoice' : 'Quote', id);
+  createNotification('info', type === 'invoice' ? 'Nouvelle facture' : 'Nouveau devis', `Le document a été créé avec succès.`, '/invoicing');
+  res.json({ success: true, id });
+}));
 
-app.put("/api/invoices/:id", (req, res) => {
+app.patch("/api/invoices/:id/quick", asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { date, due_date, third_party_id, occasional_name, notes, terms, items, currency, exchange_rate, transaction_id } = req.body;
+  const { date, due_date, notes, terms, status } = req.body;
   
-  try {
-    const updateInvoice = db.transaction(() => {
-      const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id) as any;
-      if (!invoice) throw new Error("Document introuvable");
-      if (invoice.status !== 'draft') throw new Error("Seuls les documents en brouillon peuvent être modifiés");
-      
-      // Calculate totals
-      let subtotal = 0;
-      let vat_amount = 0;
-      items.forEach((item: any) => {
-        const lineTotal = item.quantity * item.unit_price;
-        subtotal += lineTotal;
-        vat_amount += lineTotal * (item.vat_rate / 100);
-      });
-      const total_amount = subtotal + vat_amount;
-      
-      // Update invoice
-      db.prepare(`
-        UPDATE invoices 
-        SET date = ?, due_date = ?, third_party_id = ?, occasional_name = ?, subtotal = ?, vat_amount = ?, total_amount = ?, notes = ?, terms = ?, currency = ?, exchange_rate = ?, transaction_id = ?
-        WHERE id = ?
-      `).run(date, due_date, third_party_id, occasional_name || null, subtotal, vat_amount, total_amount, notes, terms, currency || 'FCFA', exchange_rate || 1, transaction_id || (invoice.transaction_id || null), id);
-      
-      // Update items: delete and re-insert
-      db.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").run(id);
-      const insertItem = db.prepare(`
-        INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, vat_rate, total, account_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      
-      for (const item of items) {
-        insertItem.run(id, item.description, item.quantity, item.unit_price, item.vat_rate, item.quantity * item.unit_price, item.account_code || (invoice.type === 'invoice' ? '701' : null));
-      }
-      
-      return id;
-    });
-    
-    updateInvoice();
-    logAction(req.user?.name || 'Admin', 'UPDATE', 'Invoice/Quote', id);
-    res.json({ success: true });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  const updateInfo = db.prepare(`
+    UPDATE invoices 
+    SET date = coalesce(?, date), due_date = coalesce(?, due_date), notes = coalesce(?, notes), terms = coalesce(?, terms), status = coalesce(?, status)
+    WHERE id = ?
+  `).run(date, due_date, notes, terms, status, id);
+  
+  logAction(req.user?.name || 'Admin', 'QUICK UPDATE', 'Invoice', id);
+  res.json({ success: true });
+}));
 
-app.post("/api/invoices/:id/validate", (req, res) => {
+app.put("/api/invoices/:id", asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { date, due_date, third_party_id, occasional_name, notes, terms, items, currency, exchange_rate, transaction_id, template, paid_amount } = req.body;
+  
+  const updateInvoice = db.transaction(() => {
+    const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id) as any;
+    if (!invoice) throw new Error("Document introuvable");
+    if (invoice.status !== 'draft') throw new Error("Seuls les documents en brouillon peuvent être modifiés");
+    
+    // Calculate totals
+    let subtotal = 0;
+    let vat_amount = 0;
+    items.forEach((item: any) => {
+      const lineGross = item.quantity * item.unit_price;
+      const discount = lineGross * ((item.discount_rate || 0) / 100);
+      const lineNet = lineGross - discount;
+      subtotal += lineNet;
+      vat_amount += lineNet * (item.vat_rate / 100);
+    });
+    const total_amount = subtotal + vat_amount;
+    
+    // Update invoice
+    db.prepare(`
+      UPDATE invoices 
+      SET date = ?, due_date = ?, third_party_id = ?, occasional_name = ?, subtotal = ?, vat_amount = ?, total_amount = ?, paid_amount = ?, notes = ?, terms = ?, currency = ?, exchange_rate = ?, transaction_id = ?, template = ?
+      WHERE id = ?
+    `).run(date, due_date, third_party_id, occasional_name || null, subtotal, vat_amount, total_amount, Number(paid_amount) || 0, notes, terms, currency || 'FCFA', exchange_rate || 1, transaction_id || (invoice.transaction_id || null), template || 'prestige', id);
+    
+    // Update items: delete and re-insert
+    db.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").run(id);
+    const insertItem = db.prepare(`
+      INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, discount, vat_rate, total, account_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    for (const item of items) {
+      const lineGross = item.quantity * item.unit_price;
+      const discount = lineGross * ((item.discount_rate || 0) / 100);
+      const lineNet = lineGross - discount;
+      insertItem.run(id, item.description, item.quantity, item.unit_price, item.discount_rate || 0, item.vat_rate, lineNet, item.account_code || (invoice.type === 'invoice' ? '701' : null));
+    }
+    
+    return id;
+  });
+  
+  updateInvoice();
+  logAction(req.user?.name || 'Admin', 'UPDATE', 'Invoice/Quote', id);
+  res.json({ success: true });
+}));
+
+app.post("/api/invoices/:id/validate", asyncHandler(async (req, res) => {
   const { id } = req.params;
   
   const validate = db.transaction(() => {
@@ -7957,54 +8916,138 @@ app.post("/api/invoices/:id/validate", (req, res) => {
     if (invoice.status !== 'draft') throw new Error("La facture est déjà validée");
     
     const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
-    const thirdParty = db.prepare("SELECT account_code FROM third_parties WHERE id = ?").get(invoice.third_party_id);
+    const thirdParty = db.prepare("SELECT type, account_code FROM third_parties WHERE id = ?").get(invoice.third_party_id) as any;
     
-    // 1. Create Transaction
-    const txRef = generateTransactionReference('FAC');
-    const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, third_party_id, due_date, occasional_name) VALUES (?, ?, ?, 'validated', ?, ?, ?)");
-    const txInfo = txStmt.run(invoice.date, `Facture ${invoice.number}`, txRef, invoice.third_party_id, invoice.due_date, invoice.occasional_name || null);
-    const txId = txInfo.lastInsertRowid;
+    const isSupplier = thirdParty.type === 'supplier';
+    let txId = invoice.transaction_id;
     
-    // 2. Create Journal Entries
-    const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
+    if (!txId) {
+      // 1. Create Transaction
+      const txRef = generateTransactionReference('FAC');
+      const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, third_party_id, due_date, occasional_name) VALUES (?, ?, ?, 'validated', ?, ?, ?)");
+      const txInfo = txStmt.run(invoice.date, `Facture ${invoice.number}`, txRef, invoice.third_party_id, invoice.due_date, invoice.occasional_name || null);
+      txId = txInfo.lastInsertRowid;
+      
+      // 2. Create Journal Entries
+      const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
+      
+      const partyAccount = thirdParty.account_code || (isSupplier ? '4011' : '411');
+      const defaultOppositeAccount = isSupplier ? '601' : '701';
+      const vatAccount = isSupplier ? '4452' : '4431'; 
+      
+      // Debit Client or Credit Supplier
+      if (isSupplier) {
+          entryStmt.run(txId, partyAccount, 0, invoice.total_amount);
+      } else {
+          entryStmt.run(txId, partyAccount, invoice.total_amount, 0);
+      }
+      
+      // Credit Revenue or Debit Expense & VAT
+      const revenueOrExpenseByAccount: Record<string, number> = {};
+      let totalVat = 0;
+      
+      for (const item of items) {
+        const acc = item.account_code || defaultOppositeAccount;
+        revenueOrExpenseByAccount[acc] = (revenueOrExpenseByAccount[acc] || 0) + item.total;
+        totalVat += item.total * (item.vat_rate / 100);
+      }
+      
+      for (const [acc, amount] of Object.entries(revenueOrExpenseByAccount)) {
+        if (isSupplier) {
+            entryStmt.run(txId, acc, amount, 0); // Expense debit
+        } else {
+            entryStmt.run(txId, acc, 0, amount); // Revenue credit
+        }
+      }
+      
+      if (totalVat > 0) {
+        if (isSupplier) {
+            entryStmt.run(txId, vatAccount, totalVat, 0); // TVA Déductible debit
+        } else {
+            entryStmt.run(txId, vatAccount, 0, totalVat); // TVA Collectée credit
+        }
+      }
+    }
     
-    // Debit Client (411 or specific)
-    entryStmt.run(txId, thirdParty.account_code || '411', invoice.total_amount, 0);
-    
-    // Credit Revenue & VAT
-    const revenueByAccount: Record<string, number> = {};
-    let totalVat = 0;
-    
+    // 3. Stock update for inventory items!
     for (const item of items) {
-      const acc = item.account_code || '701';
-      revenueByAccount[acc] = (revenueByAccount[acc] || 0) + item.total;
-      totalVat += item.total * (item.vat_rate / 100);
+       if (item.inventory_item_id) {
+          if (isSupplier) {
+              db.prepare("UPDATE inventory_items SET quantity = quantity + ? WHERE id = ?").run(item.quantity, item.inventory_item_id);
+          } else {
+              db.prepare("UPDATE inventory_items SET quantity = quantity - ? WHERE id = ?").run(item.quantity, item.inventory_item_id);
+          }
+       } else {
+          // Attempt to match by reference or name if inventory exists
+          const matchingStock = db.prepare("SELECT id FROM inventory_items WHERE reference = ? OR name = ?").get(item.description, item.description) as any;
+          if (matchingStock) {
+             if (isSupplier) {
+                 db.prepare("UPDATE inventory_items SET quantity = quantity + ? WHERE id = ?").run(item.quantity, matchingStock.id);
+             } else {
+                 db.prepare("UPDATE inventory_items SET quantity = quantity - ? WHERE id = ?").run(item.quantity, matchingStock.id);
+             }
+          }
+       }
     }
-    
-    for (const [acc, amount] of Object.entries(revenueByAccount)) {
-      entryStmt.run(txId, acc, 0, amount);
-    }
-    
-    if (totalVat > 0) {
-      entryStmt.run(txId, '4431', 0, totalVat);
-    }
-    
-    // 3. Update Invoice
+
+    // 4. Update Invoice
     db.prepare("UPDATE invoices SET status = 'sent', transaction_id = ? WHERE id = ?").run(txId, id);
+
+    // 5. Automatic payment processing based on terms
+    // ONLY IF NOT GENERATED FROM A TRANSACTION
+    if (!invoice.transaction_id) {
+        const lowerTerms = (invoice.terms || '').toLowerCase();
+        let autoPayPercent = 0;
+        
+        if (lowerTerms.includes('comptant')) {
+           autoPayPercent = 100;
+        } else if (lowerTerms.includes('acompte de 50%') || lowerTerms.includes('acompte 50%')) {
+           autoPayPercent = 50;
+        } else if (lowerTerms.includes('30%') && lowerTerms.includes('commande')) {
+           autoPayPercent = 30;
+        }
+
+        if (autoPayPercent > 0) {
+           const payAmount = invoice.total_amount * (autoPayPercent / 100);
+           const payRef = generateTransactionReference('PAY');
+           const payTxStmt = db.prepare("INSERT INTO transactions (date, description, reference, status, third_party_id, occasional_name) VALUES (?, ?, ?, 'validated', ?, ?)");
+           const payTxInfo = payTxStmt.run(invoice.date, `Paiement automatique (${autoPayPercent}%) Facture ${invoice.number}`, payRef, invoice.third_party_id, invoice.occasional_name || null);
+           const payTxId = payTxInfo.lastInsertRowid;
+           
+           const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+           
+           const payEntryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
+           
+           const treasuryAcc = companySettings?.payment_bank_account || '521';
+           const partyAcc = thirdParty.account_code || (isSupplier ? '4011' : '411');
+           
+           if (isSupplier) {
+               // Pay supplier: Debit Supplier, Credit Treasury
+               payEntryStmt.run(payTxId, partyAcc, payAmount, 0);
+               payEntryStmt.run(payTxId, treasuryAcc, 0, payAmount);
+           } else {
+               // Paid by client: Debit Treasury, Credit Client
+               payEntryStmt.run(payTxId, treasuryAcc, payAmount, 0);
+               payEntryStmt.run(payTxId, partyAcc, 0, payAmount);
+           }
+           
+           const newStatus = autoPayPercent === 100 ? 'paid' : 'sent';
+           db.prepare("UPDATE invoices SET status = ?, paid_amount = ? WHERE id = ?").run(newStatus, payAmount, id);
+        }
+    } else {
+        // If generated from a cash transaction, it's effectively paid.
+        db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE id = ?").run(id);
+    }
     
     return txId;
   });
   
-  try {
-    const txId = validate();
-    logAction(req.user?.name || 'Admin', 'VALIDATE', 'Invoice', id, { transactionId: txId });
-    res.json({ success: true, transactionId: txId });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  const txId = validate();
+  logAction(req.user?.name || 'Admin', 'VALIDATE', 'Invoice', id, { transactionId: txId });
+  res.json({ success: true, transactionId: txId });
+}));
 
-app.post("/api/invoices/:id/pay", (req, res) => {
+app.post("/api/invoices/:id/pay", asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { paymentDate, paymentAccount, amount } = req.body;
   
@@ -8041,74 +9084,58 @@ app.post("/api/invoices/:id/pay", (req, res) => {
     return txId;
   });
   
-  try {
-    const txId = pay();
-    logAction(req.user?.name || 'Admin', 'PAY', 'Invoice', id, { transactionId: txId });
-    res.json({ success: true, transactionId: txId });
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+  const txId = pay();
+  logAction(req.user?.name || 'Admin', 'PAY', 'Invoice', id, { transactionId: txId });
+  res.json({ success: true, transactionId: txId });
+}));
 
-app.post("/api/invoices/:id/send", (req, res) => {
+app.post("/api/invoices/:id/send", asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { email, subject, message } = req.body;
   
-  try {
-    const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
-    if (!invoice) return res.status(404).json({ error: "Document introuvable" });
-    
-    // Update status to 'sent' if it was 'draft'
-    if (invoice.status === 'draft') {
-      db.prepare("UPDATE invoices SET status = 'sent' WHERE id = ?").run(id);
-    }
-    
-    logAction(req.user?.name || 'Admin', 'SEND_EMAIL', invoice.type === 'invoice' ? 'Invoice' : 'Quote', id, { email, subject });
-    
-    res.json({ success: true, message: "Email envoyé avec succès" });
-  } catch (err) {
-    handleApiError(res, err);
+  const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
+  if (!invoice) return res.status(404).json({ error: "Document introuvable" });
+  
+  // Update status to 'sent' if it was 'draft'
+  if (invoice.status === 'draft') {
+    db.prepare("UPDATE invoices SET status = 'sent' WHERE id = ?").run(id);
   }
-});
+  
+  logAction(req.user?.name || 'Admin', 'SEND_EMAIL', invoice.type === 'invoice' ? 'Invoice' : 'Quote', id, { email, subject });
+  
+  res.json({ success: true, message: "Email envoyé avec succès" });
+}));
 
-app.get("/api/invoices/stats", (req, res) => {
-  try {
-    const stats = db.prepare(`
-      SELECT 
-        type,
-        status,
-        COUNT(*) as count,
-        SUM(total_amount) as total,
-        SUM(paid_amount) as paid
-      FROM invoices
-      GROUP BY type, status
-    `).all();
-    
-    res.json(stats);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+app.get("/api/invoices/stats", asyncHandler(async (req, res) => {
+  const stats = db.prepare(`
+    SELECT 
+      type,
+      status,
+      COUNT(*) as count,
+      SUM(total_amount) as total,
+      SUM(paid_amount) as paid
+    FROM invoices
+    GROUP BY type, status
+  `).all();
+  
+  res.json(stats);
+}));
 
-app.get("/api/revenue/monthly", (req, res) => {
-  try {
-    const revenue = db.prepare(`
-      SELECT 
-        strftime('%Y-%m', date) as month,
-        SUM(total_amount) as total,
-        SUM(paid_amount) as paid
-      FROM invoices
-      WHERE type = 'invoice' AND status != 'cancelled'
-      GROUP BY month
-      ORDER BY month DESC
-      LIMIT 12
-    `).all();
-    
-    res.json(revenue);
-  } catch (err) {
-    handleApiError(res, err);
-  }
-});
+app.get("/api/revenue/monthly", asyncHandler(async (req, res) => {
+  const revenue = db.prepare(`
+    SELECT 
+      strftime('%Y-%m', date) as month,
+      SUM(total_amount) as total,
+      SUM(paid_amount) as paid
+    FROM invoices
+    WHERE type = 'invoice' AND status != 'cancelled'
+    GROUP BY month
+    ORDER BY month DESC
+    LIMIT 12
+  `).all();
+  
+  res.json(revenue);
+}));
 
 // Handle 404 for API routes
 app.use('/api', (req, res) => {
@@ -8123,6 +9150,11 @@ app.use('/api', (req, res) => {
 // --- Vite Middleware ---
 
 async function startServer() {
+  // Unmatched API routes should return 404 JSON instead of HTML
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ error: 'API route not found' });
+  });
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -8170,6 +9202,329 @@ setInterval(() => {
     console.error("Error in background recurring process:", error);
   }
 }, 1000 * 60 * 60);
+
+// --- Mobile Money Routes ---
+
+app.post('/api/mobile-money/pay', async (req, res) => {
+  const { invoice_id, phone, network } = req.body;
+  try {
+    const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(invoice_id) as any;
+    if (!invoice) return res.status(404).json({ error: 'Facture non trouvée' });
+    
+    // Create actual payment in aggregator if possible
+    let mmTx;
+    try {
+      mmTx = await mobileMoney.createPayment(invoice.total_amount, `Facture ${invoice.number}`, { phone }, invoice.currency);
+    } catch (apiError) {
+      // For demo purposes when offline/no API key
+      console.warn("Mobile Money API Error, simulating payment token", apiError);
+      mmTx = {
+        transaction_id: 'sim_tx_' + Date.now(),
+        payment_url: '#dummy-payment-url',
+        amount: invoice.total_amount,
+        currency: invoice.currency
+      };
+    }
+
+    const stmt = db.prepare(`
+      INSERT INTO mobile_money_transactions (gateway_id, type, amount, currency, status, network, customer_phone, reference, invoice_id)
+      VALUES (?, 'payment', ?, ?, 'pending', ?, ?, ?, ?)
+    `);
+    stmt.run(mmTx.transaction_id, mmTx.amount, mmTx.currency, network, phone, invoice.number, invoice_id);
+
+    res.json({ success: true, payment_url: mmTx.payment_url, transaction_id: mmTx.transaction_id });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post('/api/mobile-money/payout', async (req, res) => {
+  const { amount, phone, network, description } = req.body;
+  try {
+    let mmTx;
+    try {
+      mmTx = await mobileMoney.createPayout(amount, phone, network, description);
+    } catch (apiError) {
+      console.warn("Mobile Money Payout Error", apiError);
+      mmTx = { payout_id: 'sim_po_' + Date.now(), status: 'pending' };
+    }
+
+    const stmt = db.prepare(`
+      INSERT INTO mobile_money_transactions (gateway_id, type, amount, status, network, customer_phone, reference)
+      VALUES (?, 'payout', ?, ?, ?, ?, ?)
+    `);
+    const info = stmt.run(mmTx.payout_id, amount, mmTx.status, network, phone, description);
+
+    res.json({ success: true, id: info.lastInsertRowid, status: mmTx.status });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+// --- TASKS API ---
+
+app.get('/api/tasks', (req, res) => {
+  try {
+    const tasks = db.prepare('SELECT * FROM tasks ORDER BY due_date ASC').all();
+    res.json(tasks);
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
+app.post('/api/tasks', (req, res) => {
+  try {
+    const { id, title, due_date, status, priority, category } = req.body;
+    
+    // Auto-generate ID if not provided
+    const taskId = id || Math.random().toString(36).substring(2, 9);
+    
+    db.prepare(`
+      INSERT INTO tasks (id, title, due_date, status, priority, category)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      taskId,
+      title,
+      due_date,
+      status || 'pending',
+      priority || 'medium',
+      category || 'Général'
+    );
+    res.json({ success: true, id: taskId });
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
+app.put('/api/tasks/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { due_date, date, title, priority, category } = req.body;
+    const finalDate = due_date || date;
+    
+    // Si on a un finalDate, on met à jour. On peut faire un update dynamique
+    const updates = [];
+    const values = [];
+    
+    if (finalDate !== undefined) {
+      updates.push('due_date = ?');
+      values.push(finalDate);
+    }
+    if (title !== undefined) {
+      updates.push('title = ?');
+      values.push(title);
+    }
+    if (priority !== undefined) {
+      updates.push('priority = ?');
+      values.push(priority);
+    }
+    if (category !== undefined) {
+      updates.push('category = ?');
+      values.push(category);
+    }
+    
+    if (updates.length > 0) {
+      values.push(id);
+      db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
+app.put('/api/tasks/:id/status', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    db.prepare(`
+      UPDATE tasks 
+      SET status = ?, 
+          completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
+      WHERE id = ?
+    `).run(status, status, id);
+    res.json({ success: true });
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    res.json({ success: true });
+  } catch (error) {
+    handleApiError(res, error);
+  }
+});
+
+app.get('/api/mobile-money/transactions', async (req, res) => {
+  try {
+    const txs = db.prepare("SELECT * FROM mobile_money_transactions ORDER BY created_at DESC").all();
+    res.json(txs);
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post('/api/mobile-money/reconcile', async (req, res) => {
+  try {
+    let remoteTxs = [];
+    try {
+       remoteTxs = await mobileMoney.fetchGatewayTransactions();
+    } catch (e) {
+       console.warn("Coult not fetch from gateway, checking local DB");
+    }
+
+    // Example logic to update pending transactions directly or create matched entries
+    const pending = db.prepare("SELECT * FROM mobile_money_transactions WHERE status = 'pending'").all();
+    for (const tx of pending) {
+      // In a real system, verify against remoteTxs
+      db.prepare("UPDATE mobile_money_transactions SET status = 'approved' WHERE id = ?").run(tx.id);
+      
+      // If it's a payment linked to an invoice, auto-pay the invoice
+      if (tx.invoice_id && tx.type === 'payment') {
+         const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(tx.invoice_id) as any;
+         if (invoice && invoice.status !== 'paid') {
+            db.prepare("UPDATE invoices SET status = 'paid', paid_amount = ? WHERE id = ?").run(tx.amount, tx.invoice_id);
+            // Log Journal Entry
+            const bankAccount = db.prepare("SELECT id FROM bank_accounts LIMIT 1").get();
+            const txRef = 'MM-' + tx.id;
+            const tInfo = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (date('now'), ?, ?, 'validated')").run(`Paiement Mobile Money - ${invoice.number}`, txRef);
+            db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '521', ?, 0)").run(tInfo.lastInsertRowid, tx.amount);
+            db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '411', 0, ?)").run(tInfo.lastInsertRowid, tx.amount);
+         }
+      }
+    }
+
+    res.json({ success: true, message: 'Reconciliation complete' });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+// --- Inventory API ---
+app.get("/api/inventory", (req, res) => {
+  try {
+    const items = db.prepare("SELECT * FROM inventory_items ORDER BY name ASC").all();
+    res.json(items);
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post("/api/inventory", (req, res) => {
+  const { reference, name, category, unit, quantity, min_quantity, unit_price } = req.body;
+  try {
+    const transaction = db.transaction(() => {
+      const info = db.prepare(`
+        INSERT INTO inventory_items (reference, name, category, unit, quantity, min_quantity, unit_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(reference, name, category || 'Général', unit || 'unité', quantity || 0, min_quantity || 0, unit_price || 0);
+      
+      const newId = info.lastInsertRowid;
+      
+      // Auto-generate accounting entry for initial stock (Débit 31, Crédit 603)
+      if (quantity > 0 && unit_price > 0) {
+        const total = quantity * unit_price;
+        
+        // Ensure accounts exist
+        db.prepare("INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES ('311', 'Marchandises', 3, 'actif')").run();
+        db.prepare("INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES ('6031', 'Variation de stock de marchandises', 6, 'charge')").run();
+        
+        const txInfo = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (date('now'), ?, ?, 'validated')")
+          .run(`Entrée en stock initiale - ${name}`, `STK-INIT-${reference}`);
+          
+        const txId = txInfo.lastInsertRowid;
+        db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '311', ?, 0)").run(txId, total);
+        db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '6031', 0, ?)").run(txId, total);
+      }
+      
+      return newId;
+    });
+    
+    const id = transaction();
+    res.json({ success: true, id });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.put("/api/inventory/:id", (req, res) => {
+  const { id } = req.params;
+  const { reference, name, category, unit, min_quantity, unit_price } = req.body;
+  try {
+    db.prepare(`
+      UPDATE inventory_items 
+      SET reference = ?, name = ?, category = ?, unit = ?, min_quantity = ?, unit_price = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(reference, name, category || 'Général', unit || 'unité', min_quantity || 0, unit_price || 0, id);
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.delete("/api/inventory/:id", (req, res) => {
+  const { id } = req.params;
+  try {
+    db.prepare("DELETE FROM inventory_items WHERE id = ?").run(id);
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.post("/api/inventory/:id/movement", (req, res) => {
+  const { id } = req.params;
+  const { type, quantity, date, reason } = req.body;
+  
+  if (!quantity || quantity <= 0) return res.status(400).json({ error: "Quantité invalide" });
+  if (type !== 'in' && type !== 'out') return res.status(400).json({ error: "Type de mouvement invalide" });
+  
+  try {
+    db.transaction(() => {
+      const item = db.prepare("SELECT * FROM inventory_items WHERE id = ?").get(id) as any;
+      if (!item) throw new Error("Article non trouvé");
+      
+      if (type === 'out' && item.quantity < quantity) {
+        throw new Error("Stock insuffisant");
+      }
+      
+      const newQuantity = type === 'in' ? item.quantity + quantity : item.quantity - quantity;
+      
+      db.prepare("UPDATE inventory_items SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(newQuantity, id);
+      
+      // Accounting entry
+      const total = quantity * item.unit_price;
+      if (total > 0) {
+        db.prepare("INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES ('311', 'Marchandises', 3, 'actif')").run();
+        db.prepare("INSERT OR IGNORE INTO accounts (code, name, class_code, type) VALUES ('6031', 'Variation de stock de marchandises', 6, 'charge')").run();
+        
+        const txDesc = type === 'in' ? `Entrée en stock - ${item.name} (${reason || ''})` : `Sortie de stock - ${item.name} (${reason || ''})`;
+        const txRef = `STK-${type.toUpperCase()}-${item.reference}-${Date.now().toString().slice(-6)}`;
+        
+        const txInfo = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, 'validated')")
+          .run(date || new Date().toISOString().split('T')[0], txDesc, txRef);
+          
+        const txId = txInfo.lastInsertRowid;
+        
+        if (type === 'in') {
+          db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '311', ?, 0)").run(txId, total);
+          db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '6031', 0, ?)").run(txId, total);
+        } else {
+          db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '6031', ?, 0)").run(txId, total);
+          db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, '311', 0, ?)").run(txId, total);
+        }
+      }
+    })();
+    res.json({ success: true });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
 
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

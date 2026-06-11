@@ -1,3 +1,4 @@
+import { triggerCloudBackup } from '@/lib/backup';
 import { apiFetch } from '../lib/api';
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
@@ -766,7 +767,10 @@ export function BankReconciliation() {
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({ bankAccountId: selectedAccountId, startDate, endDate })
                               }).then(lockRes => {
-                                if (lockRes.ok) dialogAlert("Période verrouillée avec succès.", "success");
+                                if (lockRes.ok) {
+                                  dialogAlert("Période verrouillée avec succès.", "success");
+                                  triggerCloudBackup().catch(e => console.error("Cloud backup failed", e));
+                                }
                               });
                             }
                           });
@@ -905,7 +909,7 @@ export function BankReconciliation() {
                   <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
                     <h2 className="font-bold text-slate-800 dark:text-white">Opérations Rapprochées</h2>
                   </div>
-                  <div className="overflow-x-auto">
+                  <div className="w-full min-w-0 overflow-auto ">
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] uppercase tracking-wider text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
@@ -986,11 +990,11 @@ export function BankReconciliation() {
 
       {/* Add Account Modal */}
       {isAddAccountModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white dark:bg-slate-800 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+            className="bg-white dark:bg-slate-800 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col"
           >
             <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
               <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
@@ -1096,11 +1100,11 @@ export function BankReconciliation() {
 
       {/* Create Entry Modal */}
       {isCreateEntryModalOpen && selectedTxForEntry && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white dark:bg-slate-800 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+            className="bg-white dark:bg-slate-800 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col"
           >
             <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
               <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
@@ -1197,11 +1201,11 @@ export function BankReconciliation() {
 
       {/* Forced Adjustment Modal */}
       {isForcedMatchModalOpen && selectedTxForMatch && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[60] flex justify-center p-4 bg-slate-900/60 backdrop-blur-sm items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-700"
+            className="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col"
           >
             <div className="p-6 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center">
               <div>
@@ -1267,11 +1271,11 @@ export function BankReconciliation() {
 
       {/* Manual Match Modal */}
       {isManualMatchModalOpen && selectedTxForMatch && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden"
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col"
           >
             <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
               <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
@@ -1403,11 +1407,11 @@ export function BankReconciliation() {
 
       {/* CSV Mapping Modal */}
       {isCsvMappingModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white dark:bg-slate-800 rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+            className="bg-white dark:bg-slate-800 rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col"
           >
             <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-indigo-600 text-white">
               <h2 className="text-xl font-bold flex items-center gap-2">
@@ -1491,7 +1495,7 @@ export function BankReconciliation() {
                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{csvData.length} lignes trouvées</span>
                 </div>
                 <div className="border border-slate-100 dark:border-slate-700 rounded-2xl overflow-hidden shadow-inner">
-                  <div className="overflow-x-auto max-h-[400px] custom-scrollbar">
+                  <div className="w-full min-w-0 overflow-auto  max-h-[400px] custom-scrollbar">
                     <table className="w-full text-xs text-left border-collapse">
                       <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900 z-10 shadow-sm border-b border-slate-100 dark:border-slate-700">
                         <tr>

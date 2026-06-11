@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { sanitizeText, formatCurrencyPDF } from '@/lib/pdfUtils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { exportToCSV, PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings } from '@/lib/exportUtils';
+import { PageHeader } from './ui/PageHeader';
 
 interface LedgerEntry {
   date: string;
@@ -246,36 +247,40 @@ export function GeneralLedger() {
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Grand Livre</h1>
-          <p className="text-slate-500 dark:text-slate-400">Détail des mouvements par compte</p>
-        </div>
-        <div className="flex gap-2">
-          <button 
-            onClick={handleExportCSV}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-sm"
-          >
-            <FileSpreadsheet size={18} />
-            CSV
-          </button>
-          <button 
-            onClick={handleExportExcel}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-sm"
-          >
-            <FileSpreadsheet size={18} className="text-brand-green" />
-            Excel
-          </button>
-          <button 
-            onClick={handleExportPDF}
-            className="bg-brand-green hover:bg-brand-green-dark text-white px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-lg shadow-brand-green/20"
-          >
-            <Download size={18} />
-            PDF
-          </button>
-        </div>
-      </div>
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="space-y-6"
+    >
+      <PageHeader
+        title="Grand Livre"
+        subtitle="Détail des mouvements par compte"
+        actions={
+          <>
+            <button 
+              onClick={handleExportCSV}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-sm"
+            >
+              <FileSpreadsheet size={18} />
+              CSV
+            </button>
+            <button 
+              onClick={handleExportExcel}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-sm"
+            >
+              <FileSpreadsheet size={18} className="text-brand-green" />
+              Excel
+            </button>
+            <button 
+              onClick={handleExportPDF}
+              className="bg-brand-green hover:bg-brand-green-dark text-white px-4 py-2 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-lg shadow-brand-green/20"
+            >
+              <Download size={18} />
+              PDF
+            </button>
+          </>
+        }
+      />
 
       {/* Filters */}
       <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-100 dark:border-slate-800 flex flex-wrap gap-4 items-end">
@@ -356,8 +361,8 @@ export function GeneralLedger() {
                   </span>
                 </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
+              <div className="w-full min-w-0 overflow-auto ">
+                <table className="w-full text-sm text-left min-w-[800px]">
                   <thead className="bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">
                     <tr>
                       <th className="px-6 py-3 font-medium w-32">Date</th>
@@ -409,12 +414,12 @@ export function GeneralLedger() {
       {/* Transaction Details Modal */}
       <AnimatePresence>
         {selectedTx && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex justify-center p-4 bg-slate-900/40 backdrop-blur-sm items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden border border-slate-200 dark:border-slate-800"
+              className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col"
             >
               <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
                 <div className="flex items-center gap-3">
@@ -468,7 +473,8 @@ export function GeneralLedger() {
                   </div>
                   
                   <div className="rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                    <table className="w-full text-sm">
+                    <div className="w-full min-w-0 overflow-auto ">
+                    <table className="w-full text-sm min-w-[600px]">
                       <thead className="bg-slate-50 dark:bg-slate-800/50 text-[10px] uppercase font-black tracking-widest text-slate-500">
                         <tr>
                           <th className="px-6 py-4 text-left">Compte</th>
@@ -495,6 +501,7 @@ export function GeneralLedger() {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -518,13 +525,13 @@ export function GeneralLedger() {
 
       {/* Loading Overlay for Drill-down */}
       {txLoading && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/20 backdrop-blur-[2px]">
+        <div className="fixed inset-0 z-[60] flex justify-center bg-slate-900/20 backdrop-blur-[2px] items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
           <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-2xl flex flex-col items-center gap-4 border border-slate-200 dark:border-slate-800">
             <div className="w-12 h-12 border-4 border-brand-green/30 border-t-brand-green rounded-full animate-spin" />
             <p className="text-xs font-black uppercase tracking-widest text-slate-500">Chargement des détails...</p>
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

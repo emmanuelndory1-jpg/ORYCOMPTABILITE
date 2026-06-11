@@ -41,7 +41,7 @@ interface PayrollRule {
   id: number;
   code: string;
   name: string;
-  type: 'bonus' | 'deduction';
+  type: 'bonus' | 'deduction' | 'commission' | 'benefit';
   formula: string;
   is_taxable: number;
   is_social_taxable: number;
@@ -362,7 +362,8 @@ export function PayrollSettingsManager() {
       )}
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900/50 rounded-2xl w-fit overflow-x-auto max-w-full">
+      <div className="w-full min-w-0 overflow-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-hide">
+      <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900/50 rounded-2xl w-max sm:w-fit min-w-full sm:min-w-0">
         {[
           { id: 'general', label: 'Général & Simulateur', icon: Building2 },
           { id: 'brackets', label: 'Barèmes (IS/CN/IGR)', icon: Landmark },
@@ -383,6 +384,7 @@ export function PayrollSettingsManager() {
             {tab.label}
           </button>
         ))}
+      </div>
       </div>
 
       {activeTab === 'general' && (
@@ -427,7 +429,7 @@ export function PayrollSettingsManager() {
                   Cotisations CNPS
                 </h3>
               </div>
-              <div className="overflow-x-auto">
+              <div className="w-full min-w-0 overflow-auto ">
                 <table className="w-full text-left text-sm">
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                     {rules.filter(r => r.code.includes('CNPS') || ['PF', 'AT'].includes(r.code)).map(renderRuleRow)}
@@ -547,7 +549,7 @@ export function PayrollSettingsManager() {
                 Barème IGR (Tranches Progressives)
               </h3>
             </div>
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-auto ">
               <table className="w-full text-left">
                 <thead className="bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 text-[10px] uppercase font-bold tracking-wider">
                   <tr>
@@ -622,7 +624,7 @@ export function PayrollSettingsManager() {
                 Barème CN (Contribution Nationale)
               </h3>
             </div>
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-auto ">
               <table className="w-full text-left">
                 <thead className="bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 text-[10px] uppercase font-bold tracking-wider">
                   <tr>
@@ -700,7 +702,7 @@ export function PayrollSettingsManager() {
                 Coefficients de Déduction Fiscale (Nombre de Parts IGR)
               </h3>
             </div>
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-auto ">
               <table className="w-full text-left">
                 <thead className="bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 text-[10px] uppercase font-bold tracking-wider">
                   <tr>
@@ -761,7 +763,7 @@ export function PayrollSettingsManager() {
                 Règles de Calcul des Primes & Retenues
               </h3>
             </div>
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-auto ">
               <table className="w-full text-left">
                 <thead className="bg-slate-50/50 dark:bg-slate-900/30 text-slate-400 text-[10px] uppercase font-bold tracking-wider">
                   <tr>
@@ -788,12 +790,22 @@ export function PayrollSettingsManager() {
                         <div className="text-xs text-slate-400 font-mono">{rule.code}</div>
                       </td>
                       <td className="px-6 py-4">
-                        <span className={cn(
-                          "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
-                          rule.type === 'bonus' ? "bg-emerald-100 text-emerald-600" : "bg-rose-100 text-rose-600"
-                        )}>
-                          {rule.type === 'bonus' ? 'Prime' : 'Retenue'}
-                        </span>
+                        <select
+                          value={rule.type}
+                          onChange={(e) => handlePayrollRuleChange(rule.id, 'type', e.target.value)}
+                          className={cn(
+                            "px-2 py-1 rounded text-xs font-bold uppercase border-none focus:ring-0",
+                            rule.type === 'bonus' ? "bg-emerald-100 text-emerald-700" : 
+                            rule.type === 'commission' ? "bg-blue-100 text-blue-700" :
+                            rule.type === 'benefit' ? "bg-purple-100 text-purple-700" :
+                            "bg-rose-100 text-rose-700"
+                          )}
+                        >
+                          <option value="bonus">Prime</option>
+                          <option value="commission">Commission</option>
+                          <option value="benefit">Avantage en nature</option>
+                          <option value="deduction">Retenue</option>
+                        </select>
                       </td>
                       <td className="px-6 py-4">
                         <input
@@ -846,7 +858,34 @@ export function PayrollSettingsManager() {
               </div>
             </div>
           </div>
-          <button className="flex items-center gap-2 p-4 w-full border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-slate-400 hover:text-brand-green hover:border-brand-green/50 hover:bg-brand-green/5 transition-all text-sm font-medium">
+          <button 
+            onClick={async () => {
+               const newRuleCode = prompt("Code de la règle (ex: PRIME_RDT) :");
+               if (!newRuleCode) return;
+               const newRule = {
+                 code: newRuleCode.toUpperCase(),
+                 name: 'Nouvelle Règle',
+                 type: 'bonus',
+                 formula: '0',
+                 is_taxable: 1,
+                 is_social_taxable: 1
+               };
+               try {
+                 const res = await apiFetch('/api/pr/rules', {
+                   method: 'POST',
+                   headers: { 'Content-Type': 'application/json' },
+                   body: JSON.stringify(newRule)
+                 });
+                 if (res.ok) {
+                   // Refresh rules
+                   fetchData();
+                 }
+               } catch (err) {
+                 console.error(err);
+               }
+            }}
+            className="flex items-center gap-2 p-4 w-full border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl text-slate-400 hover:text-brand-green hover:border-brand-green/50 hover:bg-brand-green/5 transition-all text-sm font-medium"
+          >
             <Calculator size={18} />
             Ajouter une nouvelle règle de calcul
           </button>

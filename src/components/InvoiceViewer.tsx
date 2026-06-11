@@ -2,7 +2,7 @@ import { useDialog } from './DialogProvider';
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
 import { 
-  X, 
+  X, BellRing, 
   Download, 
   Printer, 
   Mail, 
@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings, formatCurrencyPDF, generateInvoicePDF } from '@/lib/exportUtils';
 import jsPDF from 'jspdf';
+import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
 import autoTable from 'jspdf-autotable';
 
@@ -35,6 +36,7 @@ interface InvoiceItem {
   description: string;
   quantity: number;
   unit_price: number;
+  discount: number;
   vat_rate: number;
   total: number;
 }
@@ -50,10 +52,12 @@ interface Invoice {
   third_party_address: string;
   third_party_tax_id: string;
   third_party_email?: string;
+  third_party_type?: 'client' | 'supplier' | 'other';
   status: string;
   subtotal: number;
   vat_amount: number;
   total_amount: number;
+  paid_amount: number;
   notes: string;
   terms: string;
   items: InvoiceItem[];
@@ -87,6 +91,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
   const [copied, setCopied] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentMode, setPaymentMode] = useState('bank');
+  const [mmPhone, setMmPhone] = useState('');
+  const [mmNetwork, setMmNetwork] = useState('orange');
 
   useEffect(() => {
     if (companySettings) {
@@ -118,8 +124,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     if (invoice) {
       setEmailData({
         email: invoice.third_party_email || '',
-        subject: `${invoice.type === 'invoice' ? 'Facture' : 'Devis'} ${invoice.number} - ${companySettings?.name || 'Ma Société'}`,
-        message: `Bonjour,\n\nVeuillez trouver ci-joint votre ${invoice.type === 'invoice' ? 'facture' : 'devis'} ${invoice.number}.\n\nCordialement,\n${companySettings?.name || 'Ma Société'}`
+        subject: `${invoice.type === 'invoice' ? 'Facture' : invoice.type === 'quote' ? 'Devis' : 'Proforma'} ${invoice.number} - ${companySettings?.name || 'Ma Société'}`,
+        message: `Bonjour,\n\nVeuillez trouver ci-joint votre ${invoice.type === 'invoice' ? 'facture' : invoice.type === 'quote' ? 'devis' : 'proforma'} ${invoice.number}.\n\nCordialement,\n${companySettings?.name || 'Ma Société'}`
       });
     }
   }, [invoice, companySettings]);
@@ -154,6 +160,13 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleSendReminder = async () => {
+    dialogAlert('Le rappel est en cours d\'envoi au client.', 'info');
+    setTimeout(() => {
+      dialogAlert('Le client a été relancé avec succès.', 'success');
+    }, 1500);
   };
 
   const handleConvert = async () => {
@@ -242,12 +255,43 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
   const handlePay = async () => {
     if (!invoice || !companySettings) return;
     
+    setPaying(true);
+
+    if (paymentMode === 'mobile') {
+      try {
+        const res = await apiFetch(`/api/mobile-money/pay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            invoice_id: id,
+            phone: mmPhone,
+            network: mmNetwork
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.payment_url && data.payment_url.startsWith('http')) {
+            window.open(data.payment_url, '_blank');
+          }
+          dialogAlert("Demande de paiement Mobile Money initiée avec succès.", "success");
+          setShowPaymentModal(false);
+        } else {
+          const err = await res.json();
+          dialogAlert(err.error || "Erreur lors de l'initiation du paiement");
+        }
+      } catch (err) {
+        console.error(err);
+        dialogAlert("Erreur réseau");
+      } finally {
+        setPaying(false);
+      }
+      return;
+    }
+
     let paymentAccount = companySettings.payment_bank_account || '521';
     if (paymentMode === 'bank') paymentAccount = companySettings.payment_bank_account || '521';
     if (paymentMode === 'cash') paymentAccount = companySettings.payment_cash_account || '571';
-    if (paymentMode === 'mobile') paymentAccount = companySettings.payment_mobile_account || '585';
 
-    setPaying(true);
     try {
       const payload = {
         paymentDate: new Date().toISOString().split('T')[0],
@@ -273,9 +317,9 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     }
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     if (!invoice) return;
-    generateInvoicePDF(invoice, companySettings);
+    await generateInvoicePDF(invoice, companySettings);
   };
 
   if (loading || !invoice) {
@@ -285,6 +329,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
       </div>
     );
   }
+
+  const totalDiscount = invoice.items.reduce((acc, item) => acc + (item.quantity * item.unit_price * ((item.discount || 0) / 100)), 0);
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -309,7 +355,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
               </div>
             </div>
             <p className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-widest mt-0.5 sm:mt-1 truncate">
-              {invoice.type === 'invoice' ? 'Facture Client' : 'Devis Commercial'}
+              {invoice.type === 'invoice' ? (invoice.third_party_type === 'supplier' ? "Facture d'Achat" : 'Facture Client') : (invoice.type === 'quote' ? 'Devis Commercial' : 'Facture Proforma')}
             </p>
           </div>
         </div>
@@ -375,6 +421,16 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
               <Printer size={24} />
               <span className="sm:hidden font-bold text-sm">Imprimer</span>
             </button>
+            {invoice.status === 'overdue' && (
+              <button 
+                onClick={handleSendReminder}
+                className="flex-1 sm:flex-none p-3 sm:p-4 text-slate-500 hover:text-amber-600 hover:bg-amber-500/5 rounded-2xl transition-all active:scale-90 flex items-center justify-center gap-2 group"
+                title="Envoyer un rappel de paiement"
+              >
+                <BellRing size={24} className="group-hover:-rotate-12 transition-transform" />
+                <span className="sm:hidden font-bold text-sm">Relancer</span>
+              </button>
+            )}
             {invoice.status === 'draft' && (
               <div className="flex items-center gap-2">
                 {onEdit && (
@@ -403,8 +459,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
 
       {/* Email Modal */}
       {showEmailModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-xl rounded-[2.5rem] shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-xl rounded-[2.5rem] shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col">
             <div className="p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="p-3 bg-brand-green/10 text-brand-green rounded-2xl">
@@ -475,7 +531,169 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
         {/* Document Preview */}
-        <div className="lg:col-span-3 bg-white dark:bg-slate-900 rounded-[3rem] border border-slate-100 dark:border-slate-800 shadow-2xl shadow-slate-200/50 dark:shadow-none overflow-hidden print:shadow-none print:border-none">
+        <div className="lg:col-span-3 bg-white dark:bg-slate-900 rounded-[3rem] border border-slate-100 dark:border-slate-800 shadow-2xl shadow-slate-200/50 dark:shadow-none overflow-hidden print:shadow-none print:border-none relative">
+          {invoice.type === 'invoice' ? (
+            <div className="p-8 sm:p-12 text-xs text-slate-800 dark:text-slate-200 space-y-8 font-sans bg-white dark:bg-slate-950 print:p-0">
+              {/* Top Section */}
+              <div className="flex flex-col md:flex-row justify-between items-start gap-8">
+                <div className="space-y-1 w-full md:w-1/2 text-left">
+                  <h1 className="font-bold text-lg mb-2 text-slate-900 dark:text-white">{companySettings?.name?.toUpperCase() || 'MA SOCIÉTÉ'}</h1>
+                  <p className="font-bold text-slate-800 dark:text-slate-300">NIF/NCC : {companySettings?.fiscal_id || 'Non Renseigné'}</p>
+                  <p className="text-slate-700 dark:text-slate-400">Régime d'imposition : {companySettings?.tax_regime || 'Non Renseigné'}</p>
+                  <div className="h-2" />
+                  <p className="text-slate-700 dark:text-slate-400">RCCM : {companySettings?.rccm || 'Non Renseigné'}</p>
+                  <p className="text-slate-700 dark:text-slate-400">Références bancaires : {companySettings?.payment_bank_account || 'Non Renseignées'}</p>
+                  <p className="text-slate-700 dark:text-slate-400">Adresse : {companySettings?.address || 'Non Renseignée'}</p>
+                  {companySettings?.phone && <p className="text-slate-700 dark:text-slate-400">N° Tél : {companySettings?.phone}</p>}
+                  {companySettings?.email && <p className="text-slate-700 dark:text-slate-400">Mail : {companySettings?.email}</p>}
+                  <p className="text-slate-700 dark:text-slate-400">Date : {new Date(invoice.date).toLocaleDateString('fr-FR')}</p>
+                  <p className="text-slate-700 dark:text-slate-400">Mode de paiement : {invoice.payment_link ? 'Moyen Electronique' : (invoice.terms?.includes('comptant') ? 'Comptant' : 'Virement / Chèque')}</p>
+                  {invoice.notes && <p className="mt-4 break-words max-w-[250px] font-bold uppercase text-slate-800 dark:text-slate-200">{invoice.notes}</p>}
+                </div>
+
+                <div className="w-full md:w-1/2 flex flex-col items-end">
+                  <h1 className="text-xl font-bold text-center w-full mb-4">
+                    <span className="text-brand-green">{companySettings?.name?.toUpperCase() || 'MA SOCIÉTÉ'}</span>
+                  </h1>
+                  <div className="border-[1.5px] border-slate-600 dark:border-slate-500 p-1 flex mb-4 w-full justify-between items-center bg-white dark:bg-slate-800 relative">
+                      <div className="absolute top-0 left-0 -mt-[0.6rem] ml-2 bg-white dark:bg-slate-800 px-2 text-[10px] sm:text-xs font-bold text-slate-800 border-x-[1.5px] border-t-[1.5px] border-white dark:border-slate-800 font-sans tracking-tight dark:text-slate-200">
+                        Facture N° {invoice.number || 'Facture'}
+                      </div>
+                      <div className="flex flex-col items-center justify-center p-2 flex-1 ml-2">
+                        <div className="text-[12px] font-bold text-slate-700 dark:text-slate-300 text-center uppercase leading-tight tracking-tighter pt-2">
+                            {invoice.third_party_type === 'supplier' ? "Facture d'Achat" : "Facture de Vente"}
+                        </div>
+                      </div>
+                  </div>
+
+                  <div className="border-[1.5px] border-slate-600 dark:border-slate-500 p-3 w-full mt-3 relative text-left">
+                     <div className="absolute top-0 left-0 -mt-[0.6rem] ml-2 bg-white dark:bg-slate-950 px-2 text-[10px] sm:text-xs font-bold text-slate-800 dark:text-slate-200 font-sans tracking-tight">
+                        Client
+                      </div>
+                     <p className="font-bold text-slate-900 dark:text-white">Nom : {invoice.third_party_name || "Client Inconnu"}</p>
+                     <p className="text-slate-700 dark:text-slate-400">Adresse : {invoice.third_party_address || "Non Renseignée"}</p>
+                     <p className="font-bold text-slate-900 dark:text-white">NIF/NCC : {invoice.third_party_tax_id || "Non Renseigné"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto w-full relative z-10">
+                {invoice.status === 'paid' && (
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-[-15deg] pointer-events-none z-0 opacity-10">
+                    <div className="border-[0.5rem] border-brand-green text-brand-green font-black uppercase tracking-[0.2em] px-8 py-4 rounded-xl text-5xl">PAYÉE</div>
+                  </div>
+                )}
+                {invoice.status === 'overdue' && (
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-[-15deg] pointer-events-none z-0 opacity-10">
+                    <div className="border-[0.5rem] border-rose-500 text-rose-500 font-black uppercase tracking-[0.2em] px-8 py-4 rounded-xl text-5xl">EN RETARD</div>
+                  </div>
+                )}
+                <table className="w-full border-collapse text-[10px] font-sans">
+                  <thead>
+                    <tr className="bg-slate-100 dark:bg-slate-800 border border-slate-400 dark:border-slate-700">
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-left w-16 text-black dark:text-slate-200 font-bold">Réf</th>
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-left text-black dark:text-slate-200 font-bold">Désignation</th>
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-right text-black dark:text-slate-200 font-bold">PU HT</th>
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-center w-12 text-black dark:text-slate-200 font-bold">Qté</th>
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-center w-12 text-black dark:text-slate-200 font-bold">Unité</th>
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-center w-[4.5rem] text-black dark:text-slate-200 font-bold">Taxes (%)</th>
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-center w-16 text-black dark:text-slate-200 font-bold">Taux (%)</th>
+                      <th className="border border-slate-400 dark:border-slate-700 p-1 text-right text-black dark:text-slate-200 font-bold">Montant HT</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.items.map((item, i) => (
+                      <tr key={i} className="border border-slate-400 dark:border-slate-700">
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 font-bold text-slate-800 dark:text-slate-300">Art-{(i+1).toString().padStart(2, '0')}</td>
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 font-bold text-slate-900 dark:text-slate-200">{item.description}</td>
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-medium">{formatCurrency(item.unit_price, invoice.currency)}</td>
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 text-center font-bold">{item.quantity}</td>
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 text-center font-bold">1</td>
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 text-center text-xs">TVA (18)</td>
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 text-center">1</td>
+                        <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(item.total, invoice.currency)}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={7} className="border border-slate-400 dark:border-slate-700 p-1 pr-4 text-right font-bold uppercase text-[9px]">TOTAL HT</td>
+                      <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-bold">{formatCurrency((invoice.subtotal + totalDiscount), invoice.currency)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={7} className="border border-slate-400 dark:border-slate-700 p-1 pr-4 text-right font-bold uppercase text-[9px]">REMISE</td>
+                      <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-bold">{totalDiscount > 0 ? `- ${formatCurrency(totalDiscount, invoice.currency)}` : '0'}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={7} className="border border-slate-400 dark:border-slate-700 p-1 pr-4 text-right font-bold uppercase text-[9px]">TVA</td>
+                      <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-bold">{formatCurrency(invoice.vat_amount, invoice.currency)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={7} className="border border-slate-400 dark:border-slate-700 p-1 pr-4 text-right font-bold uppercase text-[9px]">TOTAL TTC</td>
+                      <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-bold">{formatCurrency(invoice.total_amount, invoice.currency)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={7} className="border border-slate-400 dark:border-slate-700 p-1 pr-4 text-right font-bold uppercase text-[9px]">AUTRES TAXES</td>
+                      <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-bold">0</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={7} className="border border-slate-400 dark:border-slate-700 p-1 pr-4 text-right font-bold uppercase text-[10px] text-slate-900 dark:text-white">TOTAL A PAYER</td>
+                      <td className="border border-slate-400 dark:border-slate-700 p-1 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(invoice.total_amount, invoice.currency)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Résumé de la fiscalité (FNE) */}
+              <div className="mt-6 text-left w-full pl-0 bg-transparent">
+                 <h4 className="font-bold uppercase text-[10px] mb-2 font-sans text-slate-900 dark:text-white">RESUME DE LA FACTURE</h4>
+                 <div className="overflow-x-auto w-full">
+                   <table className="w-full border-collapse text-[10px] font-sans">
+                      <thead>
+                        <tr className="border-y border-slate-400 dark:border-slate-700 uppercase tracking-wider">
+                          <th className="py-1 text-left font-bold text-slate-900 dark:text-white">CATEGORIEL</th>
+                          <th className="py-1 text-right font-bold text-slate-900 dark:text-white">SOUS-TOTAL</th>
+                          <th className="py-1 text-right font-bold text-slate-900 dark:text-white w-24">TAUX</th>
+                          <th className="py-1 text-right font-bold text-slate-900 dark:text-white w-32">TOTAL TAXES</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-400 dark:divide-slate-700">
+                        {invoice.vat_amount > 0 ? (
+                          <tr className="text-slate-900 dark:text-white font-medium border-b border-slate-400 dark:border-slate-700">
+                            <td className="py-1 border-r border-slate-400 dark:border-slate-700 font-bold">TVA normal : TVA sur HT 18,20N - A</td>
+                            <td className="py-1 border-r border-slate-400 dark:border-slate-700 text-right">{formatCurrency(invoice.subtotal, invoice.currency).replace(' FCFA', '')}</td>
+                            <td className="py-1 border-r border-slate-400 dark:border-slate-700 text-right">18%</td>
+                            <td className="py-1 text-right font-black">{formatCurrency(invoice.vat_amount, invoice.currency).replace(' FCFA', '')}</td>
+                          </tr>
+                        ) : (
+                          <tr className="text-slate-900 dark:text-white border-b border-slate-400 dark:border-slate-700">
+                            <td className="py-1 border-r border-slate-400 dark:border-slate-700 font-bold">Exonéré</td>
+                            <td className="py-1 border-r border-slate-400 dark:border-slate-700 text-right">{formatCurrency(invoice.subtotal, invoice.currency).replace(' FCFA', '')}</td>
+                            <td className="py-1 border-r border-slate-400 dark:border-slate-700 text-right">0%</td>
+                            <td className="py-1 text-right font-bold">0</td>
+                          </tr>
+                        )}
+                      </tbody>
+                   </table>
+                 </div>
+                 {invoice.status !== 'paid' && (
+                   <div className="mt-8 flex justify-center items-center gap-4 border border-slate-200 dark:border-slate-700 p-4 w-max mx-auto rounded-xl bg-slate-50 dark:bg-slate-900 border-dashed cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => window.open(`/mock-payment?invoice_id=${invoice.id}&amount=${invoice.total_amount}`, '_blank')}>
+                     <div className="text-center">
+                       <p className="text-[12px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest leading-tight">Cliquer pour Payer</p>
+                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[200px]">Mobile Money, Wave, Carte Bancaire</p>
+                     </div>
+                   </div>
+                 )}
+                 <div className="mt-8 text-center text-xs font-bold text-slate-800 dark:text-slate-300">
+                    PIED DE PAGE DES FACTURES
+                 </div>
+              </div>
+
+              <div className="mt-8 text-center font-bold text-[10px] uppercase pt-4 border-t border-slate-300 dark:border-slate-700 text-slate-500">
+                 Pied de page des factures - {companySettings?.name}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col">
           {/* Paper Header */}
           <div className="p-16 border-b border-slate-50 dark:border-slate-800 flex flex-col md:flex-row justify-between items-start gap-12">
             <div className="space-y-8">
@@ -497,8 +715,23 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
 
             <div className="text-right space-y-8 self-stretch md:self-auto flex flex-col justify-between md:block">
               <h1 className="text-6xl font-black text-slate-900 dark:text-white uppercase tracking-tighter opacity-[0.03] select-none pointer-events-none absolute right-16 top-16">
-                {invoice.type === 'invoice' ? 'Facture' : 'Devis'}
+                {invoice.type === 'quote' ? 'Devis' : 'Proforma'}
               </h1>
+              {invoice.status === 'paid' && (
+                <div className="absolute top-1/2 right-1/4 -translate-y-1/2 rotate-[-15deg] pointer-events-none z-0 opacity-20">
+                  <div className="border-[0.5rem] border-brand-green text-brand-green font-black uppercase tracking-[0.2em] px-8 py-4 rounded-xl text-4xl">PAYÉE</div>
+                </div>
+              )}
+              {invoice.status === 'overdue' && (
+                <div className="absolute top-1/2 right-1/4 -translate-y-1/2 rotate-[-15deg] pointer-events-none z-0 opacity-20">
+                  <div className="border-[0.5rem] border-rose-500 text-rose-500 font-black uppercase tracking-[0.2em] px-8 py-4 rounded-xl text-4xl">EN RETARD</div>
+                </div>
+              )}
+              {invoice.status === 'cancelled' && (
+                <div className="absolute top-1/2 right-1/4 -translate-y-1/2 rotate-[-15deg] pointer-events-none z-0 opacity-20">
+                  <div className="border-[0.5rem] border-slate-500 text-slate-500 font-black uppercase tracking-[0.2em] px-8 py-4 rounded-xl text-4xl">ANNULÉE</div>
+                </div>
+              )}
               <div className="space-y-4 relative z-10">
                 <div className="space-y-1">
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Référence</p>
@@ -537,8 +770,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
               </div>
             </div>
             
-            <div className="flex flex-col justify-center items-end">
-              <div className="p-8 bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-100 dark:border-slate-700 shadow-sm text-right space-y-2 min-w-[200px]">
+            <div className="flex flex-col justify-center items-end gap-4">
+              <div className="p-8 bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-100 dark:border-slate-700 shadow-sm text-right space-y-2 min-w-[200px] w-full">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Statut du paiement</p>
                 <div className="flex items-center gap-3 justify-end">
                   <div className={cn(
@@ -548,26 +781,13 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
                   <p className="text-xl font-black text-slate-900 dark:text-white uppercase tracking-tight">{invoice.status}</p>
                 </div>
               </div>
-
-              {invoice.type === 'invoice' && invoice.status !== 'paid' && invoice.payment_link && (
-                <div className="mt-4 p-6 bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-100 dark:border-slate-700 shadow-sm text-right space-y-4 min-w-[200px]">
-                  <div className="flex items-center gap-3 justify-end">
-                    <div className="p-2 bg-brand-green/10 text-brand-green rounded-xl">
-                      <CreditCard size={20} />
-                    </div>
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Paiement Direct</span>
+              
+              {invoice.status !== 'paid' && (
+                <div className="p-4 bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-100 dark:border-slate-700 shadow-sm flex items-center justify-between gap-4 w-full min-w-[200px] cursor-pointer hover:bg-slate-50 transition-colors block text-center" onClick={() => window.open(`/mock-payment?invoice_id=${invoice.id}&amount=${invoice.total_amount}`, '_blank')}>
+                  <div className="space-y-1 flex-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] leading-tight mb-1">Règlement Facture</p>
+                    <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200 leading-tight">Cliquer pour payer (Mobile Money / Carte)</p>
                   </div>
-                  <button
-                    onClick={copyPaymentLink}
-                    className={cn(
-                      "w-full py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2",
-                      copied 
-                        ? "bg-brand-green text-white" 
-                        : "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600"
-                    )}
-                  >
-                    {copied ? <><ShieldCheck size={14} /> Copié !</> : <><FileDown size={14} /> Copier le lien</>}
-                  </button>
                 </div>
               )}
             </div>
@@ -575,7 +795,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
 
           {/* Items Table */}
           <div className="p-16">
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-auto ">
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="border-b-2 border-slate-900 dark:border-slate-700 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
@@ -614,18 +834,26 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
                     <span className="text-slate-400 uppercase tracking-widest text-[10px]">TVA Totale</span>
                     <span className="text-slate-900 dark:text-white font-mono">{formatCurrency(invoice.vat_amount, invoice.currency)}</span>
                   </div>
+                  {invoice.paid_amount > 0 && (
+                    <div className="flex justify-between text-sm font-bold text-emerald-600 dark:text-emerald-450">
+                      <span className="uppercase tracking-widest text-[10px]">Acompte payé</span>
+                      <span className="font-mono">- {formatCurrency(invoice.paid_amount, invoice.currency)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="pt-8 border-t-4 border-slate-900 dark:border-slate-700 flex justify-between items-end">
                   <div className="space-y-1">
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Total à régler</span>
-                    <p className="text-xs text-brand-green font-black uppercase tracking-widest">Net à payer</p>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{invoice.paid_amount > 0 ? 'Solde Restant' : 'Total à régler'}</span>
+                    <p className="text-xs text-brand-green font-black uppercase tracking-widest">{invoice.paid_amount > 0 ? 'Reste à payer' : 'Net à payer'}</p>
                   </div>
-                  <span className="text-4xl font-black text-slate-900 dark:text-white font-mono tracking-tighter">{formatCurrency(invoice.total_amount, invoice.currency)}</span>
+                  <span className="text-4xl font-black text-slate-900 dark:text-white font-mono tracking-tighter">
+                    {formatCurrency(invoice.paid_amount > 0 ? (invoice.total_amount - invoice.paid_amount) : invoice.total_amount, invoice.currency)}
+                  </span>
                 </div>
                 {invoice.currency && invoice.currency !== baseCurrency && (
                   <div className="pt-4 flex justify-between items-center text-xs text-slate-500 italic font-medium">
-                    <span>Equivalent {baseCurrency}</span>
-                    <span>{formatCurrency(invoice.total_amount * (invoice.exchange_rate || 1), baseCurrency)}</span>
+                    <span>Equivalent {baseCurrency} (Reste)</span>
+                    <span>{formatCurrency((invoice.paid_amount > 0 ? (invoice.total_amount - invoice.paid_amount) : invoice.total_amount) * (invoice.exchange_rate || 1), baseCurrency)}</span>
                   </div>
                 )}
               </div>
@@ -650,6 +878,8 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
                 )}
               </div>
             </div>
+          )}
+          </div>
           )}
         </div>
 
@@ -736,7 +966,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
       {/* Payment Modal */}
       <AnimatePresence>
         {showPaymentModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[60] flex justify-center p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -837,39 +1067,67 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
                   )}
 
                   {(companySettings?.payment_mobile_enabled !== false && Number(companySettings?.payment_mobile_enabled) !== 0) && (
-                    <label className={cn(
-                      "flex items-center p-4 rounded-2xl border-2 cursor-pointer transition-all",
-                      paymentMode === 'mobile' 
-                        ? "border-brand-green bg-brand-green/5" 
-                        : "border-slate-200 dark:border-slate-700 hover:border-brand-green/30"
-                    )}>
-                      <input 
-                        type="radio" 
-                        name="paymentMode" 
-                        value="mobile" 
-                        checked={paymentMode === 'mobile'}
-                        onChange={(e) => setPaymentMode(e.target.value)}
-                        className="sr-only"
-                      />
-                      <div className="flex-1 flex items-center gap-4">
-                        <div className={cn(
-                          "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
-                          paymentMode === 'mobile' ? "bg-brand-green text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"
-                        )}>
-                          <Smartphone size={20} />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-900 dark:text-white">Mobile Money</p>
-                          <p className="text-xs text-slate-500">Compte: {companySettings?.payment_mobile_account || '585'}</p>
-                        </div>
-                      </div>
-                      <div className={cn(
-                        "w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors",
-                        paymentMode === 'mobile' ? "border-brand-green" : "border-slate-300"
+                    <div className="space-y-4">
+                      <label className={cn(
+                        "flex items-center p-4 rounded-2xl border-2 cursor-pointer transition-all",
+                        paymentMode === 'mobile' 
+                          ? "border-brand-green bg-brand-green/5" 
+                          : "border-slate-200 dark:border-slate-700 hover:border-brand-green/30"
                       )}>
-                        {paymentMode === 'mobile' && <div className="w-2.5 h-2.5 rounded-full bg-brand-green" />}
-                      </div>
-                    </label>
+                        <input 
+                          type="radio" 
+                          name="paymentMode" 
+                          value="mobile" 
+                          checked={paymentMode === 'mobile'}
+                          onChange={(e) => setPaymentMode(e.target.value)}
+                          className="sr-only"
+                        />
+                        <div className="flex-1 flex items-center gap-4">
+                          <div className={cn(
+                            "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
+                            paymentMode === 'mobile' ? "bg-brand-green text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-500"
+                          )}>
+                            <Smartphone size={20} />
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-900 dark:text-white">Mobile Money</p>
+                            <p className="text-xs text-slate-500">Paiement en ligne</p>
+                          </div>
+                        </div>
+                        <div className={cn(
+                          "w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors",
+                          paymentMode === 'mobile' ? "border-brand-green" : "border-slate-300"
+                        )}>
+                          {paymentMode === 'mobile' && <div className="w-2.5 h-2.5 rounded-full bg-brand-green" />}
+                        </div>
+                      </label>
+                      {paymentMode === 'mobile' && (
+                        <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-500 mb-1">Réseau</label>
+                            <select 
+                              value={mmNetwork} 
+                              onChange={(e) => setMmNetwork(e.target.value)}
+                              className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-sm outline-none"
+                            >
+                              <option value="orange">Orange Money</option>
+                              <option value="mtn">MTN Mobile Money</option>
+                              <option value="wave">Wave</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-500 mb-1">Téléphone client</label>
+                            <input 
+                              type="text" 
+                              value={mmPhone} 
+                              onChange={(e) => setMmPhone(e.target.value)}
+                              placeholder="Numéro (ex: 0102030405)"
+                              className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-sm outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 

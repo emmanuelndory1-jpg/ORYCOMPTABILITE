@@ -247,7 +247,8 @@ export function TaxManager() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 p-1 rounded-xl w-fit">
+      <div className="w-full min-w-0 overflow-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-hide">
+      <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 p-1 rounded-xl w-max sm:w-fit min-w-full sm:min-w-0">
         {[
           { id: 'dashboard', label: 'Vue d\'ensemble', icon: TrendingUp },
           { id: 'vat', label: 'TVA', icon: Percent },
@@ -270,6 +271,7 @@ export function TaxManager() {
             {tab.label}
           </button>
         ))}
+      </div>
       </div>
 
       {loading ? (

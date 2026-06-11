@@ -9,22 +9,24 @@ interface LogoProps {
 export function Logo({ className = "h-12", showText = true, src }: LogoProps) {
   const [imgError, setImgError] = React.useState(false);
 
+  React.useEffect(() => {
+    setImgError(false);
+  }, [src]);
+
   if (src && !imgError) {
     return (
-      <div className={`flex flex-col items-center justify-center ${className}`}>
-        <img 
-          src={src} 
-          alt="Company Logo" 
-          className="max-w-full max-h-full object-contain"
-          onError={() => setImgError(true)}
-        />
-      </div>
+      <img 
+        src={src} 
+        alt="Company Logo" 
+        className={`object-contain block ${className}`}
+        onError={() => setImgError(true)}
+      />
     );
   }
 
   return (
     <div className={`flex flex-col items-center justify-center ${className}`}>
-      <svg viewBox="0 0 400 300" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+      <svg viewBox="0 0 400 400" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="#C5A059" />

@@ -13,6 +13,7 @@ interface CompanySettings {
   fiscal_id: string;
   tax_regime: string;
   vat_regime: string;
+  taxes_enabled?: boolean | number;
   currency: string;
   address: string;
   city: string;
@@ -38,6 +39,8 @@ interface CompanySettings {
   vat_rate?: number;
   logo_url?: string | null;
 }
+
+import { triggerCloudBackup } from '@/lib/backup';
 
 export function CompanySettingsManager() {
   const { isActive, refreshModules } = useModules();
@@ -140,6 +143,7 @@ export function CompanySettingsManager() {
       if (res.ok) {
         setSuccess("Paramètres mis à jour avec succès.");
         await refreshCompanySettings();
+        triggerCloudBackup().catch(e => console.error("Backup failed", e));
         setTimeout(() => setSuccess(null), 3000);
       } else {
         const data = await res.json();
@@ -154,9 +158,24 @@ export function CompanySettingsManager() {
   };
 
   const processImageFile = (file: File) => {
+    setError(null);
+    const validExtensions = ['.jpg', '.jpeg', '.png'];
+    const validMimeTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+    const extension = '.' + file.name.split('.').pop()?.toLowerCase();
+    
+    const isValidFormat = validMimeTypes.includes(file.type) || validExtensions.includes(extension);
+
+    if (!isValidFormat) {
+      setError("Format de fichier non pris en charge. Veuillez choisir un fichier au format .jpg, .jpeg ou .png.");
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => setError(null), 8000);
+      return;
+    }
+
     if (file.size > 1024 * 1024 * 5) {
-      setError("Le logo ne doit pas dépasser 5 Mo.");
-      setTimeout(() => setError(null), 3000);
+      setError("Le fichier dépasse la taille maximale autorisée. Le logo ne doit pas dépasser 5 Mo.");
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => setError(null), 8000);
       return;
     }
     
@@ -206,7 +225,7 @@ export function CompanySettingsManager() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
+    if (file) {
       processImageFile(file);
     }
   };
@@ -272,11 +291,18 @@ export function CompanySettingsManager() {
                       <UploadCloud size={24} />
                     </div>
                     <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Cliquer ou glisser</p>
-                    <p className="text-xs text-slate-400 mt-1">PNG, JPG (Max 1Mo)</p>
+                    <p className="text-xs text-slate-400 mt-1">PNG, JPG, JPEG (Max 5Mo)</p>
                   </div>
                 )}
-                <input ref={logoInputRef} type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
               </div>
+              <input 
+                ref={logoInputRef} 
+                type="file" 
+                className="hidden" 
+                accept=".jpg,.jpeg,.png,image/jpeg,image/png" 
+                onClick={(e) => e.stopPropagation()} 
+                onChange={handleLogoUpload} 
+              />
               {settings.logo_url && (
                 <button 
                   type="button" 
@@ -700,6 +726,56 @@ export function CompanySettingsManager() {
                 )}
              </div>
           </div>
+
+          {/* Danger Zone */}
+          <div className="bg-red-50 dark:bg-red-900/10 rounded-2xl border border-red-200 dark:border-red-900/30 shadow-sm overflow-hidden mt-6">
+             <div className="bg-red-100/50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-900/30 p-5 flex items-center gap-3">
+               <AlertCircle className="text-red-600 dark:text-red-500" size={20} />
+               <h2 className="font-bold text-red-900 dark:text-red-400">Zone de Danger</h2>
+             </div>
+             <div className="p-6">
+                <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+                  <div>
+                    <h4 className="text-lg font-bold text-red-900 dark:text-red-400 mb-1">Réinitialiser l'application</h4>
+                    <p className="text-sm text-red-700 dark:text-red-300/70 max-w-xl">
+                      Cette action est irréversible. Elle supprimera toutes les factures, écritures comptables, tiers, et tous les paramètres de votre entreprise actuelle. Vous serez redirigé vers l'écran de création d'une nouvelle entreprise.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (window.confirm("⚠️ Êtes-vous ABSOLUMENT certain de vouloir supprimer toutes vos données ?\n\nToutes vos factures, données comptables et paramètres seront effacés de manière permanente.\n\nTapez OK pour continuer.") !== true) {
+                        return;
+                      }
+                      
+                      const finalConfirm = window.prompt("Pour confirmer la suppression, veuillez taper 'SUPPRIMER' dans le champ ci-dessous :");
+                      if (finalConfirm !== 'SUPPRIMER') {
+                        alert("Réinitialisation annulée.");
+                        return;
+                      }
+
+                      try {
+                        const res = await apiFetch('/api/company/reset', { method: 'POST' });
+                        if (res.ok) {
+                          alert("L'application a été réinitialisée avec succès.");
+                          window.location.reload();
+                        } else {
+                          alert("Erreur lors de la réinitialisation.");
+                        }
+                      } catch (err) {
+                        console.error(err);
+                        alert("Erreur lors de la réinitialisation.");
+                      }
+                    }}
+                    className="whitespace-nowrap px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-lg shadow-red-500/25 transition-all flex items-center gap-2 active:scale-95"
+                  >
+                    <AlertCircle size={18} />
+                    Supprimer les données
+                  </button>
+                </div>
+             </div>
+          </div>
+
         </div>
       </div>
     </div>

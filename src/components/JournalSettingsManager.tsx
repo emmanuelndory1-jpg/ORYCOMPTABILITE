@@ -205,8 +205,8 @@ export function JournalSettingsManager() {
       </div>
 
       {isEditing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 p-8">
+        <div className="fixed inset-0 z-50 flex justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 p-8 flex flex-col">
             <div className="flex items-center justify-between mb-8">
               <h4 className="text-xl font-black italic uppercase tracking-tight text-slate-900 dark:text-white italic">
                 {editingId ? 'Modifier Journal' : 'Nouveau Journal'}

@@ -158,11 +158,23 @@ interface InvoiceMatching {
   userId: string;
 }
 
+import { onAuthStateChanged } from 'firebase/auth';
+
 export function ProcureToPay() {
   const { t } = useLanguage();
   const { formatCurrency } = useCurrency();
   const { confirm, alert: dialogAlert } = useDialog();
   const { user } = useAuth();
+  
+  const [firebaseReady, setFirebaseReady] = useState(false);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (fbUser) => {
+      setFirebaseReady(!!fbUser);
+    });
+    return unsub;
+  }, []);
+
   const [activeStep, setActiveStep] = useState<P2PStep>('requisition');
   const [loading, setLoading] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
@@ -281,7 +293,7 @@ export function ProcureToPay() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !firebaseReady) return;
     
     const reqQ = query(collection(db, 'p2p_requisitions'), where('userId', '==', user.uid), orderBy('date', 'desc'));
     const unsubReq = onSnapshot(reqQ, (snapshot) => {
@@ -848,7 +860,7 @@ export function ProcureToPay() {
               {requisitions.length === 0 ? (
                 <div className="text-center py-12 text-slate-500">Aucune demande trouvée.</div>
               ) : (
-                <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <div className="w-full min-w-0 overflow-auto -mx-4 sm:mx-0">
                   <table className="w-full min-w-[600px]">
                     <thead>
                       <tr className="text-left border-b border-slate-100 dark:border-white/5">
@@ -1124,7 +1136,7 @@ export function ProcureToPay() {
               {receipts.length === 0 ? (
                 <div className="text-center py-12 text-slate-500">Aucun bon de réception.</div>
               ) : (
-                <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <div className="w-full min-w-0 overflow-auto -mx-4 sm:mx-0">
                   <table className="w-full min-w-[700px]">
                     <thead>
                       <tr className="text-left border-b border-slate-100 dark:border-white/5">
@@ -1384,7 +1396,7 @@ export function ProcureToPay() {
               {payments.length === 0 ? (
                 <div className="text-center py-12 text-slate-500">Aucun paiement enregistré.</div>
               ) : (
-                <div className="overflow-x-auto -mx-4 sm:mx-0">
+                <div className="w-full min-w-0 overflow-auto -mx-4 sm:mx-0">
                   <table className="w-full min-w-[700px]">
                     <thead>
                       <tr className="text-left border-b border-slate-100 dark:border-white/5">
@@ -1527,7 +1539,7 @@ export function ProcureToPay() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex justify-center p-4 bg-slate-900/50 backdrop-blur-sm items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1726,7 +1738,7 @@ export function ProcureToPay() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex justify-center p-4 bg-slate-900/50 backdrop-blur-sm items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1798,7 +1810,7 @@ export function ProcureToPay() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-6"
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex justify-center p-6 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4"
           >
             <div className="bg-white dark:bg-slate-900 rounded-[3rem] p-10 max-w-sm w-full shadow-2xl text-center border border-slate-200 dark:border-white/10">
               <div className="relative w-24 h-24 mx-auto mb-8">

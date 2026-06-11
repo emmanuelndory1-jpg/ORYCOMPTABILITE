@@ -48,6 +48,51 @@ body {
   color: #f1f5f9; /* Slate 100 */
 }
 
+@media (min-width: 1600px) {
+  html {
+    font-size: 105%;
+  }
+}
+
+@media (min-width: 1920px) {
+  html {
+    font-size: 115%;
+  }
+}
+
+@media (min-width: 2560px) {
+  html {
+    font-size: 130%;
+  }
+}
+
+/* Custom Scrollbar styled nicely */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.3); /* Slate 400 with opacity */
+  border-radius: 10px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.4); /* Slate 600 with opacity */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(156, 163, 175, 0.6);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.7);
+}
+
 /* Atmospheric Background - Improved Symbiosis */
 .atmospheric-bg {
   position: fixed;
@@ -87,6 +132,18 @@ body {
 @keyframes float {
   0% { transform: translate(0, 0) rotate(0deg); }
   100% { transform: translate(5%, 5%) rotate(5deg); }
+}
+
+/* Grid Background Utility */
+.bg-grid-slate-100 {
+  background-size: 40px 40px;
+  background-image: linear-gradient(to right, rgba(241, 245, 249, 0.1) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(241, 245, 249, 0.1) 1px, transparent 1px);
+}
+.dark .bg-grid-white {
+  background-size: 40px 40px;
+  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
 }
 
 /* Custom Scrollbar */
@@ -154,6 +211,16 @@ body {
   box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.4);
 }
 
+::selection {
+  background-color: var(--color-brand-green-light);
+  color: white;
+}
+
+.dark ::selection {
+  background-color: var(--color-brand-green-light);
+  color: #fff;
+}
+
 /* Glow Effect */
 .glow-on-hover::after {
   content: '';
@@ -177,7 +244,7 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Smooth transitions for all theme-affected elements */
 *, *::before, *::after {
-  transition-property: background-color, border-color, color, fill, stroke, transform, box-shadow;
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 0.2s;
 }

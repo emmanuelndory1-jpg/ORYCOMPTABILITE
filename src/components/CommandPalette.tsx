@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Calculator, Wallet, FileText, BarChart3, Users, Settings, Plus, BookOpen, ShieldCheck, ChevronRight, ArrowDown, CornerDownLeft, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { useModules } from '@/context/ModuleContext';
 import { cn } from '@/lib/utils';
 import { apiFetch } from '@/lib/api';
@@ -29,6 +29,9 @@ export function CommandPalette() {
     { title: 'Immobilisations', icon: <Settings size={16} />, path: '/assets', module: 'assets', category: 'Pages' },
     { title: 'Conformité OHADA', icon: <ShieldCheck size={16} />, path: '/compliance', category: 'Pages' },
     { title: 'Paie & RH', icon: <Users size={16} />, path: '/payroll', module: 'payroll', category: 'Pages' },
+    { title: 'Tableau de bord RH', icon: <BarChart3 size={16} />, path: '/hr-dashboard', module: 'payroll', category: 'Pages' },
+    { title: 'Messagerie & Factures', icon: <FileText size={16} />, path: '/messaging', category: 'Pages' },
+    { title: 'Tâches & Échéances', icon: <BookOpen size={16} />, path: '/tasks', category: 'Pages' },
     { title: 'Déclaration TVA', icon: <FileText size={16} />, path: '/vat', module: 'vat', category: 'Pages' },
     { title: 'Piste d\'Audit', icon: <ShieldCheck size={16} />, path: '/audit', category: 'Pages' },
     { title: 'Auditeur IA Financier', icon: <Search size={16} />, path: '/financial-auditor', category: 'Pages' },
@@ -73,10 +76,36 @@ export function CommandPalette() {
     return () => clearTimeout(timer);
   }, [query]);
 
+  const [recentEntries, setRecentEntries] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      // Fetch recent entries
+      apiFetch('/api/transactions?limit=5')
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            const formatted = data.slice(0, 5).map(tx => ({
+              id: `recent_${tx.id}`,
+              type: 'transaction',
+              title: `${tx.description} (ID: ${tx.id})`,
+              subtitle: `Récemment ajouté - Date: ${tx.date} - Montant: ${tx.total_amount || 0} FCFA`,
+              link: `/journal?search=${tx.id}`,
+              resultType: 'data',
+              category: 'Écritures Récentes'
+            }));
+            setRecentEntries(formatted);
+          }
+        })
+        .catch(console.error);
+    }
+  }, [isOpen]);
+
   // Combine actions and search results
   const combinedResults = [
     ...filteredActions.map(a => ({ ...a, resultType: 'action' })),
-    ...searchResults.map(r => ({ ...r, resultType: 'data', category: 'Données' }))
+    ...(query.length === 0 ? recentEntries : []),
+    ...searchResults.map(r => ({ ...r, resultType: 'data', category: 'Résultats' }))
   ];
 
   const categories = Array.from(new Set(combinedResults.map(a => a.category)));
@@ -110,11 +139,15 @@ export function CommandPalette() {
       navigate(result.path || result.link);
     } else if (result.action) {
       if (result.action === 'new_transaction') {
-        navigate('/journal');
+        navigate('/journal', { state: { action: 'new' } });
       } else if (result.action === 'new_party') {
-        navigate('/third-parties');
+        navigate('/third-parties', { state: { action: 'new' } });
+      } else if (result.action === 'new_item') {
+        navigate('/invoicing', { state: { action: 'new' } });
       } else if (result.action === 'audit_now') {
         navigate('/compliance');
+      } else if (result.action === 'change_currency') {
+        navigate('/settings', { state: { action: 'currency' } });
       }
     }
     setIsOpen(false);
@@ -157,7 +190,7 @@ export function CommandPalette() {
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[10vh] px-4 backdrop-blur-md bg-slate-950/40">
+      <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[10vh] px-4 backdrop-blur-md bg-slate-950/40 pt-16 sm:pt-24 pb-24 overflow-y-auto">
         <div 
           className="fixed inset-0 -z-10" 
           onClick={() => setIsOpen(false)}
@@ -175,7 +208,7 @@ export function CommandPalette() {
             <input 
               ref={inputRef}
               type="text" 
-              placeholder="Rechercher une page, un compte, un client ou une transaction..."
+              placeholder="Rechercher une page, compte, client, date (AAAA-MM-JJ) ou ID de transaction..."
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -196,7 +229,7 @@ export function CommandPalette() {
                   <Search className="text-slate-300" size={32} />
                 </div>
                 <p className="text-slate-500 font-medium">Aucun résultat pour "{query}"</p>
-                <p className="text-xs text-slate-400 mt-2">Essayez de rechercher un code compte (ex: 411) ou un nom de client.</p>
+                <p className="text-xs text-slate-400 mt-2">Essayez de rechercher un code compte (ex: 411), un nom de client ou un ID de transaction.</p>
               </div>
             ) : (
               <div className="space-y-6">

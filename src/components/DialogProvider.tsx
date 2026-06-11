@@ -96,8 +96,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
 
       {/* Confirm Modal */}
       {confirmState?.isOpen && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800">
+        <div className="fixed inset-0 z-[110] flex justify-center bg-black/50 backdrop-blur-sm p-4 items-start overflow-y-auto pt-16 sm:pt-24 pb-24 px-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100 dark:border-slate-800 flex flex-col">
             <div className="p-6 text-center">
               <div className="w-12 h-12 rounded-full bg-brand-gold/10 dark:bg-brand-gold/20 text-brand-gold mx-auto flex items-center justify-center mb-4">
                 <AlertCircle size={24} />

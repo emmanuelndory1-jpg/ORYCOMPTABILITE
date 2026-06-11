@@ -41,6 +41,10 @@ export const DEFAULT_OPERATION_TYPES = [
   { id: 'charges_a_payer', label: 'Charges à payer', icon: '🕒' },
   { id: 'charges_constatees_avance', label: 'Charges constatées d\'avance', icon: '⏳' },
   { id: 'produits_constates_avance', label: 'Produits constatés d\'avance', icon: '📦' },
+  { id: 'constitution_capital', label: 'Constitution de Capital', icon: '🏛️' },
+  { id: 'augmentation_capital', label: 'Augmentation de Capital', icon: '📈' },
+  { id: 'appel_capital', label: 'Appel de Capital', icon: '📞' },
+  { id: 'liberation_capital', label: 'Libération Capital', icon: '✅' },
 ];
 
 export const calculateEntries = (
@@ -228,6 +232,40 @@ export const calculateEntries = (
       newEntries = [
         { account_code: companySettings?.payment_bank_account || '521', debit: ttc, credit: 0 },
         { account_code: accountOverride || '162', debit: 0, credit: ttc }
+      ];
+      break;
+
+    case 'constitution_capital':
+      newEntries = [
+        { account_code: '109', debit: ht, credit: 0, description: 'Capital souscrit non appelé' },
+        { account_code: '1011', debit: 0, credit: ht, description: 'Capital souscrit non appelé' }
+      ];
+      break;
+
+    case 'augmentation_capital':
+      newEntries = [
+        { account_code: '4612', debit: ht, credit: 0, description: 'Augmentation Capital - Associés, versements reçus' },
+        { account_code: '1012', debit: 0, credit: ht, description: 'Augmentation Capital - Capital appelé non versé' }
+      ];
+      break;
+
+    case 'appel_capital':
+      // D 4612 / C 109 and D 1011 / C 1012
+      newEntries = [
+        { account_code: '4612', debit: ht, credit: 0, description: 'Capital appelé' },
+        { account_code: '109', debit: 0, credit: ht, description: 'Capital appelé' },
+        { account_code: '1011', debit: ht, credit: 0, description: 'Reclassement capital appelé non versé' },
+        { account_code: '1012', debit: 0, credit: ht, description: 'Reclassement capital appelé non versé' }
+      ];
+      break;
+
+    case 'liberation_capital':
+      // D 521 / C 4612 and D 1012 / C 1013
+      newEntries = [
+        { account_code: getPaymentAccount(), debit: ttc, credit: 0, description: 'Libération' },
+        { account_code: '4612', debit: 0, credit: ttc, description: 'Libération' },
+        { account_code: '1012', debit: ttc, credit: 0, description: 'Reclassement capital versé' },
+        { account_code: '1013', debit: 0, credit: ttc, description: 'Reclassement capital versé' }
       ];
       break;
   }

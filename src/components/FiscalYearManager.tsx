@@ -15,6 +15,8 @@ interface FiscalYear {
   is_active: number; // 0 or 1
 }
 
+import { triggerCloudBackup } from '@/lib/backup';
+
 export function FiscalYearManager() {
   const { alert: dialogAlert } = useDialog();
   const { confirm, alert } = useDialog();
@@ -90,6 +92,7 @@ export function FiscalYearManager() {
     
     try {
       await apiFetch(`/api/fiscal-years/${id}/close`, { method: 'PUT' });
+      triggerCloudBackup().catch(e => console.error("Cloud backup failed", e));
       fetchYears();
     } catch (err) {
       console.error(err);
@@ -199,7 +202,7 @@ export function FiscalYearManager() {
       )}
 
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden transition-colors">
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-auto ">
           <table className="w-full text-left">
             <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 text-xs uppercase font-semibold">
               <tr>
