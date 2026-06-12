@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Plus, Search, Filter, AlertTriangle, ArrowUpRight, ArrowDownRight, Edit2, Trash2, TrendingDown, TrendingUp, Save, X } from 'lucide-react';
+import { Package, Plus, Search, Filter, AlertTriangle, ArrowUpRight, ArrowDownRight, Edit2, Trash2, TrendingDown, TrendingUp, Save, X, History, Calculator } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { apiFetch } from '@/lib/api';
 import { useDialog } from './DialogProvider';
@@ -9,6 +9,7 @@ import { useCurrency } from '@/hooks/useCurrency';
 export default function InventoryManager() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [accountingData, setAccountingData] = useState({ stock: 0, variation: 0 });
   const { alert: dialogAlert, confirm } = useDialog();
   const { formatCurrency } = useCurrency();
 
@@ -17,6 +18,8 @@ export default function InventoryManager() {
   const [formData, setFormData] = useState({ reference: '', name: '', category: 'Général', unit: 'unité', min_quantity: 0, quantity: 0, unit_price: 0 });
 
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [itemHistory, setItemHistory] = useState<any[]>([]);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [movementData, setMovementData] = useState({ type: 'in', quantity: 0, date: new Date().toISOString().split('T')[0], reason: '' });
 
@@ -25,7 +28,15 @@ export default function InventoryManager() {
 
   useEffect(() => {
     fetchInventory();
+    fetchAccounting();
   }, []);
+
+  const fetchAccounting = async () => {
+    try {
+      const res = await apiFetch('/api/inventory/accounting');
+      if (res.ok) setAccountingData(await res.json());
+    } catch(e) { }
+  };
 
   const fetchInventory = async () => {
     setLoading(true);
@@ -59,6 +70,7 @@ export default function InventoryManager() {
         dialogAlert(editingItem ? "Article modifié" : "Article ajouté avec succès", "success");
         setIsModalOpen(false);
         fetchInventory();
+        fetchAccounting();
       } else {
         const error = await res.json();
         dialogAlert(error.error || "Erreur lors de l'enregistrement", "error");
@@ -77,6 +89,7 @@ export default function InventoryManager() {
       if (res.ok) {
         dialogAlert("Article supprimé", "success");
         fetchInventory();
+        fetchAccounting();
       } else {
         dialogAlert("Erreur lors de la suppression", "error");
       }
@@ -99,6 +112,7 @@ export default function InventoryManager() {
         dialogAlert("Mouvement enregistré", "success");
         setIsMovementModalOpen(false);
         fetchInventory();
+        fetchAccounting();
       } else {
         const err = await res.json();
         dialogAlert(err.error || "Erreur lors du mouvement", "error");
@@ -128,6 +142,18 @@ export default function InventoryManager() {
     setIsMovementModalOpen(true);
   };
 
+  const openHistoryModal = async (item: any) => {
+    setSelectedItem(item);
+    setItemHistory([]);
+    setIsHistoryModalOpen(true);
+    try {
+      const res = await apiFetch(`/api/inventory/${item.id}/movements`);
+      if (res.ok) {
+        setItemHistory(await res.json());
+      }
+    } catch(e) {}
+  };
+
   const categories = [...new Set(items.map(i => i.category || 'Général'))];
   
   const filteredItems = items.filter(i => {
@@ -155,7 +181,7 @@ export default function InventoryManager() {
         </button>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 p-6 shadow-sm">
             <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-2">Total Articles</h3>
             <div className="text-3xl font-black text-slate-900 dark:text-white">{items.length}</div>
@@ -164,8 +190,14 @@ export default function InventoryManager() {
             <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-2">Valorisation Globale</h3>
             <div className="text-3xl font-black text-brand-green">{formatCurrency(totalValue)}</div>
          </div>
+         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 p-6 shadow-sm">
+            <h3 className="text-[10px] sm:text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Variation de Stock (603)</h3>
+            <div className={cn("text-2xl sm:text-3xl font-black", accountingData.variation > 0 ? "text-amber-500" : "text-brand-green")}>
+              {accountingData.variation > 0 ? "+" : ""}{formatCurrency(accountingData.variation)}
+            </div>
+         </div>
          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-rose-100 dark:border-rose-900/30 p-6 shadow-sm">
-            <h3 className="text-sm font-black text-rose-400 uppercase tracking-widest mb-2 flex flex-center gap-2"><AlertTriangle size={16}/> Stock Critique</h3>
+            <h3 className="text-[10px] sm:text-xs font-black text-rose-400 uppercase tracking-widest mb-2 flex items-center gap-2"><AlertTriangle size={16}/> Stock Critique</h3>
             <div className="text-3xl font-black text-rose-500">{lowStockItems.length}</div>
          </div>
       </div>
@@ -245,6 +277,9 @@ export default function InventoryManager() {
                          </button>
                          <button onClick={() => openMovementModal(item, 'out')} className="p-2 hover:bg-amber-500/10 text-amber-500 rounded-xl transition-colors tooltip-trigger" title="Sortie de stock">
                            <ArrowUpRight size={16} />
+                         </button>
+                         <button onClick={() => openHistoryModal(item)} className="p-2 hover:bg-blue-500/10 text-blue-500 rounded-xl transition-colors tooltip-trigger" title="Liaison Comptable & Historique">
+                           <History size={16} />
                          </button>
                          <div className="w-px h-4 bg-slate-200 dark:bg-slate-700 mx-1" />
                          <button onClick={() => openEditModal(item)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl transition-colors">
@@ -378,7 +413,51 @@ export default function InventoryManager() {
           </div>
         )}
       </AnimatePresence>
+    
+      <AnimatePresence>
+        {isHistoryModalOpen && selectedItem && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm" onClick={() => setIsHistoryModalOpen(false)} />
+            <motion.div initial={{opacity:0, scale:0.95}} animate={{opacity:1, scale:1}} exit={{opacity:0, scale:0.95}} className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col mx-4 max-h-[85vh]">
+               <div className="p-6 border-b border-slate-50 dark:border-slate-800 bg-blue-50/50 dark:bg-blue-900/20">
+                  <div className="flex justify-between items-start">
+                     <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-blue-600 dark:text-blue-400">
+                           <Calculator size={18}/>
+                           Liaison Comptable & Historique
+                        </div>
+                        <h4 className="text-xl font-bold text-slate-900 dark:text-white mt-2">{selectedItem.name} ({selectedItem.reference})</h4>
+                        <div className="text-xs text-slate-500 font-mono">Historique des écritures comptables liées au compte 311.</div>
+                     </div>
+                     <button onClick={() => setIsHistoryModalOpen(false)} className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-xl text-slate-400 transition-colors"><X size={20}/></button>
+                  </div>
+               </div>
+               <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+                  {itemHistory.length === 0 ? (
+                    <div className="text-center py-10 text-slate-500 dark:text-slate-400">Aucun mouvement comptable trouvé.</div>
+                  ) : (
+                    <div className="space-y-4">
+                      {itemHistory.map((h, i) => (
+                        <div key={i} className="p-4 border border-slate-100 dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-800/30 flex justify-between items-center">
+                           <div className="space-y-1">
+                              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400"><span className="text-slate-600 dark:text-slate-300">{h.date}</span> • {h.reference}</div>
+                              <div className="text-sm font-bold text-slate-900 dark:text-slate-100">{h.description}</div>
+                           </div>
+                           <div className="text-right">
+                              <div className={cn("text-lg font-black", h.reference.includes('IN') ? "text-brand-green" : "text-amber-500")}>
+                                {h.reference.includes('OUT') ? '-' : '+'}{formatCurrency(h.amount)}
+                              </div>
+                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }
-

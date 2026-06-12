@@ -139,6 +139,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
         { id: 'recurring', label: t('nav.recurring'), icon: Repeat },
         { id: 'ledger', label: t('nav.ledger'), icon: FileText },
         { id: 'trial-balance', label: t('nav.trial_balance'), icon: Calculator },
+        { id: 'opening-balances', label: 'Bilan d\'Ouverture', icon: Calculator },
       ]
     },
     {
@@ -169,7 +170,6 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
       label: t('group.revision') || 'Révision',
       items: [
         { id: 'compliance', label: t('nav.compliance'), icon: ShieldCheck },
-        { id: 'financial-auditor', label: t('nav.financial_auditor') || 'Audit Financier IA', icon: Sparkles },
         { id: 'audit', label: 'Journal d\'Audit', icon: History, module: 'audit' },
         { id: 'accounts', label: t('nav.accounts'), icon: Calculator },
       ]
@@ -181,9 +181,6 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
         { id: 'messaging', label: 'Messagerie & Factures', icon: MessageSquareText },
         { id: 'tasks', label: 'Calendrier Général', icon: Calendar },
         { id: 'team', label: t('nav.team'), icon: Users },
-        { id: 'assistant', label: t('nav.assistant'), icon: MessageSquareText },
-        { id: 'tax-assistant', label: t('nav.tax_assistant') || 'Audit Fiscal Expert', icon: ShieldCheck },
-        { id: 'ai-training', label: 'Entraînement IA', icon: Brain },
         { id: 'settings', label: t('nav.settings'), icon: Settings },
       ]
     }

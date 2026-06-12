@@ -613,13 +613,7 @@ export function Dashboard() {
           </div>
           
           <div className="flex flex-wrap gap-4 animate-in fade-in slide-in-from-right-4 duration-1000 delay-500">
-            <button 
-              onClick={generateFullReport}
-              className="group bg-brand-gold text-white px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-brand-gold-light transition-all duration-500 shadow-2xl shadow-brand-gold/30 flex items-center gap-3 active:scale-95"
-            >
-              <Sparkles size={18} className="group-hover:rotate-12 transition-transform duration-500" />
-              <span>Rapport IA Exécutif</span>
-            </button>
+            
             <button 
               onClick={() => setIsCustomizerOpen(true)}
               className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-8 py-5 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-slate-50 dark:hover:bg-slate-800 transition-all duration-500 shadow-sm flex items-center gap-4 active:scale-95"
@@ -722,92 +716,6 @@ export function Dashboard() {
           </form>
         </motion.div>
       </div>
-
-      {/* AI Strategic Advisor - Futuristic Bento Head */}
-      {isVisible('analysis') && (
-          <motion.div 
-          style={{ order: getGroupOrder(['analysis']) }}
-          initial={{ opacity: 0, y: 30 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.2 }}
-          className={cn("bg-slate-900 border border-white/5 rounded-[3rem] p-10 text-white relative overflow-hidden group shadow-2xl shadow-brand-green/10", maxClasses('analysis'))}>
-            <MaximizeButton id="analysis" />
-          {/* Glowing Ambient Effects */}
-          <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-brand-green/10 rounded-full blur-[140px] -mr-64 -mt-64 animate-pulse duration-[8000ms]" />
-          <div className="absolute bottom-0 left-0 w-80 h-80 bg-brand-green/5 rounded-full blur-[100px] -ml-40 -mb-40" />
-          
-          <div className="relative z-10 flex flex-col lg:flex-row gap-12 items-center">
-            <div className="relative shrink-0">
-              <div className="w-28 h-28 bg-white/5 backdrop-blur-3xl rounded-[2.5rem] flex items-center justify-center border border-white/10 group-hover:scale-105 group-hover:rotate-6 transition-all duration-700 shadow-2xl">
-                <Brain className="text-brand-green" size={56} />
-              </div>
-              <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-brand-green rounded-full flex items-center justify-center shadow-lg border-4 border-slate-900 text-slate-950">
-                <Sparkles size={20} />
-              </div>
-            </div>
-
-            <div className="flex-1 text-center lg:text-left space-y-6">
-              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4">
-                <span className="px-4 py-1.5 bg-brand-green/10 text-brand-green text-[10px] font-black uppercase tracking-[0.2em] rounded-full border border-brand-green/20 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-brand-green animate-pulse" />
-                  Ory Stratégie PRO v4.2
-                </span>
-                <span className="text-slate-500 text-[10px] font-black uppercase tracking-widest hidden sm:inline">Analyse Systémique OHADA</span>
-              </div>
-              
-              <div className="space-y-4">
-                <h2 className="text-4xl sm:text-6xl font-black tracking-tighter font-display leading-[0.85] uppercase">
-                  Analyse <span className="text-brand-green italic">Prédictive</span>
-                </h2>
-                <div className="relative">
-                  <p className={cn(
-                    "text-xl sm:text-2xl text-slate-300 font-medium leading-relaxed max-w-4xl border-l-[3px] border-brand-green pl-8 py-2",
-                    loadingInsight && "animate-pulse"
-                  )}>
-                    {loadingInsight ? "Ory déchiffre vos flux..." : (aiInsight || "Je constate une augmentation de 14% de vos marges opérationnelles ce mois-ci. Attention : vos créances clients à plus de 60 jours dépassent le seuil critique de 5 millions FCFA.")}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-col gap-4 shrink-0 w-full lg:w-auto">
-              <button 
-                onClick={() => navigate('/financial-auditor')}
-                className="px-10 py-5 bg-brand-green hover:bg-brand-green-light text-slate-950 font-black rounded-[1.5rem] transition-all shadow-xl shadow-brand-green/20 text-xs uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 group/btn"
-              >
-                <Target size={22} className="group-hover/btn:scale-110 transition-transform" />
-                Audit Strategique
-              </button>
-              <button 
-                onClick={() => navigate('/assistant')}
-                className="px-10 py-5 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-black rounded-[1.5rem] transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-3 backdrop-blur-md active:scale-95"
-              >
-                <MessageSquareText size={22} />
-                Conseil IA
-              </button>
-            </div>
-          </div>
-
-          <div className="relative z-10 mt-12 pt-10 border-t border-white/5 grid grid-cols-2 lg:grid-cols-4 gap-8">
-            {[
-              { label: 'Fiabilité Analyse', value: '98.8%', icon: ShieldCheck, color: 'text-brand-green' },
-              { label: 'Flux Prévus', value: `+${(stats.turnover * 0.15 / 1000).toFixed(1)}M FCFA`, icon: TrendingUp, color: 'text-indigo-400' },
-              { label: 'Indice de Risque', value: 'Modéré', icon: AlertCircle, color: 'text-amber-400' },
-              { label: 'Cash Runway', value: `${cashRunway} Mois`, icon: HistoryIcon, color: 'text-brand-gold' }
-            ].map((metric, i) => (
-              <div key={i} className="flex items-center gap-4 group/metric">
-                <div className={cn("w-12 h-12 rounded-2xl bg-white/5 border border-white/5 group-hover/metric:border-white/20 transition-colors flex items-center justify-center", metric.color)}>
-                  <metric.icon size={24} />
-                </div>
-                <div>
-                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-1">{metric.label}</div>
-                  <div className="text-lg font-black text-white font-display">{metric.value}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </motion.div>
-      )}
 
       {/* Financial Summary Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" style={{ order: getGroupOrder(['summary', 'investment']) }}>
@@ -2284,84 +2192,6 @@ export function Dashboard() {
         onReset={resetWidgets}
         onReorder={handleReorderWidgets}
       />
-
-      <AnimatePresence>
-        {isReportModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }} 
-              animate={{ opacity: 1 }} 
-              exit={{ opacity: 0 }}
-              onClick={() => setIsReportModalOpen(false)}
-              className="absolute inset-0 bg-slate-900/80 backdrop-blur-xl" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-4xl max-h-[85vh] bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800"
-            >
-              <div className="flex items-center justify-between p-6 sm:p-8 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 backdrop-blur-md sticky top-0 z-10">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-brand-gold/20 rounded-2xl flex items-center justify-center text-brand-gold border border-brand-gold/30">
-                    <Sparkles size={24} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 font-display">Rapport IA Exécutif</h2>
-                    <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">Analyse Financière Globale</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setIsReportModalOpen(false)}
-                  className="p-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
-                >
-                  <Search size={20} className="hidden" /> {/* Temp */}
-                  <span className="font-bold relative -top-[1px]">✕</span>
-                </button>
-              </div>
-
-              <div className="p-6 sm:p-8 overflow-y-auto min-h-[300px] flex-1">
-                {generatingReport ? (
-                  <div className="flex flex-col items-center justify-center h-full space-y-6">
-                    <div className="relative w-20 h-20">
-                      <div className="absolute inset-0 border-4 border-slate-100 dark:border-slate-800 rounded-full"></div>
-                      <div className="absolute inset-0 border-4 border-brand-gold rounded-full border-t-transparent animate-spin"></div>
-                      <Sparkles size={24} className="absolute inset-0 m-auto text-brand-gold animate-pulse" />
-                    </div>
-                    <div className="text-center">
-                      <p className="text-lg font-black text-slate-900 dark:text-slate-100 mb-2">Génération en cours</p>
-                      <p className="text-sm font-medium text-slate-500 max-w-sm">Le Directeur Financier Virtuel analyse vos données, ratios et KPIs pour préparer la synthèse...</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="prose prose-slate dark:prose-invert max-w-none prose-headings:font-display md:prose-lg prose-p:leading-relaxed prose-li:font-medium prose-strong:text-brand-gold">
-                    <Markdown>{reportContent || "Impossible de charger le rapport."}</Markdown>
-                  </div>
-                )}
-              </div>
-
-              {!generatingReport && (
-                <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex justify-end">
-                  <button 
-                    onClick={() => {
-                       const element = document.createElement("a");
-                       const file = new Blob([reportContent || ""], {type: 'text/markdown'});
-                       element.href = URL.createObjectURL(file);
-                       element.download = `rapport_executif_${new Date().toISOString().split('T')[0]}.md`;
-                       document.body.appendChild(element);
-                       element.click();
-                    }}
-                    className="flex items-center gap-2 px-6 py-3 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl text-sm font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
-                  >
-                    <Download size={18} />
-                    Télécharger (.MD)
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
       <AnimatePresence>
         {isPdfConfigOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

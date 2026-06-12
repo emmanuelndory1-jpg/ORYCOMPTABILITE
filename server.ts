@@ -4600,19 +4600,20 @@ app.get("/api/journal/export", (req, res) => {
 // Create a transaction
 app.post("/api/transactions", validate(schemas.transactionSchema), (req, res) => {
   const { 
-    date, due_date, description, reference, entries, currency, exchange_rate, 
+    date, due_date, description, reference, status, entries, currency, exchange_rate, 
     third_party_id, occasional_name, notes, document_url,
     operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
   } = req.body;
   
   const finalRef = reference || generateTransactionReference();
+  const txStatus = status || 'validated';
   
   const insertTx = db.prepare(`
     INSERT INTO transactions (
       date, due_date, description, reference, status, currency, exchange_rate, 
       third_party_id, occasional_name, notes, document_url,
       operation_type, amount_ht, vat_rate, payment_mode, treasury_account, creation_mode
-    ) VALUES (?, ?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertEntry = db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)');
   const checkAccount = db.prepare('SELECT 1 FROM accounts WHERE code = ?');
@@ -4620,7 +4621,7 @@ app.post("/api/transactions", validate(schemas.transactionSchema), (req, res) =>
 
   const createTransaction = db.transaction(() => {
     const info = insertTx.run(
-      date, due_date || null, description, finalRef, currency || 'FCFA', exchange_rate || 1, 
+      date, due_date || null, description, finalRef, txStatus, currency || 'FCFA', exchange_rate || 1, 
       third_party_id || null, occasional_name || null, notes || null, document_url || null,
       operation_type || null, amount_ht || null, vat_rate || null, payment_mode || null, 
       treasury_account || null, creation_mode || 'expert'
@@ -4718,10 +4719,10 @@ app.put("/api/transactions/:id", validate(schemas.transactionSchema), (req, res)
   const insertAccount = db.prepare('INSERT INTO accounts (code, name, class_code, type) VALUES (?, ?, ?, ?)');
 
   const updateTransaction = db.transaction(() => {
-    // Check if transaction is locked
-    const tx = db.prepare("SELECT is_locked FROM transactions WHERE id = ?").get(id) as any;
-    if (tx?.is_locked) {
-      throw new Error("Cette transaction est verrouillée et ne peut plus être modifiée.");
+    // Check if transaction is locked or validated
+    const tx = db.prepare("SELECT is_locked, status FROM transactions WHERE id = ?").get(id) as any;
+    if (tx?.is_locked || tx?.status === 'validated') {
+      throw new Error("Cette transaction est verrouillée ou validée et ne peut plus être modifiée. Veuillez procéder à une contre-passation.");
     }
 
     updateTx.run(
@@ -4780,9 +4781,9 @@ app.delete("/api/transactions/:id", (req, res) => {
   const { id } = req.params;
   const { permanent } = req.query;
   
-  const tx = db.prepare("SELECT is_locked FROM transactions WHERE id = ?").get(id) as any;
-  if (tx?.is_locked) {
-    return res.status(403).json({ error: "Cette transaction est verrouillée et ne peut plus être supprimée." });
+  const tx = db.prepare("SELECT is_locked, status FROM transactions WHERE id = ?").get(id) as any;
+  if (tx?.is_locked || tx?.status === 'validated') {
+    return res.status(403).json({ error: "Cette transaction est verrouillée ou validée et ne peut plus être supprimée. Veuillez procéder à une contre-passation." });
   }
   
   const softDeleteTx = db.prepare("UPDATE transactions SET deleted_at = ? WHERE id = ?");
@@ -4813,6 +4814,59 @@ app.delete("/api/transactions/:id", (req, res) => {
     } catch (err) {
       handleApiError(res, err);
     }
+  }
+});
+
+// Reverse a transaction (Contre-passation)
+app.post("/api/transactions/:id/reverse", (req, res) => {
+  const { id } = req.params;
+  try {
+    const originalTx = db.prepare("SELECT * FROM transactions WHERE id = ?").get(id) as any;
+    if (!originalTx) return res.status(404).json({ error: "Transaction non trouvée" });
+
+    // Ensure it's validated, otherwise we could just delete it
+    if (originalTx.status !== 'validated') {
+      return res.status(400).json({ error: "Seules les transactions validées peuvent être contre-passées." });
+    }
+
+    const originalEntries = db.prepare("SELECT * FROM journal_entries WHERE transaction_id = ?").all(id) as any[];
+
+    // Insert new transaction
+    const date = new Date().toISOString().slice(0, 10);
+    const newTxId = db.prepare(`
+      INSERT INTO transactions (
+        date, due_date, description, reference, notes, third_party_id, occasional_name,
+        currency, exchange_rate, operation_type, amount_ht, vat_rate, payment_mode,
+        treasury_account, creation_mode, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      date, originalTx.due_date, `Extourne: ${originalTx.description}`, `REV-${originalTx.id}`,
+      `Contre-passation de la transaction ${id}`, originalTx.third_party_id, originalTx.occasional_name,
+      originalTx.currency, originalTx.exchange_rate, originalTx.operation_type, originalTx.amount_ht,
+      originalTx.vat_rate, originalTx.payment_mode, originalTx.treasury_account, 'expert', 'validated'
+    ).lastInsertRowid;
+
+    // Insert swapped entries
+    const insertEntry = db.prepare('INSERT INTO journal_entries (transaction_id, account_code, debit, credit, description) VALUES (?, ?, ?, ?, ?)');
+    for (const entry of originalEntries) {
+      insertEntry.run(
+        newTxId,
+        entry.account_code,
+        entry.credit, // Debit becomes Credit
+        entry.debit,  // Credit becomes Debit
+        `Annulation: ${entry.description || ''}`.trim()
+      );
+    }
+    
+    // Unlink any invoice or mark it void? 
+    // Usually you'd issue a credit note. If an invoice exists, we might need a credit note. 
+    // But for the pure accounting side, we just want the entries reversed.
+
+    logAction(req.user?.name || 'Admin', 'REVERSE', 'Transaction', newTxId, { original_id: id });
+    res.json({ success: true, id: newTxId });
+
+  } catch (err) {
+    handleApiError(res, err);
   }
 });
 
@@ -4964,8 +5018,14 @@ app.post("/api/transactions/bulk-delete", (req, res) => {
     const deleteAsset = db.prepare("DELETE FROM assets WHERE transaction_id = ?");
     const deleteEntries = db.prepare("DELETE FROM journal_entries WHERE transaction_id = ?");
     const deleteTx = db.prepare("DELETE FROM transactions WHERE id = ?");
+    const checkStatus = db.prepare("SELECT is_locked, status FROM transactions WHERE id = ?");
 
     for (const id of idsToDelete) {
+      const tx = checkStatus.get(id) as any;
+      if (tx?.is_locked || tx?.status === 'validated') {
+        throw new Error(`La transaction ${id} est verrouillée ou validée et ne peut plus être supprimée.`);
+      }
+
       // 1. Check if it's a payroll validation transaction
       const validationPeriod = checkPayrollValidation.get(id);
       if (validationPeriod) {
@@ -9293,6 +9353,39 @@ app.post('/api/mobile-money/reconcile', async (req, res) => {
 });
 
 // --- Inventory API ---
+app.get("/api/inventory/accounting", (req, res) => {
+  try {
+    const marchAccount = db.prepare("SELECT SUM(debit) - SUM(credit) as balance FROM journal_entries WHERE account_code = '311'").get() as any;
+    const varAccount = db.prepare("SELECT SUM(debit) - SUM(credit) as balance FROM journal_entries WHERE account_code = '6031'").get() as any;
+    res.json({ stock: marchAccount.balance || 0, variation: varAccount.balance || 0 });
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
+app.get("/api/inventory/:id/movements", (req, res) => {
+  try {
+    const { id } = req.params;
+    const item = db.prepare("SELECT reference FROM inventory_items WHERE id = ?").get(id) as any;
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    
+    const initLike = `STK-INIT-${item.reference}`;
+    const refLike = `STK-%-${item.reference}-%`;
+    
+    const transactions = db.prepare(`
+      SELECT t.date, t.description, t.reference, ABS(je.debit - je.credit) as amount 
+      FROM transactions t 
+      JOIN journal_entries je ON t.id = je.transaction_id 
+      WHERE (t.reference LIKE ? OR t.reference = ?) AND je.account_code = '311' 
+      ORDER BY t.date DESC, t.id DESC
+    `).all(refLike, initLike);
+    
+    res.json(transactions);
+  } catch (err) {
+    handleApiError(res, err);
+  }
+});
+
 app.get("/api/inventory", (req, res) => {
   try {
     const items = db.prepare("SELECT * FROM inventory_items ORDER BY name ASC").all();

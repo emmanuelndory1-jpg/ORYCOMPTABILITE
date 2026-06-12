@@ -86,10 +86,8 @@ export function MobileNav({ onMenuClick }: MobileNavProps) {
         { id: 'documents', path: '/documents', label: 'Documents', icon: Folder },
         { id: 'messaging', path: '/messaging', label: 'Messages', icon: FileText },
         { id: 'tasks', path: '/tasks', label: 'Tâches', icon: CheckSquare },
-        { id: 'settings', path: '/settings', label: 'Paramètres', icon: Settings2 },
-        { id: 'financial-auditor', path: '/financial-auditor', label: 'Audit IA', icon: Sparkles },
-        { id: 'tax-assistant', path: '/tax-assistant', label: 'Fisc IA', icon: ShieldCheck },
         { id: 'audit', path: '/audit', label: 'Logs', icon: History, module: 'audit' },
+        { id: 'settings', path: '/settings', label: 'Paramètres', icon: Settings2 },
       ]
     },
   ];

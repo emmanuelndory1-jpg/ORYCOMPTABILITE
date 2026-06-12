@@ -66,10 +66,10 @@ body {
   }
 }
 
-/* Custom Scrollbar styled nicely */
+/* Improved custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -77,20 +77,20 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(156, 163, 175, 0.3); /* Slate 400 with opacity */
+  background: rgba(156, 163, 175, 0.4); /* slate-400 with opacity */
   border-radius: 10px;
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: rgba(71, 85, 105, 0.4); /* Slate 600 with opacity */
+  background: rgba(71, 85, 105, 0.5); /* slate-600 with opacity */
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(156, 163, 175, 0.6);
+  background: rgba(156, 163, 175, 0.7);
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(71, 85, 105, 0.7);
+  background: rgba(71, 85, 105, 0.8);
 }
 
 /* Atmospheric Background - Improved Symbiosis */
@@ -146,28 +146,6 @@ body {
                     linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1; /* slate-300 */
-  border-radius: 10px;
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: #334155; /* slate-700 */
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8; /* slate-400 */
-}
 
 /* Glassmorphism utility */
 .glass {

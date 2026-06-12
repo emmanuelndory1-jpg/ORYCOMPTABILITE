@@ -4,9 +4,7 @@ import { Routes, Route, useLocation, Navigate, Outlet, useNavigate, Link } from 
 import { Sidebar } from './components/Sidebar';
 import { Logo } from './components/Logo';
 import { Dashboard } from './components/Dashboard';
-import { FloatingAdvisor as FloatingAssistant } from './components/FloatingAdvisor';
 import { Accounts } from './components/Accounts';
-import { ExpertAdvisor as Assistant } from './components/ExpertAdvisor';
 import { Journal } from './components/Journal';
 import { Treasury } from './components/Treasury';
 import { MobileMoneyManager } from './components/MobileMoneyManager';
@@ -22,6 +20,7 @@ import { Settings } from './components/Settings';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import { GeneralLedger } from './components/GeneralLedger';
 import { TrialBalance } from './components/TrialBalance';
+import { OpeningBalances } from './components/OpeningBalances';
 import { TaxManager } from './components/TaxManager';
 import { TaxSummaryReport } from './components/TaxSummaryReport';
 import { PayrollManager } from './components/PayrollManager';
@@ -37,14 +36,11 @@ import { LoginPage } from './components/LoginPage';
 import { RegisterPage } from './components/RegisterPage';
 import { TermsPage } from './components/TermsPage';
 import { PrivacyPage } from './components/PrivacyPage';
-import { TaxAssistant } from './components/TaxAssistant';
 import { BankReconciliation } from './components/BankReconciliation';
 import { TeamManager } from './components/TeamManager';
-import { FinancialAuditor } from './components/FinancialAuditor';
 import { DocumentManager } from './components/DocumentManager';
 import { TasksManager } from './components/TasksManager';
 import { MessagingManager } from './components/MessagingManager';
-import { AiTrainingDashboard } from './components/AiTrainingDashboard';
 import InventoryManager from './components/InventoryManager';
 import { Header } from './components/Header';
 import { CommandPalette } from './components/CommandPalette';
@@ -59,7 +55,7 @@ import { ModuleProvider } from './context/ModuleContext';
 import { DialogProvider } from './components/DialogProvider';
 import { apiFetch } from './lib/api';
 import { cn } from './lib/utils';
-import { Loader2, Menu, Moon, Sun, WifiOff } from 'lucide-react';
+import { Loader2, Menu, Moon, Sun, WifiOff, LayoutDashboard } from 'lucide-react';
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -265,7 +261,6 @@ function DashboardLayout() {
           </div>
         </div>
 
-        <FloatingAssistant />
         <CommandPalette />
         <Scratchpad />
         <QuickActionFAB onAction={(action) => {
@@ -273,8 +268,7 @@ function DashboardLayout() {
             navigate('/journal');
           } else if (action === 'scan') {
             navigate('/journal', { state: { action: 'scan' } });
-          } else if (action === 'voice') {
-            navigate('/assistant');
+          
           } else if (action === 'invoice') {
             navigate('/invoicing', { state: { action: 'new' } });
           } else if (action === 'payroll') {
@@ -377,6 +371,7 @@ export default function App() {
                   <Route path="journal" element={<JournalWrapper />} />
                   <Route path="ledger" element={<GeneralLedger />} />
                   <Route path="trial-balance" element={<TrialBalance />} />
+                  <Route path="opening-balances" element={<OpeningBalances />} />
                   <Route path="financials" element={<FinancialStatements />} />
                   <Route path="custom-reports" element={<CustomReports />} />
                   <Route path="compliance" element={<ComplianceAudit />} />
@@ -400,13 +395,19 @@ export default function App() {
                   <Route path="budgets" element={<BudgetManager />} />
                   <Route path="invoicing" element={<InvoicingManager />} />
                   <Route path="audit" element={<AuditLogViewer />} />
-                  <Route path="assistant" element={<Assistant />} />
-                  <Route path="tax-assistant" element={<TaxAssistant />} />
-                  <Route path="financial-auditor" element={<FinancialAuditor />} />
+                  
+                  
+                  
                   <Route path="team" element={<TeamManager />} />
-                  <Route path="ai-training" element={<AiTrainingDashboard />} />
+                  
                   <Route path="settings" element={<Settings />} />
-                  <Route path="*" element={<div className="p-8 text-center text-slate-500 dark:text-slate-400">Module en cours de développement...</div>} />
+                  <Route path="*" element={<div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-in fade-in zoom-in-95 duration-500">
+                    <div className="w-24 h-24 mb-6 rounded-3xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shadow-inner">
+                      <LayoutDashboard className="text-slate-400" size={40} />
+                    </div>
+                    <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-3">Module en cours de développement</h2>
+                    <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">Cette fonctionnalité est actuellement en cours de création. Elle sera bientôt disponible dans une prochaine mise à jour.</p>
+                  </div>} />
                 </Route>
               </Routes>
             </FiscalYearProvider>
