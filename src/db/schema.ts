@@ -110,6 +110,7 @@ export const company_settings = pgTable('company_settings', {
   taxRegime: text('tax_regime'),
   vatRegime: text('vat_regime'),
   vatRate: real('vat_rate'),
+  taxDeadlines: text('tax_deadlines'),
   taxesEnabled: boolean('taxes_enabled'),
   currency: text('currency'),
   address: text('address'),

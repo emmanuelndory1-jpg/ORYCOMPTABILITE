@@ -346,7 +346,7 @@ export function FinancialStatements() {
 
     const finalY = ((doc as any).lastAutoTable?.finalY || nextY) + 20;
     import('../lib/exportUtils').then(utils => {
-      utils.addPDFSignature(doc, finalY);
+      utils.addOHADAComplianceSignature(doc, finalY, companySettings?.manager_name || "L'Administrateur");
       utils.addPDFFooter(doc);
       doc.save(`Etats_Financiers_${activeTab}_${new Date().toISOString().split('T')[0]}.pdf`);
     });
@@ -476,241 +476,254 @@ export function FinancialStatements() {
       </div>
 
       {/* Content */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden">
+      <div className="mt-8 transition-all duration-500">
         {activeTab === 'income' ? (
-          <div className="p-4 sm:p-8 max-w-3xl mx-auto">
-            <div className="text-center mb-6 sm:mb-8">
-              <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white uppercase">Compte de Résultat</h2>
-              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">Exercice 2026</p>
+          <div className="premium-card p-6 md:p-10 max-w-4xl mx-auto my-6 bg-white dark:bg-slate-900/80">
+            <div className="text-center mb-8 sm:mb-12">
+              <h2 className="text-2xl sm:text-3xl font-display font-black text-slate-900 dark:text-white uppercase tracking-tight">Compte de Résultat</h2>
+              <p className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mt-2">{activeYear?.name ? `Exercice ${activeYear.name}` : 'Exercice en cours'}</p>
             </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr>
+                    <th className="py-4 px-4 text-[10px] font-black uppercase tracking-[0.15em] text-slate-400 w-2/3 border-b-2 border-slate-100 dark:border-slate-800">Libellé</th>
+                    <th className="py-4 px-4 text-[10px] font-black uppercase tracking-[0.15em] text-slate-400 w-1/3 text-right border-b-2 border-slate-100 dark:border-slate-800">Montant</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm">
+                  <tr className="bg-slate-50/50 dark:bg-slate-800/30">
+                    <td colSpan={2} className="py-3 px-4 font-bold text-brand-green uppercase text-[10px] tracking-wider border-b border-brand-green/20">Produits (Classe 7)</td>
+                  </tr>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-3 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Ventes de marchandises (701)</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.sales)}</td>
+                  </tr>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-3 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Prestations de services (706)</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.services)}</td>
+                  </tr>
+                  <tr className="bg-slate-50 dark:bg-slate-800/50 font-bold border-b-2 border-slate-200 dark:border-slate-700">
+                    <td className="py-4 px-4 text-slate-900 dark:text-white text-[13px] uppercase tracking-wider">Total Produits</td>
+                    <td className="py-4 px-4 text-right font-mono text-brand-green">{formatCurrency(data.incomeStatement.revenue)}</td>
+                  </tr>
 
-            <div className="space-y-6">
-              {/* Produits */}
-              <div>
-                <h3 className="text-xs sm:text-sm font-bold text-brand-green uppercase mb-3 border-b border-brand-green/20 pb-1">Produits (Classe 7)</h3>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-xs sm:text-sm">
-                    <span className="text-slate-600 dark:text-slate-400">Ventes de marchandises (701)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.sales)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs sm:text-sm">
-                    <span className="text-slate-600 dark:text-slate-400">Prestations de services (706)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.services)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm sm:text-base font-bold pt-2 border-t border-slate-100 dark:border-slate-800">
-                    <span className="text-slate-900 dark:text-white">Total Produits</span>
-                    <span className="text-brand-green">{formatCurrency(data.incomeStatement.revenue)}</span>
-                  </div>
-                </div>
-              </div>
+                  <tr><td colSpan={2} className="h-6"></td></tr>
 
-              {/* Charges */}
-              <div>
-                <h3 className="text-xs sm:text-sm font-bold text-rose-600 uppercase mb-3 border-b border-rose-100 dark:border-rose-900/30 pb-1">Charges (Classe 6)</h3>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-xs sm:text-sm">
-                    <span className="text-slate-600 dark:text-slate-400">Achats (60)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.purchases)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs sm:text-sm">
-                    <span className="text-slate-600 dark:text-slate-400">Services extérieurs (62/63)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.otherExpenses)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs sm:text-sm">
-                    <span className="text-slate-600 dark:text-slate-400">Impôts et taxes (64)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.taxes)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs sm:text-sm">
-                    <span className="text-slate-600 dark:text-slate-400">Charges de personnel (66)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.personnel)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs sm:text-sm">
-                    <span className="text-slate-600 dark:text-slate-400">Dotations aux amortissements (68)</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.depreciation)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm sm:text-base font-bold pt-2 border-t border-slate-100 dark:border-slate-800">
-                    <span className="text-slate-900 dark:text-white">Total Charges</span>
-                    <span className="text-rose-600">{formatCurrency(data.incomeStatement.expenses)}</span>
-                  </div>
-                </div>
-              </div>
+                  <tr className="bg-slate-50/50 dark:bg-slate-800/30">
+                    <td colSpan={2} className="py-3 px-4 font-bold text-rose-600 uppercase text-[10px] tracking-wider border-b border-rose-100 dark:border-rose-900/30">Charges (Classe 6)</td>
+                  </tr>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-3 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Achats (60)</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.purchases)}</td>
+                  </tr>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-3 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Services extérieurs (62/63)</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.otherExpenses)}</td>
+                  </tr>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-3 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Impôts et taxes (64)</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.taxes)}</td>
+                  </tr>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-3 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Charges de personnel (66)</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.personnel)}</td>
+                  </tr>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-3 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Dotations aux amortissements (68)</td>
+                    <td className="py-3 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.incomeStatement.details.depreciation)}</td>
+                  </tr>
+                  <tr className="bg-slate-50 dark:bg-slate-800/50 font-bold border-b-2 border-slate-200 dark:border-slate-700">
+                    <td className="py-4 px-4 text-slate-900 dark:text-white text-[13px] uppercase tracking-wider">Total Charges</td>
+                    <td className="py-4 px-4 text-right font-mono text-rose-600">{formatCurrency(data.incomeStatement.expenses)}</td>
+                  </tr>
 
-              {/* Résultat */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700 mt-6 sm:mt-8">
-                <div className="flex justify-between items-center">
-                  <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">RÉSULTAT NET</span>
-                  <span className={cn(
-                    "text-lg sm:text-xl font-bold font-mono",
-                    data.incomeStatement.netIncome >= 0 ? "text-brand-green" : "text-rose-600"
+                  <tr><td colSpan={2} className="h-8"></td></tr>
+
+                  <tr className={cn(
+                    "font-black text-lg sm:text-xl",
+                    data.incomeStatement.netIncome >= 0 ? "bg-brand-green/10 text-brand-green-dark dark:text-brand-green" : "bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400"
                   )}>
-                    {formatCurrency(data.incomeStatement.netIncome)}
-                  </span>
-                </div>
-              </div>
+                    <td className="py-5 px-4 rounded-l-2xl uppercase tracking-wider">RÉSULTAT NET</td>
+                    <td className="py-5 px-4 text-right font-mono rounded-r-2xl">{formatCurrency(data.incomeStatement.netIncome)}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         ) : activeTab === 'balance' ? (
-          <div className="p-4 sm:p-8 max-w-4xl mx-auto">
-            <div className="text-center mb-6 sm:mb-8">
-              <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white uppercase">Bilan</h2>
-              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">Au {new Date().toLocaleDateString()}</p>
+          <div className="premium-card p-6 md:p-10 max-w-5xl mx-auto my-6 bg-white dark:bg-slate-900/80">
+            <div className="text-center mb-8 sm:mb-12">
+              <h2 className="text-2xl sm:text-3xl font-display font-black text-slate-900 dark:text-white uppercase tracking-tight">Bilan</h2>
+              <p className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mt-2">Au {new Date().toLocaleDateString()}</p>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
-              {/* Actif */}
-              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                <div className="bg-brand-green/10 dark:bg-brand-green/20 px-4 py-3 border-b border-brand-green/20 dark:border-brand-green/30 font-bold text-brand-green-dark dark:text-brand-green text-center uppercase text-sm">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-start">
+              {/* ACTIF */}
+              <div className="shadow-lg shadow-slate-200/50 dark:shadow-none rounded-2xl">
+                <div className="bg-slate-900 text-white dark:bg-white dark:text-slate-900 py-3.5 px-4 rounded-t-2xl font-black uppercase tracking-widest text-[13px] text-center">
                   Actif
                 </div>
-                <div className="p-4 space-y-4">
-                  <div>
-                    <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 dark:text-slate-500 uppercase mb-2">Actif Immobilisé</h4>
-                    <div className="flex justify-between text-xs sm:text-sm">
-                      <span className="text-slate-600 dark:text-slate-400">Immobilisations (Cl. 2)</span>
-                      <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.assets.fixed)}</span>
-                    </div>
-                  </div>
-                  <div>
-                    <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 dark:text-slate-500 uppercase mb-2">Actif Circulant</h4>
-                    <div className="flex justify-between text-xs sm:text-sm">
-                      <span className="text-slate-600 dark:text-slate-400">Stocks & Créances (Cl. 3/4)</span>
-                      <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.assets.current)}</span>
-                    </div>
-                  </div>
-                  <div>
-                    <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 dark:text-slate-500 uppercase mb-2">Trésorerie Actif</h4>
-                    <div className="flex justify-between text-xs sm:text-sm">
-                      <span className="text-slate-600 dark:text-slate-400">Disponibilités (Cl. 5)</span>
-                      <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.assets.cash)}</span>
-                    </div>
-                  </div>
-                  <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex justify-between font-bold text-slate-900 dark:text-white text-sm sm:text-base">
-                    <span>TOTAL ACTIF</span>
-                    <span>{formatCurrency(data.balanceSheet.assets.total)}</span>
-                  </div>
-                </div>
+                <table className="w-full text-left border-collapse border border-slate-200 dark:border-slate-700 rounded-b-2xl border-t-0 bg-white dark:bg-slate-900/50">
+                  <tbody className="text-sm">
+                    <tr className="bg-slate-50/50 dark:bg-slate-800/30">
+                      <td colSpan={2} className="py-3 px-4 font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-700">Actif Immobilisé</td>
+                    </tr>
+                    <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                      <td className="py-4 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Immobilisations (Cl. 2)</td>
+                      <td className="py-4 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.assets.fixed)}</td>
+                    </tr>
+
+                    <tr className="bg-slate-50/50 dark:bg-slate-800/30">
+                      <td colSpan={2} className="py-3 px-4 font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-700">Actif Circulant</td>
+                    </tr>
+                    <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                      <td className="py-4 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Stocks & Créances (Cl. 3/4)</td>
+                      <td className="py-4 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.assets.current)}</td>
+                    </tr>
+
+                    <tr className="bg-slate-50/50 dark:bg-slate-800/30">
+                      <td colSpan={2} className="py-3 px-4 font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-700">Trésorerie Actif</td>
+                    </tr>
+                    <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                      <td className="py-4 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Disponibilités (Cl. 5)</td>
+                      <td className="py-4 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.assets.cash)}</td>
+                    </tr>
+
+                    <tr className="bg-slate-100 dark:bg-slate-800 font-black text-[15px] border-t-2 border-slate-200 dark:border-slate-700">
+                      <td className="py-5 px-4 text-slate-900 dark:text-white uppercase tracking-wider rounded-bl-2xl">Total Actif</td>
+                      <td className="py-5 px-4 text-right font-mono text-slate-900 dark:text-white rounded-br-2xl">{formatCurrency(data.balanceSheet.assets.total)}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
 
-              {/* Passif */}
-              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                <div className="bg-rose-50 dark:bg-rose-900/20 px-4 py-3 border-b border-rose-100 dark:border-rose-900/30 font-bold text-rose-800 dark:text-rose-400 text-center uppercase text-sm">
+              {/* PASSIF */}
+              <div className="shadow-lg shadow-slate-200/50 dark:shadow-none rounded-2xl">
+                <div className="bg-slate-900 text-white dark:bg-white dark:text-slate-900 py-3.5 px-4 rounded-t-2xl font-black uppercase tracking-widest text-[13px] text-center">
                   Passif
                 </div>
-                <div className="p-4 space-y-4">
-                  <div>
-                    <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 dark:text-slate-500 uppercase mb-2">Capitaux Propres</h4>
-                    <div className="flex justify-between text-xs sm:text-sm">
-                      <span className="text-slate-600 dark:text-slate-400">Capital & Réserves (Cl. 1)</span>
-                      <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.liabilities.equity)}</span>
-                    </div>
-                    <div className="flex justify-between text-xs sm:text-sm text-brand-green font-medium mt-1">
-                      <span>Résultat de l'exercice</span>
-                      <span className="font-mono">{formatCurrency(data.incomeStatement.netIncome)}</span>
-                    </div>
-                  </div>
-                  <div>
-                    <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 dark:text-slate-500 uppercase mb-2">Dettes</h4>
-                    <div className="flex justify-between text-xs sm:text-sm">
-                      <span className="text-slate-600 dark:text-slate-400">Dettes Fournisseurs & Fiscales (Cl. 4)</span>
-                      <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.liabilities.debts)}</span>
-                    </div>
-                  </div>
-                  <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex justify-between font-bold text-slate-900 dark:text-white text-sm sm:text-base">
-                    <span>TOTAL PASSIF</span>
-                    <span>{formatCurrency(data.balanceSheet.liabilities.total + data.incomeStatement.netIncome)}</span>
-                  </div>
-                </div>
+                <table className="w-full text-left border-collapse border border-slate-200 dark:border-slate-700 rounded-b-2xl border-t-0 bg-white dark:bg-slate-900/50">
+                  <tbody className="text-sm">
+                    <tr className="bg-slate-50/50 dark:bg-slate-800/30">
+                      <td colSpan={2} className="py-3 px-4 font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-700">Capitaux Propres</td>
+                    </tr>
+                    <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                      <td className="py-4 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Capital & Réserves (Cl. 1)</td>
+                      <td className="py-4 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.liabilities.equity)}</td>
+                    </tr>
+                    <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                      <td className="py-4 px-4 text-brand-green font-bold flex items-center gap-1.5"><TrendingUp size={14} className="text-brand-green" /> Résultat de l'exercice</td>
+                      <td className="py-4 px-4 text-right font-mono text-brand-green font-bold">{formatCurrency(data.incomeStatement.netIncome)}</td>
+                    </tr>
+
+                    <tr className="bg-slate-50/50 dark:bg-slate-800/30">
+                      <td colSpan={2} className="py-3 px-4 font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-700">Dettes</td>
+                    </tr>
+                    <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                      <td className="py-4 px-4 text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-slate-200 transition-colors">Dettes Fournisseurs & Fiscales (Cl. 4)</td>
+                      <td className="py-4 px-4 text-right font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.balanceSheet.liabilities.debts)}</td>
+                    </tr>
+
+                    <tr className="bg-slate-100 dark:bg-slate-800 font-black text-[15px] border-t-2 border-slate-200 dark:border-slate-700">
+                      <td className="py-5 px-4 text-slate-900 dark:text-white uppercase tracking-wider rounded-bl-2xl">Total Passif</td>
+                      <td className="py-5 px-4 text-right font-mono text-slate-900 dark:text-white rounded-br-2xl">{formatCurrency(data.balanceSheet.liabilities.total + data.incomeStatement.netIncome)}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
         ) : activeTab === 'cash' ? (
-          <div className="p-4 sm:p-8 max-w-3xl mx-auto">
-            <div className="text-center mb-6 sm:mb-8">
-              <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white uppercase">Tableau des Flux de Trésorerie</h2>
-              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">Période en cours</p>
+          <div className="premium-card p-6 md:p-10 max-w-4xl mx-auto my-6 bg-white dark:bg-slate-900/80">
+            <div className="text-center mb-8 sm:mb-12">
+              <h2 className="text-2xl sm:text-3xl font-display font-black text-slate-900 dark:text-white uppercase tracking-tight">Flux de Trésorerie</h2>
+              <p className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mt-2">{startDate || endDate ? 'Période analysée' : 'Période en cours'}</p>
             </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <tbody className="text-sm">
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-5 px-4 w-2/3">
+                      <div className="font-bold text-slate-900 dark:text-white text-[15px] group-hover:text-brand-green transition-colors">Flux d'Exploitation</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400 italic mt-1 font-medium">Résultat net + Amortissements (Simplifié)</div>
+                    </td>
+                    <td className={cn("py-5 px-4 text-right font-mono font-bold text-lg", data.cashFlow.operating >= 0 ? "text-brand-green" : "text-rose-600")}>
+                      {formatCurrency(data.cashFlow.operating)}
+                    </td>
+                  </tr>
+                  
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-5 px-4 w-2/3">
+                      <div className="font-bold text-slate-900 dark:text-white text-[15px] group-hover:text-brand-green transition-colors">Flux d'Investissement</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400 italic mt-1 font-medium">Acquisitions d'immobilisations</div>
+                    </td>
+                    <td className={cn("py-5 px-4 text-right font-mono font-bold text-lg", data.cashFlow.investing >= 0 ? "text-brand-green" : "text-rose-600")}>
+                      {formatCurrency(data.cashFlow.investing)}
+                    </td>
+                  </tr>
 
-            <div className="space-y-6">
-              {/* Flux d'Exploitation */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">Flux d'Exploitation</span>
-                  <span className={cn("font-mono font-bold text-sm sm:text-base", data.cashFlow.operating >= 0 ? "text-brand-green" : "text-rose-600")}>
-                    {formatCurrency(data.cashFlow.operating)}
-                  </span>
-                </div>
-                <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 italic">Résultat net + Amortissements (Simplifié)</p>
-              </div>
+                  <tr className="border-b border-slate-100 dark:border-slate-800/50 group hover:bg-slate-50/50 dark:hover:bg-slate-800/20">
+                    <td className="py-5 px-4 w-2/3">
+                      <div className="font-bold text-slate-900 dark:text-white text-[15px] group-hover:text-brand-green transition-colors">Flux de Financement</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400 italic mt-1 font-medium">Nouveaux emprunts et capitaux</div>
+                    </td>
+                    <td className={cn("py-5 px-4 text-right font-mono font-bold text-lg", data.cashFlow.financing >= 0 ? "text-brand-green" : "text-rose-600")}>
+                      {formatCurrency(data.cashFlow.financing)}
+                    </td>
+                  </tr>
 
-              {/* Flux d'Investissement */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">Flux d'Investissement</span>
-                  <span className={cn("font-mono font-bold text-sm sm:text-base", data.cashFlow.investing >= 0 ? "text-brand-green" : "text-rose-600")}>
-                    {formatCurrency(data.cashFlow.investing)}
-                  </span>
-                </div>
-                <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 italic">Acquisitions d'immobilisations</p>
-              </div>
+                  <tr><td colSpan={2} className="h-6"></td></tr>
 
-              {/* Flux de Financement */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">Flux de Financement</span>
-                  <span className={cn("font-mono font-bold text-sm sm:text-base", data.cashFlow.financing >= 0 ? "text-brand-green" : "text-rose-600")}>
-                    {formatCurrency(data.cashFlow.financing)}
-                  </span>
-                </div>
-                <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 italic">Nouveaux emprunts et capitaux</p>
-              </div>
+                  <tr className={cn(
+                    "font-black text-lg",
+                    data.cashFlow.netChange >= 0 ? "bg-brand-green/10 text-brand-green-dark dark:text-brand-green" : "bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400"
+                  )}>
+                    <td className="py-5 px-4 rounded-l-2xl uppercase tracking-wider">Variation Nette de Trésorerie</td>
+                    <td className="py-5 px-4 text-right font-mono rounded-r-2xl">{formatCurrency(data.cashFlow.netChange)}</td>
+                  </tr>
 
-              {/* Synthèse */}
-              <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
-                <div className="flex justify-between items-center text-base sm:text-lg font-bold">
-                  <span className="text-slate-900 dark:text-white">Variation Nette de Trésorerie</span>
-                  <span className={cn("font-mono", data.cashFlow.netChange >= 0 ? "text-brand-green" : "text-rose-600")}>
-                    {formatCurrency(data.cashFlow.netChange)}
-                  </span>
-                </div>
+                  <tr><td colSpan={2} className="h-6"></td></tr>
 
-                <div className="space-y-2 pt-4">
-                  <div className="flex justify-between text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                    <span>Trésorerie au début de la période</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100">{formatCurrency(data.cashFlow.startBalance)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm sm:text-base font-bold text-slate-900 dark:text-white pt-2 border-t border-slate-100 dark:border-slate-800">
-                    <span>Trésorerie à la fin de la période</span>
-                    <span className="font-mono">{formatCurrency(data.cashFlow.endBalance)}</span>
-                  </div>
-                </div>
-              </div>
+                  <tr className="bg-slate-50 dark:bg-slate-800/30 border-t-2 border-slate-200 dark:border-slate-700">
+                    <td className="py-5 px-4 text-slate-600 dark:text-slate-400 font-bold uppercase tracking-wider text-xs">Trésorerie au début de la période</td>
+                    <td className="py-5 px-4 text-right font-mono text-slate-900 dark:text-white font-bold">{formatCurrency(data.cashFlow.startBalance)}</td>
+                  </tr>
+                  
+                  <tr className="bg-slate-900 dark:bg-white text-white dark:text-slate-900">
+                    <td className="py-5 px-4 font-black uppercase tracking-widest text-[13px] rounded-bl-2xl">Trésorerie à la fin de la période</td>
+                    <td className="py-5 px-4 text-right font-mono font-black text-xl rounded-br-2xl">{formatCurrency(data.cashFlow.endBalance)}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         ) : (
-          <div className="p-4 sm:p-8 max-w-4xl mx-auto">
-            <div className="text-center mb-6 sm:mb-8">
-              <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white uppercase">Ratios de Performance & Structure</h2>
-              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">Analyse de la santé financière</p>
+          <div className="premium-card p-6 md:p-10 max-w-5xl mx-auto my-6 bg-white dark:bg-slate-900/80">
+            <div className="text-center mb-8 sm:mb-12">
+              <h2 className="text-2xl sm:text-3xl font-display font-black text-slate-900 dark:text-white uppercase tracking-tight">Ratios de Performance & Structure</h2>
+              <p className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mt-2">Analyse de la santé financière</p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
               {/* Liquidity */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 sm:p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">Liquidité Générale</h3>
-                  <span className={cn(
-                    "px-2 py-1 rounded-lg text-[8px] sm:text-[10px] font-bold uppercase",
-                    ratios!.liquidity > 1.2 ? "bg-brand-green/20 text-brand-green-dark dark:text-brand-green" : "bg-amber-100 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400"
-                  )}>
-                    {ratios!.liquidity > 1.2 ? 'Optimale' : 'À surveiller'}
-                  </span>
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-600 group overflow-hidden">
+                <div className="p-6">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="font-bold text-slate-900 dark:text-white text-base">Liquidité Générale</h3>
+                    <span className={cn(
+                      "px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-widest",
+                      ratios!.liquidity > 1.2 ? "bg-brand-green/10 text-brand-green border border-brand-green/20" : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800"
+                    )}>
+                      {ratios!.liquidity > 1.2 ? 'Optimale' : 'À surveiller'}
+                    </span>
+                  </div>
+                  <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter group-hover:text-brand-green transition-colors">{ratios!.liquidity.toFixed(2)}x</div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">Capacité à payer les dettes de court terme avec l'actif circulant.</p>
                 </div>
-                <div className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">{ratios!.liquidity.toFixed(2)}</div>
-                <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400">Capacité à payer les dettes de court terme avec l'actif circulant.</p>
-                <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
-                  <div className="flex justify-between text-[10px] sm:text-xs">
-                    <span className="text-slate-500 dark:text-slate-400">Fonds de Roulement Net</span>
-                    <span className={cn("font-bold", ratios!.workingCapital >= 0 ? "text-brand-green" : "text-rose-600")}>
+                <div className="border-t border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 p-4 px-6">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider text-[10px]">Fonds de Roulement Net</span>
+                    <span className={cn("font-bold font-mono text-sm", ratios!.workingCapital >= 0 ? "text-brand-green" : "text-rose-600")}>
                       {formatCurrency(ratios!.workingCapital)}
                     </span>
                   </div>
@@ -718,56 +731,60 @@ export function FinancialStatements() {
               </div>
 
               {/* Net Margin */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 sm:p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">Marge Nette</h3>
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-600 group">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">Marge Nette</h3>
                   <span className={cn(
-                    "px-2 py-1 rounded-lg text-[8px] sm:text-[10px] font-bold uppercase",
-                    ratios!.netMargin > 10 ? "bg-brand-green/20 text-brand-green-dark dark:text-brand-green" : "bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400"
+                    "px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-widest border",
+                    ratios!.netMargin > 10 ? "bg-brand-green/10 text-brand-green border-brand-green/20" : "bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-800"
                   )}>
                     {ratios!.netMargin > 10 ? 'Rentable' : 'Standard'}
                   </span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">{ratios!.netMargin.toFixed(1)}%</div>
-                <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400">Part du bénéfice net dans le chiffre d'affaires total.</p>
+                <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter group-hover:text-brand-green transition-colors">{ratios!.netMargin.toFixed(1)}%</div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">Part du bénéfice net dégagée après couverture de toutes les charges.</p>
               </div>
 
               {/* Solvency */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 sm:p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">Autonomie Financière</h3>
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-600 group">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">Autonomie Financière</h3>
                   <span className={cn(
-                    "px-2 py-1 rounded-lg text-[8px] sm:text-[10px] font-bold uppercase",
-                    ratios!.solvency > 30 ? "bg-brand-green/20 text-brand-green-dark dark:text-brand-green" : "bg-rose-100 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400"
+                    "px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-widest border",
+                    ratios!.solvency > 30 ? "bg-brand-green/10 text-brand-green border-brand-green/20" : "bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-800"
                   )}>
                     {ratios!.solvency > 30 ? 'Solide' : 'Endettée'}
                   </span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">{ratios!.solvency.toFixed(1)}%</div>
-                <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400">Part des capitaux propres dans le financement de l'actif total.</p>
+                <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter group-hover:text-brand-green transition-colors">{ratios!.solvency.toFixed(1)}%</div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">Poids des capitaux propres par rapport à l'ensemble du financement.</p>
               </div>
 
               {/* ROE */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 sm:p-6 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base">Rentabilité des Capitaux (ROE)</h3>
-                  <span className="px-2 py-1 bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 rounded-lg text-[8px] sm:text-[10px] font-bold uppercase">
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 dark:hover:border-slate-600 group">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">Rentabilité (ROE)</h3>
+                  <span className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 rounded-md text-[10px] font-black uppercase tracking-widest">
                     Performance
                   </span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">{ratios!.roe.toFixed(1)}%</div>
-                <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400">Capacité de l'entreprise à générer du profit avec l'argent des associés.</p>
+                <div className="text-4xl sm:text-5xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter group-hover:text-brand-green transition-colors">{ratios!.roe.toFixed(1)}%</div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">Retour sur investissement généré pour les associés ou actionnaires.</p>
               </div>
             </div>
 
-            <div className="mt-6 sm:mt-8 p-4 sm:p-6 bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/30 rounded-2xl">
-              <h4 className="text-blue-900 dark:text-blue-400 font-bold mb-2 flex items-center gap-2 text-sm sm:text-base">
-                <AlertCircle size={18} />
-                Interprétation des Ratios
-              </h4>
-              <p className="text-xs sm:text-sm text-blue-700 dark:text-blue-300 leading-relaxed">
-                Ces ratios sont calculés sur la base des données comptables actuelles. Une liquidité supérieure à 1 indique que l'entreprise peut faire face à ses engagements immédiats. Une autonomie financière supérieure à 30% est généralement exigée par les banques pour l'octroi de crédits.
-              </p>
+            <div className="mt-8 lg:mt-10 p-6 bg-slate-900 dark:bg-slate-800 border border-slate-800 dark:border-slate-700 rounded-2xl shadow-xl flex gap-4 items-start">
+              <div className="p-2.5 bg-brand-green/20 rounded-xl shrink-0 mt-1">
+                <AlertCircle size={24} className="text-brand-green" />
+              </div>
+              <div>
+                <h4 className="text-white font-black mb-2 text-sm uppercase tracking-widest">
+                  Interprétation OHADA
+                </h4>
+                <p className="text-sm text-slate-300 dark:text-slate-400 leading-relaxed font-medium">
+                  Ces indicateurs sont conformes aux normes d'analyse SYSCOHADA. Une autonomie financière supérieure à 33% est recommandée, garantissant que les capitaux propres couvrent au moins un tiers du passif total.
+                </p>
+              </div>
             </div>
           </div>
         )}

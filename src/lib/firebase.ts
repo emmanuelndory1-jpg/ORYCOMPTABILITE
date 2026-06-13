@@ -13,6 +13,9 @@ export const db = initializeFirestore(app, {
 }, firebaseConfig.firestoreDatabaseId);
 
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account'
+});
 
 // Auth Helpers
 let isSigningIn = false;
@@ -34,9 +37,12 @@ export const signInWithGoogle = async () => {
     for (let i = 0; i < maxRetries; i++) {
       try {
         // Shorter internal timeout for the getDoc
+        console.log("Attempting getDoc for users");
         userSnap = await getDoc(userRef);
+        console.log("getDoc succeeded", userSnap.exists());
         break;
-      } catch (e) {
+      } catch (e: any) {
+        console.error("getDoc failed with", e);
         if (i === maxRetries - 1) throw e;
         console.warn(`Firestore getDoc retry ${i + 1}/${maxRetries}...`);
         await new Promise(r => setTimeout(r, 1000)); // Reduced from 2s
@@ -44,13 +50,20 @@ export const signInWithGoogle = async () => {
     }
     
     if (userSnap && !userSnap.exists()) {
-      await setDoc(userRef, {
-        uid: user.uid,
-        email: user.email,
-        name: user.displayName,
-        role: 'user',
-        createdAt: new Date().toISOString()
-      });
+      console.log("Attempting setDoc for new user");
+      try {
+        await setDoc(userRef, {
+          uid: user.uid,
+          email: user.email,
+          name: user.displayName,
+          role: 'user',
+          createdAt: new Date().toISOString()
+        });
+        console.log("setDoc succeeded");
+      } catch (err) {
+        console.error("setDoc failed with", err);
+        throw err;
+      }
     }
     
     return user;

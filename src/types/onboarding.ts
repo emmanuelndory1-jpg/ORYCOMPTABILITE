@@ -24,6 +24,7 @@ export interface UserSetup {
 }
 
 export interface OnboardingData {
+  isNewCompany: boolean;
   // Company Info
   name: string;
   legalForm: string;

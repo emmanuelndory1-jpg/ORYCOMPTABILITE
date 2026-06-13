@@ -67,6 +67,7 @@ import {
 
 import * as XLSX from 'xlsx';
 import { ThirdPartyFormModal } from './ThirdPartyFormModal';
+import { saveLocalTransactions } from '../lib/dataSync';
 
 interface Transaction {
   id: number;
@@ -353,31 +354,62 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
     }
   }, [isModalOpen]);
 
-  const handleEntryKeyDown = (e: React.KeyboardEvent, idx: number, field: 'account' | 'debit' | 'credit' | 'description') => {
-    if (e.key === 'Enter') {
-      const row = (e.currentTarget.closest('.space-y-1') as HTMLElement);
+  const [isFastEntryMode, setIsFastEntryMode] = useState(false);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Toggle Fast Entry Mode with Alt+S
+      if (e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        setIsFastEntryMode(prev => {
+          const next = !prev;
+          if (next) dialogAlert("Mode Saisie Rapide activé (Tab/Entrée enchaînés).", 'info');
+          else dialogAlert("Mode Saisie Rapide désactivé.", 'info');
+          return next;
+        });
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [dialogAlert]);
+
+  const handleEntryKeyDown = (e: React.KeyboardEvent, idx: number, field: 'account' | 'description' | 'debit' | 'credit') => {
+    if (e.key === 'Enter' || (isFastEntryMode && e.key === 'Tab' && !e.shiftKey)) {
+      if (e.key === 'Enter') e.preventDefault(); // Prevent form submission
+      
+      const row = (e.currentTarget.closest('.group') as HTMLElement);
+      if (!row) return;
+      const inputs = row.querySelectorAll('input');
+      
       if (field === 'account') {
         const val = entries[idx].account_code;
-        if (isAiAssistEnabled && val && !/^\d+$/.test(val)) {
+        if (e.key === 'Enter' && isAiAssistEnabled && val && !/^\d+$/.test(val)) {
           handleSuggestAccountHead(idx, val);
           return;
         }
-        const next = row?.querySelector('input[placeholder="Débit"]') as HTMLInputElement;
-        next?.focus({ preventScroll: true });
+        // Focus description
+        if (inputs[1]) inputs[1].focus({ preventScroll: true });
+        if (isFastEntryMode && e.key === 'Tab') e.preventDefault();
+      } else if (field === 'description') {
+        // Focus debit
+        if (inputs[2]) inputs[2].focus({ preventScroll: true });
+        if (isFastEntryMode && e.key === 'Tab') e.preventDefault();
       } else if (field === 'debit') {
-        const next = row?.querySelector('input[placeholder="Crédit"]') as HTMLInputElement;
-        next?.focus({ preventScroll: true });
+        // Focus credit
+        if (inputs[3]) inputs[3].focus({ preventScroll: true });
+        if (isFastEntryMode && e.key === 'Tab') e.preventDefault();
       } else if (field === 'credit') {
-        if (idx === entries.length - 1 && !isBalanced) {
-          setEntries([...entries, { account_code: '', debit: 0, credit: 0, description: '' }]);
+        if ((isFastEntryMode || e.key === 'Enter') && idx === entries.length - 1 && (!isBalanced || isFastEntryMode)) {
+          setEntries(prev => [...prev, { account_code: '', debit: 0, credit: 0, description: '' }]);
         }
         setTimeout(() => {
-          const allRows = row?.parentElement?.children;
-          if (allRows && allRows[idx+1]) {
-            const nextAccount = (allRows[idx+1] as HTMLElement).querySelector('input[placeholder="Cpt"]') as HTMLInputElement;
-            nextAccount?.focus({ preventScroll: true });
+          const allRows = row.parentElement?.children;
+          if (allRows && allRows[idx + 1]) {
+            const nextRowInputs = (allRows[idx + 1] as HTMLElement).querySelectorAll('input');
+            if (nextRowInputs[0]) nextRowInputs[0].focus({ preventScroll: true });
           }
-        }, 0);
+        }, 50);
+        if (isFastEntryMode && e.key === 'Tab') e.preventDefault();
       }
     }
   };
@@ -574,6 +606,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
       const res = await apiFetch(`/api/transactions?${params.toString()}`);
       const data = await res.json();
       setTransactions(data);
+      if (currentView !== 'trash') { saveLocalTransactions(data).catch(console.error); }
 
       const capRes = await apiFetch('/api/check-capital');
       const capData = await capRes.json();
@@ -3800,6 +3833,19 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                         </div>
                       </div>
                       <div className="flex gap-2">
+                        <button
+                          onClick={() => setIsFastEntryMode(!isFastEntryMode)}
+                          className={cn(
+                            "px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border shadow-sm",
+                            isFastEntryMode 
+                              ? "bg-brand-green text-white border-brand-green" 
+                              : "bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+                          )}
+                          title="Activer la saisie rapide (Raccourci: Alt+S)"
+                        >
+                          <Zap size={14} className={cn(isFastEntryMode && "animate-pulse")} />
+                          Rapide (Alt+S)
+                        </button>
                         <button 
                           onClick={handleBalance}
                           disabled={isBalanced}
@@ -3875,6 +3921,7 @@ export function Journal({ openModal, onModalClose, scanTrigger, onScanTriggerCon
                                   placeholder="Libellé spécifique à cette ligne..."
                                   className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-medium bg-white dark:bg-slate-900/50 text-slate-900 dark:text-white transition-all outline-none focus:ring-2 focus:ring-brand-green/20 focus:border-brand-green shadow-sm placeholder:text-slate-300 dark:placeholder:text-slate-600"
                                   value={entry.description || ''}
+                                  onKeyDown={(e) => handleEntryKeyDown(e, idx, 'description')}
                                   onChange={(e) => {
                                     const newEntries = [...entries];
                                     newEntries[idx].description = e.target.value;

@@ -69,6 +69,7 @@ export function Dashboard() {
   });
   const [chartData, setChartData] = useState([]);
   const [cashflowData, setCashflowData] = useState([]);
+  const [liquidityHistory, setLiquidityHistory] = useState([]);
   const [breakdownData, setBreakdownData] = useState([]);
   const [recentTransactions, setRecentTransactions] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
@@ -77,9 +78,7 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [assetStats, setAssetStats] = useState({ totalValue: 0, totalAccumulatedDep: 0, netBookValue: 0, count: 0 });
   const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
-  const [aiInsight, setAiInsight] = useState<string | null>(null);
-  const [loadingInsight, setLoadingInsight] = useState(false);
-  const [quickEntry, setQuickEntry] = useState('');
+    const [quickEntry, setQuickEntry] = useState('');
   const [processingQuickEntry, setProcessingQuickEntry] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [pendingRecurringCount, setPendingRecurringCount] = useState(0);
@@ -162,13 +161,14 @@ export function Dashboard() {
       { id: 'shortcut', label: 'Raccourcis Clavier', visible: true },
       { id: 'performance', label: 'Graphique de Performance', visible: true },
       { id: 'cashflow', label: 'Prévision de Trésorerie', visible: true },
+      { id: 'liquidity_chart', label: 'Évolution Trésorerie & Liquidité', visible: true },
       { id: 'financial_health', label: 'Indicateurs de Santé', visible: true },
       { id: 'expenses', label: 'Répartition des Dépenses', visible: true },
       { id: 'activity', label: 'Activité Récente', visible: true },
       { id: 'analysis', label: 'Analyse Stratégique', visible: true },
       { id: 'payroll_summary', label: 'Résumé RH', visible: true },
       { id: 'asset_summary', label: 'Immobilisations', visible: true },
-      { id: 'performance_ratios', label: 'Performance & Ratios', visible: true },
+      { id: 'performance_ratios', label: 'Ratios Financiers OHADA', visible: true },
       { id: 'recent_audit_logs', label: 'Modifications Récentes (Audit)', visible: true },
     ];
   });
@@ -194,10 +194,13 @@ export function Dashboard() {
 
   const isVisible = (id: string) => {
     // Determine module restriction
-    const requiresAnalytics = ['performance', 'analysis', 'performance_ratios', 'cashflow', 'expenses', 'financial_health', 'health'];
+    const requiresAnalytics = ['performance', 'analysis', 'performance_ratios', 'cashflow', 'liquidity_chart', 'expenses', 'financial_health', 'health'];
     const requiresPayroll = ['payroll_summary'];
     const requiresAssets = ['asset_summary'];
     const requiresAudit = ['recent_audit_logs'];
+
+    // Define advanced widgets to hide in simplified mode
+    const advancedWidgets = ['tax_calendar', 'compliance', 'runway', 'performance', 'cashflow', 'liquidity_chart', 'financial_health', 'analysis', 'payroll_summary', 'asset_summary', 'performance_ratios', 'recent_audit_logs', 'investment'];
 
     if (requiresAnalytics.includes(id) && !isActive('analytics')) return false;
     if (requiresPayroll.includes(id) && !isActive('payroll')) return false;
@@ -251,6 +254,7 @@ export function Dashboard() {
             if (cached.stats) setStats(cached.stats);
             if (cached.chartData) setChartData(cached.chartData);
             if (cached.cashflowData) setCashflowData(cached.cashflowData);
+            if (cached.liquidityHistory) setLiquidityHistory(cached.liquidityHistory);
             if (cached.breakdownData) setBreakdownData(cached.breakdownData);
             if (cached.recentTransactions) setRecentTransactions(cached.recentTransactions);
             if (cached.auditLogs) setAuditLogs(cached.auditLogs);
@@ -270,10 +274,11 @@ export function Dashboard() {
 
     const fetchData = async () => {
       try {
-        const [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes, deadlinesRes] = await Promise.all([
+        const [statsRes, chartsRes, cashflowRes, liquidityHisRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes, deadlinesRes] = await Promise.all([
           apiFetch('/api/dashboard/stats'),
           apiFetch('/api/dashboard/charts'),
           apiFetch('/api/dashboard/cashflow-forecast'),
+          apiFetch('/api/dashboard/liquidity-history'),
           apiFetch('/api/dashboard/breakdown'),
           apiFetch('/api/dashboard/recent'),
           apiFetch('/api/dashboard/budget-vs-actual'),
@@ -284,7 +289,7 @@ export function Dashboard() {
           apiFetch('/api/dashboard/deadlines?days=7')
         ]);
         
-        const responses = [statsRes, chartsRes, cashflowRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes, deadlinesRes];
+        const responses = [statsRes, chartsRes, cashflowRes, liquidityHisRes, breakdownRes, recentRes, budgetRes, ratiosRes, assetStatsRes, auditRes, recurringRes, deadlinesRes];
         const allOk = responses.every(r => r.ok);
         
         if (!allOk) {
@@ -295,7 +300,7 @@ export function Dashboard() {
           return;
         }
 
-        const [statsData, chartsData, cfData, bData, recentData, budgetData, ratiosData, assetStatsData, auditData, recurringData, deadlinesData] = await Promise.all(
+        const [statsData, chartsData, cfData, liqHisData, bData, recentData, budgetData, ratiosData, assetStatsData, auditData, recurringData, deadlinesData] = await Promise.all(
           responses.map(r => r.json())
         );
         
@@ -304,6 +309,7 @@ export function Dashboard() {
         setStats(statsData);
         setChartData(chartsData);
         setCashflowData(cfData);
+        setLiquidityHistory(liqHisData);
         setBreakdownData(bData);
         setRecentTransactions(recentData);
         setAuditLogs(auditData.logs || auditData || []);
@@ -331,6 +337,7 @@ export function Dashboard() {
             stats: statsData,
             chartData: chartsData,
             cashflowData: cfData,
+            liquidityHistory: liqHisData,
             breakdownData: bData,
             recentTransactions: recentData,
             auditLogs: auditData.logs || auditData || [],
@@ -350,17 +357,9 @@ export function Dashboard() {
         const cacheTime = localStorage.getItem(`${insightCacheKey}_time`);
         
         if (cached && cacheTime && (Date.now() - parseInt(cacheTime)) < 12 * 60 * 60 * 1000) {
-           setAiInsight(cached);
+           
         } else {
-           fetchInsight({
-             turnover: statsData.turnover,
-             expenses: statsData.expenses,
-             cash: statsData.cash,
-             receivables: statsData.receivables,
-             payables: statsData.payables,
-             ratios: ratiosData,
-             period: activeYear?.name || 'en cours'
-           });
+           // do nothing
         }
       } catch (err) {
         console.error("Dashboard background fetch error:", err);
@@ -377,21 +376,7 @@ export function Dashboard() {
     };
   }, [activeYear?.id]);
 
-  const fetchInsight = async (data: any) => {
-    setLoadingInsight(true);
-    try {
-      const insight = await getQuickInsight(data);
-      if (insight) {
-        setAiInsight(insight);
-        localStorage.setItem(`insight_${activeYear?.id}`, insight);
-        localStorage.setItem(`insight_${activeYear?.id}_time`, Date.now().toString());
-      }
-    } catch (err) {
-      console.error("Failed to fetch AI insight:", err);
-    } finally {
-      setLoadingInsight(false);
-    }
-  };
+  
 
   const handleExportSummary = () => {
     const summaryData = [
@@ -580,17 +565,17 @@ export function Dashboard() {
           <div className="space-y-8 max-w-4xl">
             <div className="flex items-center gap-6 animate-in fade-in slide-in-from-left-4 duration-700">
               <span className="px-4 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-[10px] font-black uppercase tracking-[0.3em] rounded-full border border-slate-200 dark:border-slate-700">
-                Ory Intelligence v4.0
+                {new Date().getHours() < 12 ? 'Bonjour' : new Date().getHours() < 18 ? 'Bon après-midi' : 'Bonsoir'} !
               </span>
               <div className="flex items-center gap-2 text-brand-green">
                 <div className="w-2 h-2 rounded-full bg-current animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
-                <span className="text-[10px] font-black uppercase tracking-widest">Système Opérationnel</span>
+                <span className="text-[10px] font-black uppercase tracking-widest">Ory Intelligence v4.0</span>
               </div>
             </div>
             
             <div className="space-y-4">
-              <h1 className="text-4xl sm:text-8xl md:text-[120px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
-                Tableau de <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 drop-shadow-sm font-bold text-[102px] text-center not-italic">Bord</span>
+              <h1 className="text-4xl sm:text-6xl md:text-[80px] lg:text-[100px] font-black text-slate-900 dark:text-slate-100 tracking-[-0.05em] leading-[0.85] uppercase animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                Tableau de <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-green to-emerald-500 drop-shadow-sm font-bold text-[82px] lg:text-[102px] text-center not-italic">Bord</span>
               </h1>
               <div className="flex items-center gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
                 <div className="h-px w-24 bg-brand-green/30" />
@@ -665,12 +650,13 @@ export function Dashboard() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 * idx }}
               onClick={() => navigate(item.path)}
-              className="group flex flex-col items-center justify-center p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl hover:border-brand-green/30 hover:shadow-2xl hover:shadow-brand-green/5 transition-all duration-500 active:scale-95"
+              className="group flex flex-col items-center justify-center p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl hover:border-brand-green/30 hover:shadow-2xl hover:shadow-brand-green/10 transition-all duration-500 active:scale-95 hover:-translate-y-1 relative overflow-hidden"
             >
-              <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center mb-3 transition-all duration-500 group-hover:scale-110 group-hover:rotate-6", item.bg, item.color)}>
-                <item.icon size={24} />
+              <div className="absolute inset-0 bg-gradient-to-br from-black/[0.02] to-transparent dark:from-white/[0.02] opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center mb-4 transition-all duration-500 group-hover:scale-110 group-hover:-rotate-3 relative z-10", item.bg, item.color)}>
+                <item.icon size={26} strokeWidth={2.5} />
               </div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors text-center">{item.label}</span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors text-center relative z-10">{item.label}</span>
             </motion.button>
           ))}
         </div>
@@ -797,7 +783,7 @@ export function Dashboard() {
         style={{ order: getGroupOrder([
           'stats', 'quick_stats', 'health', 'tax_calendar', 'compliance', 
           'runway', 'advisor', 'shortcut', 'payroll_summary', 'performance', 
-          'cashflow', 'financial_health', 'performance_ratios', 'expenses', 
+          'cashflow', 'liquidity_chart', 'financial_health', 'performance_ratios', 'expenses', 
           'asset_summary', 'activity', 'recent_audit_logs'
         ]) }}
       >
@@ -1149,37 +1135,16 @@ export function Dashboard() {
             className={cn("bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl text-white flex flex-col justify-between group", maxClasses('advisor'))}>
             <MaximizeButton id="advisor" />
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Conseiller Ory</h3>
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Note Financière</h3>
               <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => fetchInsight({ turnover: stats.turnover, expenses: stats.expenses, cash: stats.cash })}
-                  disabled={loadingInsight}
-                  className="p-1 hover:bg-white/10 rounded transition-colors disabled:opacity-50"
-                  title="Rafraîchir le conseil"
-                >
-                  <HistoryIcon size={12} className={cn(loadingInsight && "animate-spin")} />
-                </button>
                 <div className="p-1.5 bg-brand-green/20 text-brand-gold rounded-lg">
                   <MessageSquareText size={14} />
                 </div>
               </div>
             </div>
             <div className="text-[11px] font-medium text-slate-300 italic min-h-[2.5rem] flex items-center line-clamp-3">
-              {loadingInsight ? (
-                <div className="flex items-center gap-2">
-                  <Loader2 size={12} className="animate-spin text-brand-green" />
-                  <span>Analyse en cours...</span>
-                </div>
-              ) : (
-                aiInsight || "\"Votre CA a augmenté de 12%. Pensez à provisionner vos impôts.\""
-              )}
+              {(stats.turnover > 0 ? `"Votre chiffre d'affaires est de ${formatCurrency(stats.turnover)}. Maintenez cette dynamique et vérifiez vos prévisions de TVA."` : `"Prenez note de vos décisions financières."`)}
             </div>
-            <button 
-              onClick={() => navigate('/financial-auditor')}
-              className="mt-3 w-full py-1.5 bg-brand-green hover:bg-brand-green-light text-white rounded-lg text-[10px] font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
-            >
-              Audit Complet IA
-            </button>
           </motion.div>
         )}
 
@@ -1421,6 +1386,88 @@ export function Dashboard() {
           </motion.div>
         )}
 
+        {/* Liquidity Chart - Large Bento Item */}
+        {isVisible('liquidity_chart') && (
+          <motion.div 
+            style={{ order: widgets.findIndex(w => w.id === 'liquidity_chart') }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.58 }}
+            className={cn("lg:col-span-4 premium-card p-8", maxClasses('liquidity_chart'))}>
+            <MaximizeButton id="liquidity_chart" />
+            <div className="flex items-center justify-between mb-10">
+              <div>
+                <h3 className="text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight font-display">Évolution Trésorerie & Liquidité</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Analyse mensuelle de la trésorerie et de la capacité à payer les dettes</p>
+              </div>
+              <div className="flex gap-4">
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Trésorerie Actuelle</p>
+                  <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(stats.cash || 0)}</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="h-[300px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={liquidityHistory} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="currentColor" className="text-slate-100 dark:text-slate-800" />
+                  <XAxis 
+                    dataKey="name" 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{fill: 'currentColor', fontSize: 11}} 
+                    className="text-slate-400 dark:text-slate-500"
+                  />
+                  <YAxis 
+                    yAxisId="left"
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{fill: 'currentColor', fontSize: 11}} 
+                    className="text-slate-400 dark:text-slate-500"
+                    tickFormatter={(value) => `${value / 1000}k`}
+                  />
+                  <YAxis 
+                    yAxisId="right"
+                    orientation="right"
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{fill: 'currentColor', fontSize: 11}} 
+                    className="text-slate-400 dark:text-slate-500"
+                  />
+                  <Tooltip 
+                    contentStyle={{ 
+                      borderRadius: '12px', 
+                      border: 'none', 
+                      boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', 
+                      backgroundColor: 'var(--tooltip-bg)', 
+                      color: 'var(--tooltip-text)' 
+                    }}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'cash') return [formatCurrency(value), 'Solde Trésorerie'];
+                      if (name === 'ratio') return [value, 'Ratio de Liquidité'];
+                      return [value, name];
+                    }}
+                  />
+                  <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px', fontWeight: 'bold' }} />
+                  <Bar yAxisId="left" dataKey="cash" name="Trésorerie" fill="#10b981" radius={[4, 4, 0, 0]} barSize={20} opacity={0.8} />
+                  <Line 
+                    yAxisId="right"
+                    type="monotone" 
+                    dataKey="ratio" 
+                    name="Ratio de Liquidité"
+                    stroke="#f59e0b" 
+                    strokeWidth={4} 
+                    dot={{ r: 4, fill: '#f59e0b', strokeWidth: 2, stroke: '#fff' }}
+                    activeDot={{ r: 6, strokeWidth: 0 }}
+                    animationDuration={2000}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </motion.div>
+        )}
+
         {/* Financial Health - Small Bento Item */}
         {isVisible('financial_health') && (
           <motion.div 
@@ -1495,10 +1542,10 @@ export function Dashboard() {
                   <div className="p-2 bg-brand-green/10 rounded-xl">
                     <Activity size={20} />
                   </div>
-                  <span className="text-[10px] font-black uppercase tracking-[0.3em]">Analyse de Performance</span>
+                  <span className="text-[10px] font-black uppercase tracking-[0.3em]">Standards OHADA</span>
                 </div>
-                <h3 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight uppercase">Ratios Financiers & Rentabilité</h3>
-                <p className="text-slate-500 dark:text-slate-400 font-medium">Indicateurs de santé et de performance opérationnelle</p>
+                <h3 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight uppercase">Ratios Financiers Clés</h3>
+                <p className="text-slate-500 dark:text-slate-400 font-medium">Liquidité, solvabilité et rentabilité</p>
               </div>
               
               <div className="flex items-center gap-4">
@@ -1543,7 +1590,7 @@ export function Dashboard() {
                   </div>
                 </div>
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Ratio de Liquidité</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Liquidité Générale</p>
                   <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.currentRatio}</h4>
                 </div>
                 <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -1570,7 +1617,7 @@ export function Dashboard() {
                   </div>
                 </div>
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Marge Nette</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Rentabilité Commerciale</p>
                   <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.netMargin}%</h4>
                 </div>
                 <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -1597,7 +1644,7 @@ export function Dashboard() {
                   </div>
                 </div>
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Solvabilité</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Solvabilité Générale</p>
                   <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.solvency}</h4>
                 </div>
                 <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -1624,7 +1671,7 @@ export function Dashboard() {
                   </div>
                 </div>
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ROI (Actifs)</p>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Rentabilité Financière</p>
                   <h4 className="text-3xl font-black text-slate-900 dark:text-white font-display tracking-tighter">{ratios.roi}%</h4>
                 </div>
                 <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">

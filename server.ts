@@ -632,32 +632,13 @@ const upload = multer({
   }
 });
 
-// Google Auth Route
-import { OAuth2Client } from 'google-auth-library';
-
-let _googleClient: OAuth2Client | null = null;
-function getGoogleClient() {
-  if (!_googleClient) {
-    if (!process.env.GOOGLE_CLIENT_ID) {
-      throw new Error("GOOGLE_CLIENT_ID environment variable is required for Google Auth");
-    }
-    _googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-  }
-  return _googleClient;
-}
+// Google Auth Route (Verification simplified for demo)
 
 app.post('/api/auth/social', async (req, res) => {
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ error: "ID Token missing" });
 
   try {
-    const client = getGoogleClient();
-    // In a real app, we would verify the token with google-auth-library
-    // const ticket = await client.verifyIdToken({
-    //   idToken,
-    //   audience: process.env.GOOGLE_CLIENT_ID,
-    // });
-    // const payload = ticket.getPayload();
     // For this environment, we'll assume the token is valid if it came from Firebase
     // and we'll trust the email/uid provided by the frontend for now, 
     // but ideally we verify it.
@@ -679,9 +660,9 @@ app.post('/api/auth/social', async (req, res) => {
     } else {
       logAction(email, 'LOGIN_SOCIAL', 'User', user.id);
     }
-
+    
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, name: user.name },
+      { id: user.id, uid: uid || user.id.toString(), email: user.email, role: user.role, name: user.name },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -695,7 +676,7 @@ app.post('/api/auth/social', async (req, res) => {
 
     res.json({ 
       success: true, 
-      user: { id: user.id, email: user.email, role: user.role, name: user.name },
+      user: { id: user.id, uid: uid || user.id.toString(), email: user.email, role: user.role, name: user.name },
       token 
     });
   } catch (err) {
@@ -919,7 +900,7 @@ app.post('/api/auth/register', validate(schemas.registerSchema), async (req, res
       const stmt = db.prepare('INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)');
       const info = stmt.run(email, hashedPassword, name, 'user');
       
-      const user = { id: info.lastInsertRowid, email, name, role: 'user' };
+      const user = { id: info.lastInsertRowid, uid: info.lastInsertRowid.toString(), email, name, role: 'user' };
       
       const token = jwt.sign(
         user,
@@ -992,7 +973,7 @@ app.post('/api/auth/login', validate(schemas.loginSchema), async (req, res) => {
     
     console.log('Login successful for:', email);
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, name: user.name },
+      { id: user.id, uid: user.id.toString(), email: user.email, role: user.role, name: user.name },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -1008,7 +989,7 @@ app.post('/api/auth/login', validate(schemas.loginSchema), async (req, res) => {
     
     res.json({ 
       success: true, 
-      user: { id: user.id, email: user.email, role: user.role, name: user.name },
+      user: { id: user.id, uid: user.id.toString(), email: user.email, role: user.role, name: user.name },
       token
     });
   } catch (err) {
@@ -1038,7 +1019,7 @@ app.post('/api/audit/session', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', authenticateToken, (req, res) => {
   if (req.user) {
     res.json({ user: req.user });
   } else {
@@ -2319,7 +2300,7 @@ app.post("/api/company/create", asyncHandler((req, res) => {
     syscohadaSystem, currency, fiscalYearStart, fiscalYearDuration,
     taxRegime, vatSubject, vatRate, taxes_enabled,
     capitalAmount, cashCalledPercentage = 100, partners, constitutionCosts,
-    treasury, users, modules, logoUrl
+    treasury, users, modules, logoUrl, isNewCompany = true
   } = req.body;
 
   const transaction = db.transaction(() => {
@@ -2409,39 +2390,41 @@ app.post("/api/company/create", asyncHandler((req, res) => {
     const txStmt = db.prepare("INSERT INTO transactions (date, description, reference, status) VALUES (?, ?, ?, 'validated')");
     const entryStmt = db.prepare("INSERT INTO journal_entries (transaction_id, account_code, debit, credit) VALUES (?, ?, ?, ?)");
 
-    // Capital Subscription (Promesse d'apport)
-    const subInfo = txStmt.run(today, `Constitution ${legalForm}: Souscription du capital`, 'CONST-001');
-    const subTxId = subInfo.lastInsertRowid;
+    if (isNewCompany) {
+      // Capital Subscription (Promesse d'apport)
+      const subInfo = txStmt.run(today, `Constitution ${legalForm}: Souscription du capital`, 'CONST-001');
+      const subTxId = subInfo.lastInsertRowid;
 
-    // Debit
-    if (uncalledCash > 0) entryStmt.run(subTxId, '109', uncalledCash, 0); // Actionnaires, capital souscrit non appelé
-    if (kindTotal > 0) entryStmt.run(subTxId, '4611', kindTotal, 0); // Apporteurs, apports en nature
-    if (calledCash > 0) entryStmt.run(subTxId, '4612', calledCash, 0); // Apporteurs, apports en numéraire
+      // Debit
+      if (uncalledCash > 0) entryStmt.run(subTxId, '109', uncalledCash, 0); // Actionnaires, capital souscrit non appelé
+      if (kindTotal > 0) entryStmt.run(subTxId, '4611', kindTotal, 0); // Apporteurs, apports en nature
+      if (calledCash > 0) entryStmt.run(subTxId, '4612', calledCash, 0); // Apporteurs, apports en numéraire
 
-    // Credit
-    if (uncalledCash > 0) entryStmt.run(subTxId, '1011', 0, uncalledCash); // Capital souscrit, non appelé
-    if (kindTotal + calledCash > 0) entryStmt.run(subTxId, '1012', 0, kindTotal + calledCash); // Capital souscrit, appelé, non versé
+      // Credit
+      if (uncalledCash > 0) entryStmt.run(subTxId, '1011', 0, uncalledCash); // Capital souscrit, non appelé
+      if (kindTotal + calledCash > 0) entryStmt.run(subTxId, '1012', 0, kindTotal + calledCash); // Capital souscrit, appelé, non versé
 
-    // Liberation of Nature Contributions
-    for (const p of partners) {
-      if (p.type !== 'cash') {
-        const libTxInfo = txStmt.run(today, `Libération apport en nature (${p.name})`, 'CONST-NAT');
-        const libTxId = libTxInfo.lastInsertRowid;
-        
-        // Create generic asset record for "Apport en nature"
-        const assetStmt = db.prepare(`
-          INSERT INTO assets (
-            name, type, purchase_price, vat_amount, total_price, 
-            acquisition_date, depreciation_duration, account_code, transaction_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        assetStmt.run(
-          `Apport en nature (${p.name})`, 'industrial', p.amount, 0, p.amount,
-          today, 5, '241', libTxId
-        );
-        // Debit 241 (Asset) / Credit 4611
-        entryStmt.run(libTxId, '241', p.amount, 0);
-        entryStmt.run(libTxId, '4611', 0, p.amount);
+      // Liberation of Nature Contributions
+      for (const p of partners) {
+        if (p.type !== 'cash') {
+          const libTxInfo = txStmt.run(today, `Libération apport en nature (${p.name})`, 'CONST-NAT');
+          const libTxId = libTxInfo.lastInsertRowid;
+          
+          // Create generic asset record for "Apport en nature"
+          const assetStmt = db.prepare(`
+            INSERT INTO assets (
+              name, type, purchase_price, vat_amount, total_price, 
+              acquisition_date, depreciation_duration, account_code, transaction_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          assetStmt.run(
+            `Apport en nature (${p.name})`, 'industrial', p.amount, 0, p.amount,
+            today, 5, '241', libTxId
+          );
+          // Debit 241 (Asset) / Credit 4611
+          entryStmt.run(libTxId, '241', p.amount, 0);
+          entryStmt.run(libTxId, '4611', 0, p.amount);
+        }
       }
     }
 
@@ -2469,7 +2452,7 @@ app.post("/api/company/create", asyncHandler((req, res) => {
         bankAccountStmt.run(t.name, t.accountNumber || 'A DEFINIR', t.name, t.initialBalance, currency, nextCode);
       }
 
-      if (t.initialBalance > 0) {
+      if (isNewCompany && t.initialBalance > 0) {
         const libTxInfo = txStmt.run(today, `Libération numéraire: ${t.name}`, `CONST-${nextCode}`);
         const libTxId = libTxInfo.lastInsertRowid;
         
@@ -2478,26 +2461,28 @@ app.post("/api/company/create", asyncHandler((req, res) => {
       }
     }
 
-    // Reclassification of Paid Capital
-    const totalPaidCash = treasury.reduce((sum: number, t: any) => sum + (t.initialBalance || 0), 0);
-    const totalPaidNature = kindTotal;
+    if (isNewCompany) {
+      // Reclassification of Paid Capital
+      const totalPaidCash = treasury.reduce((sum: number, t: any) => sum + (t.initialBalance || 0), 0);
+      const totalPaidNature = kindTotal;
 
-    if (totalPaidCash + totalPaidNature > 0) {
-        const reclasInfo = txStmt.run(today, `Reclassement capital versé`, 'CONST-002');
-        const reclasId = reclasInfo.lastInsertRowid;
-        entryStmt.run(reclasId, '1012', totalPaidCash + totalPaidNature, 0);
-        entryStmt.run(reclasId, '1013', 0, totalPaidCash + totalPaidNature);
-    }
+      if (totalPaidCash + totalPaidNature > 0) {
+          const reclasInfo = txStmt.run(today, `Reclassement capital versé`, 'CONST-002');
+          const reclasId = reclasInfo.lastInsertRowid;
+          entryStmt.run(reclasId, '1012', totalPaidCash + totalPaidNature, 0);
+          entryStmt.run(reclasId, '1013', 0, totalPaidCash + totalPaidNature);
+      }
 
-    // 6. Constitution Costs
-    if (constitutionCosts > 0) {
-      const costTxInfo = txStmt.run(today, `Frais de constitution`, 'CONST-FRAIS');
-      const costTxId = costTxInfo.lastInsertRowid;
-      entryStmt.run(costTxId, '201', constitutionCosts, 0);
-      
-      // Credit first bank account or cash if available
-      const creditCode = firstCreatedTreasuryCode || '52101';
-      entryStmt.run(costTxId, creditCode, 0, constitutionCosts);
+      // 6. Constitution Costs
+      if (constitutionCosts > 0) {
+        const costTxInfo = txStmt.run(today, `Frais de constitution`, 'CONST-FRAIS');
+        const costTxId = costTxInfo.lastInsertRowid;
+        entryStmt.run(costTxId, '201', constitutionCosts, 0);
+        
+        // Credit first bank account or cash if available
+        const creditCode = firstCreatedTreasuryCode || '52101';
+        entryStmt.run(costTxId, creditCode, 0, constitutionCosts);
+      }
     }
 
     // 7. Initial Users (already handled by registration usually, but we can add more)
@@ -2527,7 +2512,8 @@ const SUPPORTED_MODULES = [
   'vat',
   'bankRec',
   'analytics',
-  'audit'
+  'audit',
+  'p2p'
 ];
 
 app.get("/api/company/modules", (req, res) => {
@@ -3450,7 +3436,7 @@ app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial(
     bank_name, bank_account_number, bank_iban, bank_swift,
     payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
     cnps_employer_number, tax_office, logo_url,
-    corporate_tax_rate, imf_rate, taxes_enabled
+    corporate_tax_rate, imf_rate, taxes_enabled, taxDeadlines
   } = req.body;
   
   const existing = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
@@ -3464,7 +3450,7 @@ app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial(
           bank_name = ?, bank_account_number = ?, bank_iban = ?, bank_swift = ?,
           payment_bank_enabled = ?, payment_bank_account = ?, payment_cash_enabled = ?, payment_cash_account = ?, payment_mobile_enabled = ?, payment_mobile_account = ?,
           cnps_employer_number = ?, tax_office = ?, logo_url = ?,
-          corporate_tax_rate = ?, imf_rate = ?
+          corporate_tax_rate = ?, imf_rate = ?, tax_deadlines = ?
       WHERE id = ?
     `);
     stmt.run(
@@ -3487,6 +3473,7 @@ app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial(
       logo_url === undefined ? existing.logo_url : logo_url,
       corporate_tax_rate === undefined ? existing.corporate_tax_rate : corporate_tax_rate,
       imf_rate === undefined ? existing.imf_rate : imf_rate,
+      taxDeadlines === undefined ? existing.tax_deadlines : taxDeadlines,
       existing.id
     );
     logAction(req.user?.name || 'Admin', 'UPDATE', 'CompanySettings', existing.id, { name, currency });
@@ -3499,7 +3486,7 @@ app.put("/api/company/settings", validate(schemas.companySettingsSchema.partial(
         bank_name, bank_account_number, bank_iban, bank_swift,
         payment_bank_enabled, payment_bank_account, payment_cash_enabled, payment_cash_account, payment_mobile_enabled, payment_mobile_account,
         cnps_employer_number, tax_office, logo_url,
-        corporate_tax_rate, imf_rate
+        corporate_tax_rate, imf_rate, tax_deadlines
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
@@ -5618,6 +5605,64 @@ app.get("/api/dashboard/charts", asyncHandler((req, res) => {
   res.json(chartData);
 }));
 
+
+app.get("/api/dashboard/liquidity-history", asyncHandler((req, res) => {
+  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+  if (!fiscalYear) return res.json([]);
+
+  const startDateObj = new Date(fiscalYear.start_date);
+  const endDateObj = new Date(fiscalYear.end_date);
+  
+  const historyData = [];
+  let current = new Date(startDateObj);
+  current.setDate(1);
+
+  while (current <= endDateObj) {
+    const year = current.getFullYear();
+    const month = (current.getMonth() + 1).toString().padStart(2, '0');
+    const monthName = current.toLocaleString('fr-FR', { month: 'short' });
+    
+    const monthStart = `${year}-${month}-01`;
+    const monthEnd = `${year}-${month}-31`;
+
+    const cashStmt = db.prepare(`
+      SELECT SUM(je.debit) - SUM(je.credit) as total
+      FROM journal_entries je
+      JOIN transactions t ON je.transaction_id = t.id
+      WHERE je.account_code LIKE '5%' AND t.date <= ? AND t.status = 'validated' AND t.deleted_at IS NULL
+    `);
+    const cash = cashStmt.get(monthEnd).total || 0;
+
+    const caStmt = db.prepare(`
+      SELECT SUM(je.debit - je.credit) as total
+      FROM journal_entries je
+      JOIN transactions t ON je.transaction_id = t.id
+      WHERE (je.account_code LIKE '3%' OR je.account_code LIKE '4%' OR je.account_code LIKE '5%') AND t.date <= ? AND t.status = 'validated' AND t.deleted_at IS NULL
+    `);
+    const currentAssets = caStmt.get(monthEnd).total || 0;
+
+    const clStmt = db.prepare(`
+      SELECT SUM(je.credit - je.debit) as total
+      FROM journal_entries je
+      JOIN transactions t ON je.transaction_id = t.id
+      WHERE je.account_code LIKE '4%' AND t.date <= ? AND t.status = 'validated' AND t.deleted_at IS NULL
+    `);
+    const currentLiabilities = clStmt.get(monthEnd).total || 0;
+
+    const ratio = currentLiabilities !== 0 ? Math.max(0, currentAssets / currentLiabilities) : (currentAssets > 0 ? 3 : 0);
+
+    historyData.push({
+      name: monthName.charAt(0).toUpperCase() + monthName.slice(1),
+      cash: parseFloat((cash).toFixed(2)),
+      ratio: parseFloat((ratio).toFixed(2))
+    });
+
+    current.setMonth(current.getMonth() + 1);
+  }
+
+  res.json(historyData);
+}));
+
 // Get dashboard expense breakdown
 app.get("/api/dashboard/breakdown", asyncHandler((req, res) => {
   const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
@@ -5750,6 +5795,39 @@ app.get("/api/dashboard/deadlines", asyncHandler((req, res) => {
       AND due_date >= date('now') 
       AND due_date <= date('now', '+' || ? || ' days')
   `).all(daysAhead);
+
+  
+  const settings = db.prepare("SELECT tax_deadlines FROM company_settings ORDER BY id DESC LIMIT 1").get();
+  let customDeadlines = [];
+  if (settings && settings.tax_deadlines) {
+    try {
+      const dls = JSON.parse(settings.tax_deadlines);
+      const today = new Date();
+      // add deadlines for current month and next month
+      for (let offset = 0; offset <= 1; offset++) {
+         const y = today.getFullYear();
+         const m = today.getMonth() + offset;
+         dls.forEach(dl => {
+            const date = new Date(y, m, dl.day);
+            customDeadlines.push({
+               id: 'dl-' + dl.id + '-' + offset,
+               title: dl.name,
+               date: date.toISOString().split('T')[0],
+               type: 'task'
+            });
+         });
+      }
+      // block past deadlines unless overdue, but for simplicity let's just pick upcoming
+      const maxDate = new Date();
+      maxDate.setDate(maxDate.getDate() + daysAhead);
+      
+      customDeadlines = customDeadlines.filter(d => {
+         const dDate = new Date(d.date);
+         return dDate >= today && dDate <= maxDate;
+      });
+      tasks.push(...customDeadlines);
+    } catch(e) {}
+  }
 
   res.json({ tasks, invoices });
 }));
@@ -7494,11 +7572,27 @@ app.get("/api/tax/summary", (req, res) => {
     const estimatedIS = profit * corpRate;
 
     // 4. Deadlines (Mocked for now based on common rules)
-    const deadlines = [
-      { name: "Déclaration TVA", date: `${year}-${String(Number(month) + 1).padStart(2, '0')}-15`, status: 'upcoming' },
-      { name: "Déclaration CNPS", date: `${year}-${String(Number(month) + 1).padStart(2, '0')}-15`, status: 'upcoming' },
-      { name: "Impôts sur Salaires (ITS)", date: `${year}-${String(Number(month) + 1).padStart(2, '0')}-15`, status: 'upcoming' }
-    ];
+    let deadlines = [];
+    const settings = db.prepare("SELECT tax_deadlines FROM company_settings ORDER BY id DESC LIMIT 1").get();
+    if (settings && settings.tax_deadlines) {
+      try {
+        const dls = JSON.parse(settings.tax_deadlines);
+        deadlines = dls.map(dl => {
+          const nextMonthDate = new Date(Number(year), Number(month), dl.day);
+          return {
+            name: dl.name,
+            date: nextMonthDate.toISOString().split('T')[0],
+            status: 'upcoming'
+          };
+        });
+      } catch(e) {}
+    } else {
+      deadlines = [
+        { name: "Déclaration TVA", date: `${year}-${String(Number(month) + 1).padStart(2, '0')}-15`, status: 'upcoming' },
+        { name: "Déclaration CNPS", date: `${year}-${String(Number(month) + 1).padStart(2, '0')}-15`, status: 'upcoming' },
+        { name: "Impôts sur Salaires (ITS)", date: `${year}-${String(Number(month) + 1).padStart(2, '0')}-15`, status: 'upcoming' }
+      ];
+    }
 
     res.json({
       period: { month, year },
@@ -9092,6 +9186,11 @@ app.use('/api', (req, res) => {
     message: `L'endpoint ${req.method} ${req.originalUrl} n'existe pas sur ce serveur.`,
     path: req.originalUrl 
   });
+});
+
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error("EXPRESS GLOBAL ERROR:", err);
+  res.status(500).json({ error: err.message, name: err.name });
 });
 
 // --- Vite Middleware ---

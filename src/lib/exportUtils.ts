@@ -537,8 +537,8 @@ export function generatePayslipPDF(payslip: any, period: any, settings: CompanyS
 /**
  * Generates a full Invoice/Quote PDF
  */
-export async function generateInvoicePDF(invoice: any, companySettings: CompanySettings | null) {
-  const doc = await buildInvoicePDF(invoice, companySettings);
+export async function generateInvoicePDF(invoice: any, companySettings: CompanySettings | null, exportConfig?: any) {
+  const doc = await buildInvoicePDF(invoice, companySettings, exportConfig);
   const isInvoice = invoice.type === 'invoice';
   const prefix = isInvoice ? 'FACTURE' : invoice.type === 'quote' ? 'DEVIS' : 'PROFORMA';
   doc.save(`${prefix}_${invoice.number || 'BROUILLON'}.pdf`);
@@ -547,7 +547,7 @@ export async function generateInvoicePDF(invoice: any, companySettings: CompanyS
 /**
  * Builds the jsPDF instance for an Invoice/Quote
  */
-export async function buildInvoicePDF(invoice: any, companySettings: CompanySettings | null): Promise<jsPDF> {
+export async function buildInvoicePDF(invoice: any, companySettings: CompanySettings | null, exportConfig?: any): Promise<jsPDF> {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.width;
   const pageHeight = doc.internal.pageSize.height;
@@ -557,7 +557,7 @@ export async function buildInvoicePDF(invoice: any, companySettings: CompanySett
   
   const totalDiscount = invoice.items.reduce((acc: number, item: any) => acc + (item.quantity * item.unit_price * ((item.discount || 0)/100)), 0);
   
-  const template = invoice.template || 'prestige';
+  const template = exportConfig?.template || invoice.template || 'prestige';
     // Custom beautiful styling for quotes or non-FNE invoices (classic, minimal, prestige)
     let primaryColor = PDF_CONFIG.colors.primary;
     let secondaryColor = PDF_CONFIG.colors.secondary;
@@ -598,88 +598,144 @@ export async function buildInvoicePDF(invoice: any, companySettings: CompanySett
       doc.setLineWidth(1.5);
       doc.line(7, 53, pageWidth - 7, 53);
       
-      let companyStartX = 14;
+      let logoX = 14;
+      let textX = 38;
+      let logoAlign = 'left';
+
+      if (exportConfig?.logoPosition === 'center') {
+        logoX = pageWidth / 2 - 10;
+        textX = pageWidth / 2;
+        logoAlign = 'center';
+      } else if (exportConfig?.logoPosition === 'right') {
+        logoX = pageWidth - 14 - 20;
+        textX = pageWidth - 14;
+        logoAlign = 'right';
+      }
+
       if (settings.logo_url) {
         try {
-          drawPDFLogo(doc, settings.logo_url, 14, 14, 20, 16);
-          companyStartX = 38;
+          // If centered, maybe we put logo on top of text, but let's just align it.
+          if (exportConfig?.logoPosition === 'center') {
+            drawPDFLogo(doc, settings.logo_url, logoX, 9, 20, 14);
+            textX = pageWidth / 2;
+          } else {
+            drawPDFLogo(doc, settings.logo_url, logoX, 14, 20, 16);
+            if (exportConfig?.logoPosition === 'right') {
+              textX = logoX - 5;
+            }
+          }
         } catch (e) {
           console.warn("Prestige template logo rendering failed:", e);
         }
+      } else if (exportConfig?.logoPosition === 'center') {
+        textX = pageWidth / 2;
+      } else if (exportConfig?.logoPosition === 'right') {
+        textX = pageWidth - 14;
       }
+
+      const alignParams = logoAlign === 'center' ? { align: 'center' } : logoAlign === 'right' ? { align: 'right' } : undefined;
 
       // Top luxury Brand Text
       doc.setFontSize(22);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(197, 160, 89);
-      doc.text(sanitizeText(settings.name || PDF_CONFIG.companyName).toUpperCase(), companyStartX, 26);
+      doc.text(sanitizeText(settings.name || PDF_CONFIG.companyName).toUpperCase(), textX, exportConfig?.logoPosition === 'center' && settings.logo_url ? 31 : 26, alignParams as any);
       
       doc.setFontSize(9);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(243, 244, 246);
-      doc.text(sanitizeText(settings.address || ''), companyStartX, 33);
-      doc.text(sanitizeText(`${settings.phone || ''} | ${settings.email || ''}`.trim()), companyStartX, 38);
+      doc.text(sanitizeText(settings.address || ''), textX, exportConfig?.logoPosition === 'center' && settings.logo_url ? 36 : 33, alignParams as any);
+      doc.text(sanitizeText(`${settings.phone || ''} | ${settings.email || ''}`.trim()), textX, exportConfig?.logoPosition === 'center' && settings.logo_url ? 41 : 38, alignParams as any);
       
       // Document Metadata (Prestige styled inside header)
+      let metaX = exportConfig?.logoPosition === 'right' ? 14 : pageWidth - 14;
+      let metaAlign = exportConfig?.logoPosition === 'right' ? 'left' : 'right';
+
       doc.setFontSize(14);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(197, 160, 89);
-      doc.text(`${title} N° ${invoice.number}`, pageWidth - 14, 24, { align: 'right' });
+      doc.text(`${title} N° ${invoice.number}`, metaX, 24, { align: metaAlign } as any);
       
       doc.setFontSize(8);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(209, 213, 219);
-      doc.text(`Date de Facturation : ${new Date(invoice.date).toLocaleDateString('fr-FR')}`, pageWidth - 14, 31, { align: 'right' });
+      doc.text(`Date de Facturation : ${new Date(invoice.date).toLocaleDateString('fr-FR')}`, metaX, 31, { align: metaAlign } as any);
       if (invoice.due_date) {
-        doc.text(`Date d'Échéance : ${new Date(invoice.due_date).toLocaleDateString('fr-FR')}`, pageWidth - 14, 36, { align: 'right' });
+        doc.text(`Date d'Échéance : ${new Date(invoice.due_date).toLocaleDateString('fr-FR')}`, metaX, 36, { align: metaAlign } as any);
       }
-      doc.text(`NIF Emetteur : ${settings.fiscal_id || '-'}`, pageWidth - 14, 41, { align: 'right' });
+      doc.text(`NIF Emetteur : ${settings.fiscal_id || '-'}`, metaX, 41, { align: metaAlign } as any);
       
       headerY = 58;
     } else if (template === 'minimal') {
-      let companyStartX = 14;
+      let logoX = 14;
+      let textX = 36;
+      let logoAlign = 'left';
+
+      if (exportConfig?.logoPosition === 'center') {
+        logoX = pageWidth / 2 - 9; // half of 18
+        textX = pageWidth / 2;
+        logoAlign = 'center';
+      } else if (exportConfig?.logoPosition === 'right') {
+        logoX = pageWidth - 14 - 18;
+        textX = pageWidth - 14;
+        logoAlign = 'right';
+      }
+
       if (settings.logo_url) {
         try {
-          drawPDFLogo(doc, settings.logo_url, 14, 14, 18, 14);
-          companyStartX = 36;
+          if (exportConfig?.logoPosition === 'center') {
+            drawPDFLogo(doc, settings.logo_url, logoX, 8, 18, 12);
+          } else {
+            drawPDFLogo(doc, settings.logo_url, logoX, 14, 18, 14);
+            if (exportConfig?.logoPosition === 'right') textX = logoX - 5;
+          }
         } catch (e) {
           console.warn("Minimal template logo rendering failed:", e);
         }
+      } else if (exportConfig?.logoPosition === 'center') {
+        textX = pageWidth / 2;
+      } else if (exportConfig?.logoPosition === 'right') {
+        textX = pageWidth - 14;
       }
+
+      const alignParams = logoAlign === 'center' ? { align: 'center' } : logoAlign === 'right' ? { align: 'right' } : undefined;
 
       // Light modern brand header
       doc.setFontSize(18);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(31, 41, 55);
-      doc.text(sanitizeText(settings.name || PDF_CONFIG.companyName).toUpperCase(), companyStartX, 22);
+      doc.text(sanitizeText(settings.name || PDF_CONFIG.companyName).toUpperCase(), textX, exportConfig?.logoPosition === 'center' && settings.logo_url ? 26 : 22, alignParams as any);
       
       // Subtle gray label
       doc.setFontSize(8);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(107, 114, 128);
-      doc.text(sanitizeText(settings.address || ''), companyStartX, 28);
-      doc.text(sanitizeText(`${settings.phone || ''} | ${settings.email || ''}`.trim()), companyStartX, 33);
+      doc.text(sanitizeText(settings.address || ''), textX, exportConfig?.logoPosition === 'center' && settings.logo_url ? 31 : 28, alignParams as any);
+      doc.text(sanitizeText(`${settings.phone || ''} | ${settings.email || ''}`.trim()), textX, exportConfig?.logoPosition === 'center' && settings.logo_url ? 36 : 33, alignParams as any);
       
-      // Light gray separator
-      doc.setDrawColor(229, 231, 235);
-      doc.setLineWidth(0.5);
-      doc.line(14, 38, pageWidth - 14, 38);
-      
+      let metaX = exportConfig?.logoPosition === 'right' ? 14 : pageWidth - 14;
+      let metaAlign = exportConfig?.logoPosition === 'right' ? 'left' : 'right';
+
       // Document metadata
       doc.setFontSize(14);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(17, 24, 39);
-      doc.text(`${title} N° ${invoice.number}`, pageWidth - 14, 22, { align: 'right' });
+      doc.text(`${title} N° ${invoice.number}`, metaX, 22, { align: metaAlign } as any);
       
       doc.setFontSize(8);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(107, 114, 128);
-      doc.text(`Émis le : ${new Date(invoice.date).toLocaleDateString('fr-FR')}`, pageWidth - 14, 28, { align: 'right' });
+      doc.text(`Émis le : ${new Date(invoice.date).toLocaleDateString('fr-FR')}`, metaX, 28, { align: metaAlign } as any);
       if (invoice.due_date) {
-        doc.text(`Échéance : ${new Date(invoice.due_date).toLocaleDateString('fr-FR')}`, pageWidth - 14, 33, { align: 'right' });
+        doc.text(`Échéance : ${new Date(invoice.due_date).toLocaleDateString('fr-FR')}`, metaX, 33, { align: metaAlign } as any);
       }
+
+      // Light gray separator
+      doc.setDrawColor(229, 231, 235);
+      doc.setLineWidth(0.5);
+      doc.line(14, 42, pageWidth - 14, 42);
       
-      headerY = 46;
+      headerY = 50;
     } else {
       // Classic layout: Call standard addPDFHeader
       const subtitle = `${title} N° ${invoice.number}`;
@@ -691,40 +747,46 @@ export async function buildInvoicePDF(invoice: any, companySettings: CompanySett
     
     // 2. CLIENT INFO BLOCK
     if (template === 'prestige') {
+      const clientX = exportConfig?.clientPosition === 'right' ? 120 : 18;
+      const rectX = exportConfig?.clientPosition === 'right' ? 116 : 14;
+      
       // Draw luxury colored container for client
       doc.setFillColor(253, 244, 215);
-      doc.roundedRect(14, currentY, pageWidth - 28, 25, 2, 2, 'F');
+      doc.roundedRect(rectX, currentY, 80 /* changed from pageWidth - 28 so it fits one side */, 25, 2, 2, 'F');
       
       doc.setFontSize(8);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(180, 142, 60);
-      doc.text("DESTINATAIRE (CLIENT DE CONFIANCE) :", 18, currentY + 6);
+      doc.text("DESTINATAIRE :", clientX, currentY + 6);
       
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(17, 24, 39);
-      doc.text(sanitizeText(invoice.third_party_name).toUpperCase(), 18, currentY + 13);
+      doc.text(sanitizeText(invoice.third_party_name).toUpperCase(), clientX, currentY + 13);
       
       doc.setFontSize(8);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(55, 65, 81);
-      doc.text(sanitizeText(invoice.third_party_address || '-'), 18, currentY + 19);
+      doc.text(sanitizeText(invoice.third_party_address || '-'), clientX, currentY + 19);
       if (invoice.third_party_tax_id) {
-        doc.text(`NIF Client : ${invoice.third_party_tax_id}`, pageWidth - 18, currentY + 13, { align: 'right' });
+        doc.text(`NIF : ${invoice.third_party_tax_id}`, clientX, currentY + 23);
       }
       
       currentY += 35;
     } else if (template === 'minimal') {
+      const clientX = exportConfig?.clientPosition === 'right' ? 120 : 14;
+      const refX = exportConfig?.clientPosition === 'right' ? 14 : 120;
+      
       // Modern side-by-side without border boxes
       doc.setFontSize(8);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(156, 163, 175);
-      doc.text("FACTURÉ À :", 14, currentY);
+      doc.text("FACTURÉ À :", clientX, currentY);
       
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(31, 41, 55);
-      doc.text(sanitizeText(invoice.third_party_name), 14, currentY + 6);
+      doc.text(sanitizeText(invoice.third_party_name), clientX, currentY + 6);
       
       doc.setFontSize(9);
       doc.setFont("helvetica", "normal");
@@ -732,64 +794,67 @@ export async function buildInvoicePDF(invoice: any, companySettings: CompanySett
       
       let clientY = currentY + 11;
       if (invoice.third_party_address) {
-        const addrLines = doc.splitTextToSize(sanitizeText(invoice.third_party_address), 90);
-        doc.text(addrLines, 14, clientY);
+        const addrLines = doc.splitTextToSize(sanitizeText(invoice.third_party_address), 80);
+        doc.text(addrLines, clientX, clientY);
         clientY += addrLines.length * 5;
       }
       if (invoice.third_party_tax_id) {
-        doc.text(`Identifiant Fiscal (NIF) : ${invoice.third_party_tax_id}`, 14, clientY);
+        doc.text(`Identifiant Fiscal (NIF) : ${invoice.third_party_tax_id}`, clientX, clientY);
       }
       
-      // Reference column on the right
+      // Reference column on the other side
       doc.setFontSize(8);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(156, 163, 175);
-      doc.text("RÉSUMÉ COMMERCIAL :", 120, currentY);
+      doc.text("RÉSUMÉ COMMERCIAL :", refX, currentY);
       
       doc.setFontSize(9);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(75, 85, 99);
-      doc.text(`Mode : Virement ou Espèces`, 120, currentY + 6);
-      doc.text(`Statut : ${invoice.status?.toUpperCase() || 'BROUILLON'}`, 120, currentY + 11);
+      doc.text(`Mode : Virement ou Espèces`, refX, currentY + 6);
+      doc.text(`Statut : ${invoice.status?.toUpperCase() || 'BROUILLON'}`, refX, currentY + 11);
       if (invoice.currency) {
-        doc.text(`Devise commerciale : ${invoice.currency}`, 120, currentY + 16);
+        doc.text(`Devise commerciale : ${invoice.currency}`, refX, currentY + 16);
       }
       
       currentY += 30;
     } else {
+      const clientX = exportConfig?.clientPosition === 'left' ? 14 : 120;
+      const refX = exportConfig?.clientPosition === 'left' ? 120 : 14;
+
       // Classic layout customer display
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(secondaryColor[0], secondaryColor[1], secondaryColor[2]);
-      doc.text("DESTINATAIRE :", 120, currentY);
+      doc.text("DESTINATAIRE :", clientX, currentY);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(PDF_CONFIG.colors.text[0], PDF_CONFIG.colors.text[1], PDF_CONFIG.colors.text[2]);
-      doc.text(sanitizeText(invoice.third_party_name), 120, currentY + 5);
+      doc.text(sanitizeText(invoice.third_party_name), clientX, currentY + 5);
       
       let clientY = currentY + 10;
       if (invoice.third_party_address) {
         const addrLines = doc.splitTextToSize(sanitizeText(invoice.third_party_address), 80);
-        doc.text(addrLines, 120, clientY);
+        doc.text(addrLines, clientX, clientY);
         clientY += addrLines.length * 5;
       }
       if (invoice.third_party_tax_id) {
-        doc.text(`NIF: ${invoice.third_party_tax_id}`, 120, clientY);
+        doc.text(`NIF: ${invoice.third_party_tax_id}`, clientX, clientY);
       }
       
-      // References on the left
+      // References on the other side
       doc.setFont("helvetica", "bold");
-      doc.text("RÉFÉRENCES :", 14, currentY);
+      doc.text("RÉFÉRENCES :", refX, currentY);
       doc.setFont("helvetica", "normal");
-      doc.text(`Date : ${new Date(invoice.date).toLocaleDateString('fr-FR')}`, 14, currentY + 7);
+      doc.text(`Date : ${new Date(invoice.date).toLocaleDateString('fr-FR')}`, refX, currentY + 7);
       if (invoice.due_date) {
-        doc.text(`Échéance : ${new Date(invoice.due_date).toLocaleDateString('fr-FR')}`, 14, currentY + 13);
+        doc.text(`Échéance : ${new Date(invoice.due_date).toLocaleDateString('fr-FR')}`, refX, currentY + 13);
       }
       if (invoice.status) {
         const statusText = invoice.status === 'paid' ? 'PAYÉE' : 
                           invoice.status === 'sent' ? 'ENVOYÉE' : 
                           invoice.status === 'draft' ? 'BROUILLON' : 
                           invoice.status.toUpperCase();
-        doc.text(`Statut : ${statusText}`, 14, currentY + 19);
+        doc.text(`Statut : ${statusText}`, refX, currentY + 19);
       }
       
       currentY = Math.max(clientY + 10, currentY + 25);
@@ -937,7 +1002,7 @@ export async function buildInvoicePDF(invoice: any, companySettings: CompanySett
     }
   
     // Stamp or Signature space
-    addPDFSignature(doc, doc.internal.pageSize.height - 50);
+    addPDFSignature(doc, doc.internal.pageSize.height - 50, "Le Responsable", exportConfig?.signaturePosition || 'right');
   
     // Bank Details
     if (settings.bank_name || settings.bank_account_number) {
@@ -1145,7 +1210,7 @@ export function generateCustomDashboardPDF(data: any, customConfig: any, setting
 
   doc.save(`Tableau_de_Bord_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
-export function addPDFSignature(doc: jsPDF, y: number, label: string = "Le Responsable") {
+export function addPDFSignature(doc: jsPDF, y: number, label: string = "Le Responsable", position: 'left' | 'right' = 'right') {
   const pageWidth = doc.internal.pageSize.width;
   const pageHeight = doc.internal.pageSize.height;
   
@@ -1159,16 +1224,21 @@ export function addPDFSignature(doc: jsPDF, y: number, label: string = "Le Respo
   doc.setFont("helvetica", "bold");
   doc.setTextColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
   
-  doc.text(label, pageWidth - 60, y);
+  let labelX = position === 'right' ? pageWidth - 60 : 14;
+  let lineStartX = position === 'right' ? pageWidth - 70 : 14;
+  let lineEndX = position === 'right' ? pageWidth - 14 : 70;
+  let cachetX = position === 'right' ? pageWidth - 55 : 20;
+
+  doc.text(label, labelX, y);
   
   // Signature line
   doc.setDrawColor(PDF_CONFIG.colors.secondary[0], PDF_CONFIG.colors.secondary[1], PDF_CONFIG.colors.secondary[2]);
   doc.setLineWidth(0.5);
-  doc.line(pageWidth - 70, y + 20, pageWidth - 14, y + 20);
+  doc.line(lineStartX, y + 20, lineEndX, y + 20);
   
   doc.setFontSize(8);
   doc.setFont("helvetica", "italic");
-  doc.text("Cachet et Signature", pageWidth - 55, y + 25);
+  doc.text("Cachet et Signature", cachetX, y + 25);
   
   return y + 35;
 }

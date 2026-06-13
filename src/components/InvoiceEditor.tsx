@@ -20,7 +20,6 @@ import { apiFetch as fetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { useDialog } from './DialogProvider';
-import { QRCodeSVG } from 'qrcode.react';
 import { buildInvoicePDF } from '@/lib/exportUtils';
 import { FNELogo } from './FNELogo';
 import { ThirdPartyFormModal } from './ThirdPartyFormModal';
@@ -1102,9 +1101,7 @@ export function InvoiceEditor({ type, id, prefill, onClose }: InvoiceEditorProps
                    {/* FNE Visual block if type is invoice */}
                    {type === 'invoice' ? (
                      <div className="border border-amber-500/30 p-2 flex gap-3 items-center bg-white dark:bg-slate-900 rounded-xl shadow-sm">
-                        <div className="p-1 bg-white">
-                          <QRCodeSVG value={`FNE:PROVISOIRE-REF:DRAFT-TOTAL:${total}`} size={50} level="L" />
-                        </div>
+                        {/* Removed QRCodeSVG */}
                         <div className="p-0.5 bg-slate-50 dark:bg-slate-950 rounded-md shrink-0 border border-slate-100 dark:border-slate-800">
                           <FNELogo className="h-10 w-10 text-slate-850" />
                         </div>

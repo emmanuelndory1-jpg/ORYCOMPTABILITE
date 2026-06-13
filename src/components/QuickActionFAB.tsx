@@ -17,7 +17,7 @@ export function QuickActionFAB({ onAction }: QuickActionFABProps) {
   };
 
   return (
-    <div className="fixed bottom-28 right-6 z-30 flex flex-col items-end gap-3 text-right">
+    <div className="fixed bottom-36 md:bottom-36 right-4 md:right-8 z-30 flex flex-col items-end gap-3 text-right">
       <AnimatePresence>
         {isOpen && (
           <>

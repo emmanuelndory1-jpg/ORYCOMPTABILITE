@@ -14,7 +14,8 @@ import {
   Sun,
   Moon,
   Check,
-  DatabaseBackup
+  DatabaseBackup,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { FiscalYearManager } from './FiscalYearManager';
@@ -43,7 +44,7 @@ import { SecuritySettings } from './SecuritySettings';
 export function Settings() {
   const { t } = useLanguage();
   const { isActive } = useModules();
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, uiMode, setUiMode } = useTheme();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('workspaces');
 
@@ -135,6 +136,51 @@ export function Settings() {
                     {theme === item.id && (
                       <div className="absolute top-2 right-2">
                         <Check className="text-brand-green" size={14} />
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-white/5 shadow-sm">
+              <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-widest flex items-center gap-3 mb-8">
+                <div className="w-1.5 h-4 bg-brand-green rounded-full" />
+                Expérience Utilisateur
+              </h3>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {[
+                  { id: 'simplified', label: 'Mode Simplifié', icon: Sparkles, desc: 'Interface épurée et guidée, idéale pour les dirigeants et non-comptables.' },
+                  { id: 'expert', label: 'Mode Expert', icon: Calculator, desc: 'Accès complet aux plans comptables, saisie manuelle et lettrage.' },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setUiMode(item.id as any)}
+                    className={cn(
+                      "flex flex-col items-start gap-4 p-6 rounded-2xl border-2 transition-all group overflow-hidden relative text-left",
+                      uiMode === item.id 
+                        ? "border-brand-green bg-brand-green/5 ring-4 ring-brand-green/5" 
+                        : "border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:hover:border-slate-700 bg-slate-50/50 dark:bg-slate-950/50"
+                    )}
+                  >
+                    <div className={cn(
+                      "w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300",
+                      uiMode === item.id ? "bg-brand-green text-white shadow-lg" : "bg-white dark:bg-slate-900 text-slate-400 group-hover:scale-110"
+                    )}>
+                      <item.icon size={24} />
+                    </div>
+                    <div>
+                      <div className={cn("text-xs font-black uppercase tracking-widest mb-1", uiMode === item.id ? "text-brand-green" : "text-slate-900 dark:text-white")}>
+                        {item.label}
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                        {item.desc}
+                      </div>
+                    </div>
+                    {uiMode === item.id && (
+                      <div className="absolute top-4 right-4">
+                        <Check className="text-brand-green" size={16} />
                       </div>
                     )}
                   </button>

@@ -1,20 +1,16 @@
 const fs = require('fs');
 
-const filesToFix = [
-  'src/components/Journal.tsx',
-  'src/components/HRReports.tsx',
-  'src/components/PayrollWizard.tsx',
-  'src/components/AuditTrail.tsx',
-  'src/components/Dashboard.tsx',
-  'src/components/PayrollManager.tsx',
-  'src/components/AuditLogViewer.tsx',
-  'src/lib/exportUtils.ts'
-];
+let path = 'src/components/TasksManager.tsx';
+let code = fs.readFileSync(path, 'utf8');
+code = code.replace(
+  /return \{ id: , originalId: dl\.id/,
+  "return { id: \"dl-\" + dl.id + \"-\" + i, originalId: dl.id"
+);
 
-filesToFix.forEach((file) => {
-  let content = fs.readFileSync(file, 'utf8');
-  if (content.includes('JSON.parse')) {
-    content = 'import { parseSafeJSON } from "../lib/utils";\n' + content.replace(/JSON\.parse\(/g, 'parseSafeJSON(');
-    fs.writeFileSync(file, content);
-  }
-});
+// also fix settingsRes definition
+code = code.replace(
+  /if \(advRes\.ok\) setAdvances\(await advRes\.json\(\)\);\s*if/,
+  "if (advRes.ok) setAdvances(await advRes.json());\n      if"
+)
+
+fs.writeFileSync(path, code);

@@ -97,8 +97,12 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 import { motion, AnimatePresence } from 'motion/react';
 
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
+import { BackgroundSync } from './components/BackgroundSync';
+
 function DashboardLayout() {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isCompanyCreated, setIsCompanyCreated] = useState<boolean | null>(null);
   const [companySettings, setCompanySettings] = useState<any>(null);
   const [openJournalModal, setOpenJournalModal] = useState(false);
@@ -178,6 +182,12 @@ function DashboardLayout() {
     const handleGlobalShortcuts = (e: KeyboardEvent) => {
       // Don't trigger shortcuts if user is typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.key === '?' && e.shiftKey) {
+        e.preventDefault();
+        setIsShortcutsOpen(true);
+        return;
+      }
 
       if (e.ctrlKey || e.metaKey) {
         switch (e.key.toLowerCase()) {
@@ -262,6 +272,7 @@ function DashboardLayout() {
         </div>
 
         <CommandPalette />
+        <KeyboardShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
         <Scratchpad />
         <QuickActionFAB onAction={(action) => {
           if (action === 'new') {
@@ -343,6 +354,7 @@ export default function App() {
             <ModuleProvider>
               <FiscalYearProvider>
                 <ScrollToTop />
+                <BackgroundSync />
                 <Routes>
                 <Route path="/login" element={
                   <PublicRoute>

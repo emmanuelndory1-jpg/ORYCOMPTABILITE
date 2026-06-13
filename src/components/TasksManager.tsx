@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { CheckSquare, Calendar as CalendarIcon, Plus, MoreVertical, Search, CheckCircle2, Clock, AlertCircle, LayoutList, CalendarDays, ChevronLeft, ChevronRight, X, Loader2, Trash2, FileText, Calendar, Repeat, CreditCard, Users, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/LanguageContext';
-import { format, startOfMonth, startOfWeek, endOfMonth, endOfWeek, addDays, isSameMonth, isSameDay, addMonths, subMonths, addWeeks, subWeeks, parseISO, isToday } from 'date-fns';
+import { format, startOfMonth, startOfWeek, endOfMonth, endOfWeek, addDays, isSameMonth, isSameDay, addMonths, subMonths, addWeeks, subWeeks, parseISO, isToday, isWeekend } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { apiFetch } from '@/lib/api';
 import { useNavigate } from 'react-router-dom';
@@ -21,11 +21,29 @@ export function TasksManager() {
   const [advances, setAdvances] = useState<any[]>([]);
   const [crmDeals, setCrmDeals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [companySettings, setCompanySettings] = useState<any>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all, pending, completed
   const [sourceFilter, setSourceFilter] = useState('all'); // all, task, invoice, fiscal_year, recurring, payroll, transaction, asset, crm, advance
   const [view, setView] = useState<'list' | 'calendar' | 'week'>('calendar');
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDay, setSelectedDay] = useState<{date: Date, events: CalendarEvent[]} | null>(null);
+
+  const getEventColors = (e: CalendarEvent) => {
+    if (e.type === 'task') {
+      if (e.status === 'completed') return "bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-500 line-through";
+      if (e.priority === 'high') return "bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/20 dark:text-rose-400";
+      return "bg-brand-green/10 border-brand-green/20 text-brand-green dark:bg-brand-green/20 dark:border-brand-green/30";
+    }
+    if (e.type === 'invoice' || e.type === 'quote') return "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/20";
+    if (e.type === 'recurring') return "bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-500/10 dark:border-blue-500/20";
+    if (e.type === 'payroll') return "bg-orange-50 border-orange-200 text-orange-700 dark:bg-orange-500/10 dark:border-orange-500/20";
+    if (e.type === 'transaction') return "bg-slate-100 border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300";
+    if (e.type === 'asset') return "bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-500/10 dark:border-amber-500/20";
+    if (e.type === 'crm') return "bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-500/10 dark:border-indigo-500/20";
+    if (e.type === 'advance') return "bg-pink-50 border-pink-200 text-pink-700 dark:bg-pink-500/10 dark:border-pink-500/20";
+    return "bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-500/10 dark:border-purple-500/20";
+  };
 
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [newTask, setNewTask] = useState({ title: '', dueDate: new Date().toISOString().split('T')[0], priority: 'medium', category: 'Général' });
@@ -36,7 +54,7 @@ export function TasksManager() {
 
   const fetchData = async () => {
     try {
-      const [tasksRes, invRes, fyRes, recTxRes, recInvRes, payrollRes, txRes, assetsRes, advRes] = await Promise.all([
+      const [tasksRes, invRes, fyRes, recTxRes, recInvRes, payrollRes, txRes, assetsRes, advRes, settingsRes] = await Promise.all([
         apiFetch('/api/tasks'),
         apiFetch('/api/invoices'),
         apiFetch('/api/fiscal-years'),
@@ -45,7 +63,8 @@ export function TasksManager() {
         apiFetch('/api/payroll/periods'),
         apiFetch('/api/transactions'), // Maybe limits size in future, but fine for now
         apiFetch('/api/assets'),
-        apiFetch('/api/advances')
+        apiFetch('/api/advances'),
+        apiFetch('/api/company/settings')
       ]);
       if (tasksRes.ok) setTasks(await tasksRes.json());
       if (invRes.ok) setInvoices(await invRes.json());
@@ -56,6 +75,7 @@ export function TasksManager() {
       if (txRes.ok) setTransactions(await txRes.json());
       if (assetsRes.ok) setAssets(await assetsRes.json());
       if (advRes.ok) setAdvances(await advRes.json());
+      if (settingsRes && settingsRes.ok) setCompanySettings(await settingsRes.json());
       
       const savedDeals = localStorage.getItem('crm_deals');
       if (savedDeals) {
@@ -134,6 +154,17 @@ export function TasksManager() {
   const calendarEvents: CalendarEvent[] = [
     ...tasks.map(t => ({ id: `task-${t.id}`, originalId: t.id, type: 'task', title: t.title, date: t.due_date || t.dueDate, status: t.status, priority: t.priority, taskCategory: t.category, searchStr: `${t.title || ''} ${t.description || ''} ${t.category || ''}`.toLowerCase() })),
     ...invoices.filter(i => i.due_date).map(i => ({ id: `inv-${i.id}`, originalId: i.id, type: i.type === 'quote' ? 'quote' : 'invoice', title: i.type === 'quote' ? `Devis ${i.number || i.invoice_number}` : `Facture ${i.number || i.invoice_number}`, date: i.due_date, status: i.status === 'paid' ? 'completed' : 'pending', searchStr: `${i.number || i.invoice_number || ''} ${i.third_party_name || i.client_name || ''} ${i.notes || ''}`.toLowerCase() })),
+    
+    ...(companySettings && companySettings.tax_deadlines ? 
+        Array.from({length: 12}).flatMap((_, i) => {
+           let dls = [];
+           try { dls = JSON.parse(companySettings.tax_deadlines); } catch(e){}
+           const year = new Date().getFullYear();
+           return dls.map(dl => {
+             const date = new Date(year, i, dl.day);
+             return { id: "dl-" + dl.id + "-" + i, originalId: dl.id, type: 'task', title: dl.name, date: date.toISOString(), status: date < new Date() ? 'completed' : 'pending', priority: 'high', searchStr: dl.name.toLowerCase() }
+           });
+        }) : []),
     ...fiscalYears.flatMap(fy => [
         { id: `fy-start-${fy.id}`, originalId: fy.id, type: 'fiscal_year', title: `Début Ex. ${fy.name}`, date: fy.start_date, status: 'completed', searchStr: fy.name?.toLowerCase() || '' },
         { id: `fy-end-${fy.id}`, originalId: fy.id, type: 'fiscal_year', title: `Fin Ex. ${fy.name}`, date: fy.end_date, status: fy.status === 'closed' ? 'completed' : 'pending', searchStr: fy.name?.toLowerCase() || '' }
@@ -313,18 +344,29 @@ export function TasksManager() {
           } catch { return false; }
         });
         
+        const maxDisplay = view === 'week' ? 15 : 4;
+        const displayedEvents = dayEvents.slice(0, maxDisplay);
+        const hiddenCount = dayEvents.length - maxDisplay;
+
         days.push(
           <div 
             key={day.toISOString()} 
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, cloneDay)}
             className={cn(
-              "min-h-[100px] sm:min-h-[120px] bg-white dark:bg-slate-900 border-r border-b border-slate-200 dark:border-slate-800 p-1 sm:p-2 transition-colors relative group",
+              view === 'week' ? "min-h-[300px]" : "min-h-[100px] sm:min-h-[120px]",
+              cn("border-r border-b border-slate-200 dark:border-slate-800 p-1 sm:p-2 transition-all relative group", isWeekend(day) ? "bg-slate-50 dark:bg-slate-800/20" : "bg-white dark:bg-slate-900"),
               view === 'calendar' && !isSameMonth(day, startOfMonth(currentDate)) ? "text-slate-300 dark:text-slate-600 bg-slate-50/50 dark:bg-slate-800/10" : "text-slate-700 dark:text-slate-200",
               isSameDay(day, new Date()) ? "bg-brand-green/5 dark:bg-brand-green/10" : ""
             )}
+            style={hiddenCount > 0 && view === 'calendar' ? { cursor: 'pointer' } : {}}
+            onClick={() => {
+              if (hiddenCount > 0 && view === 'calendar') {
+                 setSelectedDay({ date: cloneDay, events: dayEvents });
+              }
+            }}
           >
-            <div className="flex justify-end">
+            <div className="flex justify-end relative z-10">
               <span className={cn(
                 "w-6 h-6 flex items-center justify-center text-xs font-bold rounded-full mb-1 sm:mb-2",
                 isSameDay(day, new Date()) ? "bg-brand-green text-white" : ""
@@ -332,34 +374,43 @@ export function TasksManager() {
                 {formattedDate}
               </span>
             </div>
+            
             <div className="space-y-1 sm:space-y-1.5 overflow-hidden">
-              {dayEvents.map(e => (
+              {displayedEvents.map(e => (
                 <div 
                   key={e.id} 
                   draggable={e.type === 'task'}
                   onDragStart={(ev) => handleDragStart(ev, e)}
                   onClick={(ev) => handleEventClick(ev, e)}
                   className={cn(
-                    "text-[9px] sm:text-[10px] px-1.5 py-1 rounded truncate cursor-pointer transition-colors border font-bold shadow-sm",
-                    e.type === 'task' ? (e.status === 'completed' ? "bg-slate-100 border-slate-200 text-slate-400 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-500 line-through" : e.priority === 'high' ? "bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/20 dark:text-rose-400" : "bg-brand-green/10 border-brand-green/20 text-brand-green dark:bg-brand-green/20 dark:border-brand-green/30") 
-                    : (e.type === 'invoice' || e.type === 'quote') ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/20"
-                    : e.type === 'recurring' ? "bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-500/10 dark:border-blue-500/20"
-                    : e.type === 'payroll' ? "bg-orange-50 border-orange-200 text-orange-700 dark:bg-orange-500/10 dark:border-orange-500/20"
-                    : e.type === 'transaction' ? "bg-slate-100 border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300"
-                    : e.type === 'asset' ? "bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-500/10 dark:border-amber-500/20"
-                    : e.type === 'crm' ? "bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-500/10 dark:border-indigo-500/20"
-                    : e.type === 'advance' ? "bg-pink-50 border-pink-200 text-pink-700 dark:bg-pink-500/10 dark:border-pink-500/20"
-                    : "bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-500/10 dark:border-purple-500/20"
+                    "text-[9px] sm:text-[10px] px-1.5 py-1 rounded cursor-pointer transition-colors border font-bold shadow-sm relative z-10 flex items-center",
+                    getEventColors(e)
                   )}
                   title={e.title}
                 >
-                  <span className="hidden sm:inline-block w-1.5 h-1.5 rounded-full mr-1" style={{backgroundColor: 'currentColor'}} />
-                  {e.title}
+                  {e.type === 'task' ? <CheckSquare size={10} className="mr-1 shrink-0" /> : 
+                   (e.type === 'invoice' || e.type === 'quote') ? <FileText size={10} className="mr-1 shrink-0" /> :
+                   e.type === 'recurring' ? <Repeat size={10} className="mr-1 shrink-0" /> :
+                   e.type === 'payroll' ? <Users size={10} className="mr-1 shrink-0" /> :
+                   e.type === 'transaction' ? <CreditCard size={10} className="mr-1 shrink-0" /> :
+                   e.type === 'asset' ? <FileText size={10} className="mr-1 shrink-0" /> :
+                   e.type === 'crm' ? <Users size={10} className="mr-1 shrink-0" /> :
+                   e.type === 'advance' ? <CreditCard size={10} className="mr-1 shrink-0" /> :
+                   <CalendarIcon size={10} className="mr-1 shrink-0" />}
+                  <span className="truncate">{e.title}</span>
                 </div>
               ))}
+              {hiddenCount > 0 && view === 'calendar' && (
+                <div 
+                  className="text-[10px] font-bold text-slate-500 dark:text-slate-400 pl-1 hover:text-brand-green transition-colors mt-1 relative z-10"
+                >
+                  + {hiddenCount} autre{hiddenCount > 1 ? 's' : ''}
+                </div>
+              )}
             </div>
-            <div className="absolute inset-x-0 bottom-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-t from-white dark:from-slate-900 to-transparent flex justify-center">
-               <button className="text-[10px] text-brand-green bg-brand-green/10 px-2 py-0.5 rounded-full hover:bg-brand-green hover:text-white transition-colors"
+            
+            <div className="absolute inset-x-0 bottom-0 p-1 opacity-0 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity bg-gradient-to-t from-white dark:from-slate-900 to-transparent flex justify-center pointer-events-none z-20">
+               <button className="text-[10px] text-brand-green bg-brand-green/10 px-2 py-0.5 rounded-full hover:bg-brand-green hover:text-white transition-colors pointer-events-auto shadow-sm"
                 onClick={(e) => { 
                   e.stopPropagation(); 
                   setNewTask({...newTask, dueDate: cloneDay.toISOString().split('T')[0]});
@@ -619,7 +670,7 @@ export function TasksManager() {
                      {event.type === 'task' && (
                        <button 
                          onClick={() => deleteTask(event.originalId)}
-                         className="text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 mt-1 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-500/10"
+                         className="text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 mt-1 opacity-0 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-500/10"
                          title="Supprimer la tâche"
                        >
                          <Trash2 size={16} />
@@ -699,6 +750,70 @@ export function TasksManager() {
                 Créer la tâche
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Selected Day Events Modal */}
+      {selectedDay && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex justify-center items-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl relative animate-in zoom-in-95 duration-200 overflow-hidden flex flex-col max-h-[80vh]">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+              <h2 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <CalendarIcon className="text-brand-green" size={20} />
+                {format(selectedDay.date, 'EEEE d MMMM yyyy', { locale: fr })}
+              </h2>
+              <button 
+                onClick={() => setSelectedDay(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-full transition-colors bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:scale-105 shadow-sm"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto p-4 space-y-2 relative">
+              {selectedDay.events.length === 0 ? (
+                <div className="text-center p-8 text-slate-500">Aucun événement</div>
+              ) : (
+                selectedDay.events.map(event => (
+                  <div key={event.id} onClick={(ev) => { handleEventClick(ev, event); setSelectedDay(null); }} className="p-3 border border-slate-100 dark:border-slate-800 rounded-xl flex items-start gap-3 transition-all hover:shadow-md cursor-pointer group bg-white dark:bg-slate-900 hover:border-brand-green/30 dark:hover:border-brand-green/30">
+                     <div className={cn("w-2 h-full absolute inset-y-0 left-0 rounded-l-xl opacity-20", getEventColors(event).split(' ')[0])} />
+                     <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 group-hover:scale-110 transition-transform">
+                       {(event.type === 'task') ? <CheckSquare size={16} className={event.status === 'completed' ? "text-slate-400" : "text-brand-green"} /> :
+                        (event.type === 'invoice' || event.type === 'quote') ? <FileText size={16} className="text-emerald-500" /> : 
+                        event.type === 'recurring' ? <Repeat size={16} className="text-blue-500" /> :
+                        event.type === 'payroll' ? <Users size={16} className="text-orange-500" /> :
+                        event.type === 'transaction' ? <CreditCard size={16} className="text-slate-500" /> :
+                        event.type === 'asset' ? <FileText size={16} className="text-amber-500" /> :
+                        event.type === 'crm' ? <Users size={16} className="text-indigo-500" /> :
+                        event.type === 'advance' ? <CreditCard size={16} className="text-pink-500" /> :
+                        <CalendarIcon size={16} className="text-purple-500" />}
+                     </div>
+                     <div className="flex-1 min-w-0">
+                       <p className={cn("font-bold text-sm text-slate-900 dark:text-white transition-all", event.status === 'completed' && event.type === 'task' ? "line-through text-slate-500" : "")}>{event.title}</p>
+                       <div className="flex items-center gap-2 mt-1">
+                         <span className="px-2 border border-slate-200 dark:border-slate-700 rounded text-slate-500 dark:text-slate-400 uppercase tracking-widest text-[9px] font-bold">{event.type}</span>
+                         {event.status === 'completed' && event.type === 'task' && <span className="text-[10px] text-brand-green font-bold">Terminé</span>}
+                         {event.priority === 'high' && <span className="text-[10px] text-rose-500 font-bold">Haute priorité</span>}
+                       </div>
+                     </div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+              <button 
+                onClick={() => {
+                  setSelectedDay(null);
+                  setNewTask({...newTask, dueDate: selectedDay.date.toISOString().split('T')[0]});
+                  setIsTaskModalOpen(true);
+                }}
+                className="w-full bg-brand-green hover:bg-brand-green-light text-white font-bold rounded-xl py-2.5 transition-colors shadow-lg shadow-brand-green/20 flex items-center justify-center gap-2"
+              >
+                <Plus size={16} /> Ajouter une tâche à ce jour
+              </button>
+            </div>
           </div>
         </div>
       )}

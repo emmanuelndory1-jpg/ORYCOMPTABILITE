@@ -240,7 +240,7 @@ export function GeneralLedger() {
     });
 
     import('../lib/exportUtils').then(utils => {
-      utils.addPDFSignature(doc, yPos);
+      utils.addOHADAComplianceSignature(doc, yPos, companySettings?.manager_name || "L'Administrateur");
       addPDFFooter(doc);
       doc.save(`Grand_Livre_${new Date().toISOString().split('T')[0]}.pdf`);
     });

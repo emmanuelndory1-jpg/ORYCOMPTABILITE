@@ -220,6 +220,72 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.02em;
 }
 
+/* FINANCIAL TABLES DARK MODE COMFORT 
+   Improves contrast, readability, and reduces eye strain in low-light conditions.
+*/
+.dark table {
+  /* Subtle border color to structure tables without harsh lines */
+  --table-border: rgba(255, 255, 255, 0.05);
+  --table-row-bg: transparent;
+  --table-row-hover: rgba(30, 41, 59, 0.4); /* soft slate-800 hover */
+  --table-header-bg: rgba(15, 23, 42, 0.95); /* slate-900 */
+}
+
+/* Table Cells & Structure */
+.dark table th {
+  background-color: var(--table-header-bg) !important;
+  color: #94a3b8 !important; /* brighter text-slate-400 */
+  border-bottom: 2px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.dark table tr {
+  border-bottom-color: var(--table-border) !important;
+}
+
+.dark table tr:hover td {
+  background-color: var(--table-row-hover) !important;
+}
+
+/* Soften white text to prevent halation, elevate dark text like slate-500 */
+.dark table td {
+  color: #cbd5e1; /* slate-300: comfortable off-white */
+}
+
+/* Specifically target Tailwind text colors in dark mode cells */
+.dark table td[class*="text-slate-500"],
+.dark table td[class*="dark:text-slate-500"],
+.dark table td [class*="text-slate-500"] {
+  color: #cbd5e1 !important; /* Bump slate-500 (too dark) to slate-300 */
+}
+
+/* Financial Numbers: Tabular and tinted */
+.dark table td.font-mono, 
+.dark table td .font-mono {
+  font-feature-settings: "tnum" 1; /* Tabular numbers */
+  letter-spacing: 0.02em;
+}
+
+/* Soften Reds / Greens for eye comfort */
+.dark table td[class*="text-rose"], 
+.dark table td [class*="text-rose"] {
+  color: #fca5a5 !important; /* rose-300 instead of darker reds */
+}
+
+.dark table td[class*="text-emerald"], 
+.dark table td[class*="text-brand-green"],
+.dark table td [class*="text-emerald"],
+.dark table td [class*="text-brand-green"] {
+  color: #6ee7b7 !important; /* emerald-300 */
+}
+
+/* Structural rows (Totals) */
+.dark table tr.font-bold td,
+.dark table tr.font-black td,
+.dark table tr[class*="bg-slate-800"] td {
+  color: #f8fafc !important; /* slate-50 maximum clarity */
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+
 /* Smooth transitions for all theme-affected elements */
 *, *::before, *::after {
   transition-property: background-color, border-color, color, fill, stroke, box-shadow;

@@ -451,12 +451,12 @@ export function LoginPage() {
                 </div>
 
                 <div className="space-y-3">
-                  <div className="flex justify-between items-center ml-1">
-                    <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500">Accès Sécurisé</label>
-                    <button type="button" onClick={() => { setIsResetting(true); setError(null); }} className="text-[10px] font-black uppercase tracking-[0.1em] text-brand-green hover:text-emerald-400 transition-colors">
-                      Oubli ?
-                    </button>
-                  </div>
+                <div className="flex justify-between items-center ml-1 mb-2">
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500">Accès Sécurisé</label>
+                  <button type="button" onClick={() => { setIsResetting(true); setError(null); }} className="text-[10px] font-black uppercase tracking-[0.1em] text-brand-green hover:text-emerald-400 transition-colors">
+                    Mot de passe oublié ?
+                  </button>
+                </div>
                   <div className="relative group">
                     <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 dark:text-slate-700 group-focus-within:text-brand-green transition-colors" size={18} />
                     <input

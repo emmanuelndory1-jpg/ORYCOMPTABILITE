@@ -56,20 +56,9 @@ export function BackupManager() {
   const handleManualBackup = async () => {
     setIsBackingUp(true);
     try {
-      // Simulate API/processing time
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Trigger download from the server
+      window.location.href = '/api/database/export';
       
-      const data = generateBackupData();
-      const blob = new Blob([data], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `orycompta_backup_${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
       const now = new Date().toISOString();
       setLastBackup(now);
       localStorage.setItem('last_backup_date', now);
@@ -77,7 +66,7 @@ export function BackupManager() {
       setHistory(prev => [{
         id: Date.now().toString(),
         date: now,
-        size: (data.length / 1024).toFixed(1) + ' KB',
+        size: 'SQLite DB',
         type: 'manual' as const,
         status: 'success' as const
       }, ...prev].slice(0, 5));

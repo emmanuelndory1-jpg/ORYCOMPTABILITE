@@ -1,6 +1,6 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, Filter, Pencil, Trash2, X, Check, Copy, Upload, ArrowRight, RefreshCw, AlertCircle, Sparkles, ChevronRight, AlertTriangle, Info } from 'lucide-react';
+import { Search, Plus, Filter, Pencil, Trash2, X, Check, Copy, Upload, ArrowRight, RefreshCw, AlertCircle, Sparkles, ChevronRight, AlertTriangle, Info, FileText } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useDialog } from './DialogProvider';
 import Papa from 'papaparse';
@@ -418,7 +418,15 @@ export function Accounts() {
                 </tr>
               ) : filteredAccounts.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-8 py-12 text-center text-slate-500 dark:text-slate-400 font-medium">Aucun compte trouvé.</td>
+                  <td colSpan={5} className="px-8 py-20 text-center">
+                    <div className="flex flex-col items-center justify-center">
+                      <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 text-slate-300 dark:text-slate-600">
+                        <FileText size={24} />
+                      </div>
+                      <p className="text-slate-500 dark:text-slate-400 font-medium text-sm">Aucun compte trouvé.</p>
+                      <p className="text-slate-400 dark:text-slate-500 text-xs mt-1">Modifiez vos critères de recherche ou importez votre plan comptable.</p>
+                    </div>
+                  </td>
                 </tr>
               ) : (
                 filteredAccounts.map((acc) => (

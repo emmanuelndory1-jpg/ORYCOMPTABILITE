@@ -27,9 +27,9 @@ import { cn } from '@/lib/utils';
 import { useCurrency } from '@/hooks/useCurrency';
 import { PDF_CONFIG, addPDFHeader, addPDFFooter, CompanySettings, formatCurrencyPDF, generateInvoicePDF } from '@/lib/exportUtils';
 import jsPDF from 'jspdf';
-import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
 import autoTable from 'jspdf-autotable';
+import { PdfExportModal } from './PdfExportModal';
 
 interface InvoiceItem {
   id: number;
@@ -64,6 +64,7 @@ interface Invoice {
   currency?: string;
   exchange_rate?: number;
   payment_link?: string;
+  template?: string;
 }
 
 interface InvoiceViewerProps {
@@ -90,6 +91,7 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showPdfSettings, setShowPdfSettings] = useState(false);
   const [paymentMode, setPaymentMode] = useState('bank');
   const [mmPhone, setMmPhone] = useState('');
   const [mmNetwork, setMmNetwork] = useState('orange');
@@ -317,9 +319,14 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
     }
   };
 
-  const handleExportPDF = async () => {
+  const handleExportPDF = () => {
     if (!invoice) return;
-    await generateInvoicePDF(invoice, companySettings);
+    setShowPdfSettings(true);
+  };
+
+  const executeExport = async (options: any) => {
+    if (!invoice) return;
+    await generateInvoicePDF(invoice, companySettings, options);
   };
 
   if (loading || !invoice) {
@@ -1152,6 +1159,13 @@ export function InvoiceViewer({ id, onClose, onEdit }: InvoiceViewerProps) {
           </div>
         )}
       </AnimatePresence>
+
+      <PdfExportModal
+        isOpen={showPdfSettings}
+        onClose={() => setShowPdfSettings(false)}
+        onExport={executeExport}
+        initialTemplate={invoice.template || 'prestige'}
+      />
     </div>
   );
 }

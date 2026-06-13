@@ -165,10 +165,10 @@ export function OpeningBalances() {
 
   const handleSubmit = async () => {
     if (activeEntries.length === 0) {
-      return alert("Aucune balance saisie.", "error");
+      return alert("Veuillez saisir au moins un montant à l'actif ou au passif.", "error");
     }
     if (!isBalanced) {
-      return alert("Les balances d'ouverture doivent être équilibrées (Total Débit = Total Crédit).", "error");
+      return alert(`La validation en temps réel a échoué : Le Total Actif doit être strictement égal au Total Passif. Veuillez corriger l'écart de ${formatCurrency(Math.abs(totalDebit - totalCredit))}.`, "error");
     }
 
     const validate = await confirm("Êtes-vous sûr de vouloir enregistrer ces balances d'ouverture ? Cette opération générera une écriture comptable d'A-Nouveaux.");
@@ -336,11 +336,16 @@ export function OpeningBalances() {
                  <div className="px-4 py-1.5 rounded-lg text-slate-500 shrink-0">
                    Total Passif: <span className="text-slate-900 dark:text-white font-black ml-1">{formatCurrency(totalCredit)}</span>
                  </div>
-                 <div className={cn("px-4 py-1.5 rounded-lg font-black ml-2 flex items-center gap-2 shrink-0", 
+                 <div className={cn("px-4 py-1.5 rounded-lg flex items-center gap-2 shrink-0", 
                     totalDebit === 0 && totalCredit === 0 ? "bg-slate-200 dark:bg-slate-700 text-slate-500" :
-                    isBalanced ? "bg-brand-green/20 text-brand-green" : "bg-rose-500/20 text-rose-500")}>
-                    {isBalanced ? <Check size={16} /> : <AlertTriangle size={16} />} 
-                    Écart: {formatCurrency(Math.abs(totalDebit - totalCredit))}
+                    isBalanced ? "bg-brand-green/10 text-brand-green" : "bg-rose-500/10 text-rose-500")}>
+                    {isBalanced ? <Check size={16} /> : <AlertTriangle size={16} className="animate-pulse" />} 
+                    <div className="flex flex-col">
+                      <span className="font-black text-sm">Écart: {formatCurrency(Math.abs(totalDebit - totalCredit))}</span>
+                      {(!isBalanced && (totalDebit > 0 || totalCredit > 0)) && (
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-rose-600 dark:text-rose-400">Actif ≠ Passif</span>
+                      )}
+                    </div>
                  </div>
                </div>
                
@@ -357,8 +362,8 @@ export function OpeningBalances() {
                  
                  <button 
                     onClick={handleSubmit}
-                    disabled={submitting || !isBalanced || activeEntries.length === 0}
-                    className="bg-brand-green text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-md hover:shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 transition-all flex-1 sm:flex-none"
+                    disabled={submitting}
+                    className="bg-brand-green text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-md hover:shadow-lg hover:bg-emerald-600 disabled:opacity-50 flex items-center justify-center gap-2 transition-all flex-1 sm:flex-none"
                  >
                    <Save size={18} />
                    Enregistrer

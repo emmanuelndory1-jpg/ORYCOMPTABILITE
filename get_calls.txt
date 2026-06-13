@@ -1,0 +1,303 @@
+218:app.get('/api/csrf-token', (req, res) => {
+292:  const lastTx = db.prepare("SELECT reference FROM transactions WHERE reference LIKE ? ORDER BY id DESC LIMIT 1").get(`${type}-${year}-%`) as any;
+307:  const lastDoc = db.prepare("SELECT number FROM invoices WHERE type = ? AND number LIKE ? ORDER BY id DESC LIMIT 1").get(type, `${prefix}-${year}-%`) as any;
+603:app.get("/api/ping", (req, res) => {
+649:    let user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email) as any;
+772:        `).get() as any;
+777:        `).get() as any;
+780:        `).get() as any;
+845:        `).get() as any;
+860:        `).get() as any;
+892:    const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+940:    const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+962:    const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email) as any;
+1018:  }, req.ip, req.get('user-agent'));
+1022:app.get('/api/auth/me', (req, res) => {
+1084:app.get("/api/export/ofx/:bankAccountId", (req, res) => {
+1087:    const bankAccount = db.prepare("SELECT * FROM bank_accounts WHERE id = ?").get(bankAccountId) as any;
+1172:app.get("/api/journals", asyncHandler(async (req, res) => {
+1190:  const oldJournal = db.prepare("SELECT * FROM journals WHERE id = ?").get(id) as any;
+1212:app.get("/api/fiscal-years", asyncHandler(async (req, res) => {
+1217:app.get("/api/fiscal-years/active", asyncHandler(async (req, res) => {
+1218:  const year = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+1230:  `).get(start_date, start_date, end_date, end_date, start_date, end_date);
+1263:  const year = db.prepare("SELECT is_active FROM fiscal_years WHERE id = ?").get(id);
+1280:app.get("/api/advances", (req, res) => {
+1340:app.get("/api/employees/:id/advances/pending", (req, res) => {
+1353:app.get("/api/assets/stats", (req, res) => {
+1361:      const depreciations = db.prepare("SELECT SUM(amount) as total FROM depreciations WHERE asset_id = ?").get(asset.id) as any;
+1377:app.get("/api/assets", (req, res) => {
+1409:  const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
+1460:app.get("/api/assets/:id", (req, res) => {
+1463:    const asset = db.prepare("SELECT * FROM assets WHERE id = ?").get(id) as any;
+1466:    const depreciations = db.prepare("SELECT SUM(amount) as total FROM depreciations WHERE asset_id = ?").get(id) as any;
+1477:app.get("/api/assets/:id/depreciation-schedule", (req, res) => {
+1481:    const asset = db.prepare("SELECT * FROM assets WHERE id = ?").get(id) as any;
+1505:app.get("/api/assets/pending-depreciations-count", (req, res) => {
+1515:        .get(asset.id, `${currentMonth}%`);
+1539:          .get(asset.id, `${currentMonth}%`);
+1594:    const asset = db.prepare("SELECT * FROM assets WHERE id = ?").get(id) as any;
+1599:      .get(id, type, `${period}%`);
+1663:    const asset = db.prepare("SELECT * FROM assets WHERE id = ?").get(id) as any;
+1668:    const accDepRec = db.prepare("SELECT SUM(amount) as total FROM depreciations WHERE asset_id = ?").get(id) as any;
+1695:    const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+1780:  const rt = db.prepare("SELECT * FROM recurring_transactions WHERE id = ?").get(id) as any;
+1883:        const currentItem = db.prepare("SELECT next_date, active FROM recurring_transactions WHERE id = ?").get(item.id) as any;
+1906:app.get("/api/recurring-transactions", (req, res) => {
+1918:app.get("/api/recurring-transactions/due-count", (req, res) => {
+1921:    const count = db.prepare("SELECT COUNT(*) as count FROM recurring_transactions WHERE active = 1 AND next_date <= ?").get(today) as any;
+2053:app.get("/api/search", (req, res) => {
+2175:app.get("/api/notifications", (req, res) => {
+2179:      const activeYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get() as any;
+2189:          const existing = db.prepare("SELECT id FROM notifications WHERE type = 'warning' AND title = ? AND created_at >= date('now', '-30 days')").get(title);
+2244:app.get('/api/messages', (req, res) => {
+2289:app.get("/api/company/status", asyncHandler((req, res) => {
+2291:  const result = stmt.get();
+2310:    const existing = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+2518:app.get("/api/company/modules", (req, res) => {
+2540:    const company = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+2553:      const company = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+2555:      const exists = db.prepare("SELECT id FROM company_modules WHERE module_key = ?").get(key);
+2569:app.get("/api/audit-logs", (req, res) => {
+2578:    const total = db.prepare("SELECT COUNT(*) as count FROM audit_logs").get() as any;
+2587:app.get("/api/treasury", (req, res) => {
+2624:    let runningBalance = (initialBalanceStmt.get(startDateStr) as any).balance || 0;
+2668:    `).get(lastMonthStr) as any).balance || 0;
+2701:app.get("/api/treasury/accounts/:code/balance", (req, res) => {
+2709:    `).get(code) as any;
+2770:    const fromBalance = (balanceStmt.get(fromAccount) as any).balance;
+2834:app.get("/api/crm/deals", (req, res) => {
+2884:app.get("/api/third-parties", (req, res) => {
+2907:      const balance = balanceStmt.get(party.account_code);
+2938:      const overdueRes = overdueStmt.get(party.account_code, cutoffDateStr);
+2955:        const recent = recentInvoicesStmt.get(party.account_code, cutoffDateStr);
+2972:        const recent = recentBillsStmt.get(party.account_code, cutoffDateStr);
+2988:app.get("/api/third-parties/defaults", (req, res) => {
+2993:        let party = db.prepare("SELECT * FROM third_parties WHERE name = ? AND type = ? AND is_occasional = 1").get(name, type);
+3107:    const oldParty = db.prepare("SELECT * FROM third_parties WHERE id = ?").get(id) as any;
+3135:    const party = db.prepare("SELECT account_code FROM third_parties WHERE id = ?").get(id);
+3139:    const count = checkStmt.get((party as any).account_code).count;
+3146:    if (checkInvoices.get(id).count > 0) {
+3151:    if (checkRecurring.get(id).count > 0) {
+3174:    const party = db.prepare("SELECT * FROM third_parties WHERE id = ?").get(id);
+3177:    const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
+3226:app.get("/api/reports/aged-balance", (req, res) => {
+3313:app.get("/api/third-parties/:id/transactions", (req, res) => {
+3316:    const party = db.prepare("SELECT account_code, type FROM third_parties WHERE id = ?").get(id);
+3359:app.get("/api/company/dossier", (req, res) => {
+3361:    const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
+3424:app.get("/api/company/settings", asyncHandler((req, res) => {
+3425:  const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get();
+3441:  const existing = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+3519:app.get("/api/exchange-rates", (req, res) => {
+3560:    const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+3697:    `).get(id) as any;
+3701:    const settings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+3734:app.get("/api/recurring-invoices", (req, res) => {
+3748:app.get("/api/recurring-invoices/:id", (req, res) => {
+3756:    `).get(id) as any;
+3942:       const tx = db.prepare("SELECT * FROM payment_transactions WHERE transaction_id = ?").get(cpm_trans_id);
+3983:        const existing = db.prepare("SELECT id FROM subscriptions WHERE status = 'active' ORDER BY id DESC LIMIT 1").get();
+4036:     const tx = db.prepare("SELECT * FROM payment_transactions WHERE transaction_id = ?").get(transaction_id);
+4071:app.get("/api/subscription/status", (req, res) => {
+4078:    `).get();
+4094:app.get("/api/health/full", (req, res) => {
+4107:      db.prepare("SELECT 1").get();
+4116:      const count = db.prepare("SELECT COUNT(*) as c FROM accounts").get().c;
+4124:      const count = db.prepare("SELECT COUNT(*) as c FROM transactions").get().c;
+4132:      const active = db.prepare("SELECT name FROM fiscal_years WHERE is_active = 1").get();
+4157:app.get("/api/accounts", (req, res) => {
+4208:    const oldAccount = db.prepare('SELECT * FROM accounts WHERE code = ?').get(code) as any;
+4226:    const check = db.prepare('SELECT 1 FROM journal_entries WHERE je.account_code = ? AND t.deleted_at IS NULL LIMIT 1').get(code);
+4241:app.get("/api/journal/suggestions", (req, res) => {
+4388:app.get("/api/check-capital", (req, res) => {
+4394:    `).get() as { count: number };
+4402:app.get("/api/transactions/by-reference/:reference", (req, res) => {
+4410:    `).get(reference) as any;
+4433:    logAction(req.user?.name || 'Admin', 'RESTORE', 'Transaction', id, { id }, req.ip, req.get('user-agent'));
+4440:app.get("/api/transactions", (req, res) => {
+4517:app.get("/api/journal/export", (req, res) => {
+4618:      if (!checkAccount.get(entry.account_code)) {
+4656:app.get("/api/transactions/:id", (req, res) => {
+4672:    const transaction = txStmt.get(id) as any;
+4708:    const tx = db.prepare("SELECT is_locked, status FROM transactions WHERE id = ?").get(id) as any;
+4723:      if (!checkAccount.get(entry.account_code)) {
+4750:    const oldTx = db.prepare("SELECT * FROM transactions WHERE id = ?").get(id) as any;
+4769:  const tx = db.prepare("SELECT is_locked, status FROM transactions WHERE id = ?").get(id) as any;
+4789:      logAction(req.user?.name || 'Admin', 'PERMANENT_DELETE', 'Transaction', id, { id }, req.ip, req.get('user-agent'));
+4797:      logAction(req.user?.name || 'Admin', 'DELETE', 'Transaction', id, { id }, req.ip, req.get('user-agent'));
+4809:    const originalTx = db.prepare("SELECT * FROM transactions WHERE id = ?").get(id) as any;
+4867:    `).get(id) as any;
+4878:    const existingInvoice = db.prepare("SELECT id FROM invoices WHERE transaction_id = ?").get(id);
+4903:    const company = db.prepare("SELECT vat_rate FROM company_settings LIMIT 1").get() as any;
+5009:      const tx = checkStatus.get(id) as any;
+5015:      const validationPeriod = checkPayrollValidation.get(id);
+5022:      const paymentPeriod = checkPayrollPayment.get(id);
+5047:app.get("/api/custom-operations", (req, res) => {
+5073:app.get("/api/compliance/audit", (req, res) => {
+5177:      const balance = balanceStmt.get(acc.code);
+5202:      const balance = balanceStmt.get(acc.code);
+5273:    const totalTransactions = totalTransactionsStmt.get().count;
+5296:app.get("/api/dashboard/stats", asyncHandler((req, res) => {
+5298:  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+5310:  const ca = caStmt.get(startDate, endDate).total || 0;
+5319:  const charges = chargesStmt.get(startDate, endDate).total || 0;
+5328:  const cash = cashStmt.get().balance || 0;
+5337:  const receivables = receivablesStmt.get().balance || 0;
+5346:  const payables = payablesStmt.get().balance || 0;
+5349:  const activeEmployees = db.prepare("SELECT COUNT(*) as count FROM employees WHERE status = 'active'").get().count || 0;
+5350:  const lastPeriod = db.prepare("SELECT * FROM payroll_periods ORDER BY year DESC, month DESC LIMIT 1").get();
+5377:  `).get(currentYm + '-31')?.balance || 0;
+5384:  `).get(previousYm + '-31')?.balance || 0;
+5393:  `).get(currentYm + '%')?.total || 0;
+5400:  `).get(previousYm + '%')?.total || 0;
+5409:  `).get(currentYm + '-31')?.balance || 0;
+5416:  `).get(previousYm + '-31')?.balance || 0;
+5425:  `).get(currentYm + '-31')?.balance || 0;
+5432:  `).get(previousYm + '-31')?.balance || 0;
+5441:  `).get(currentYm + '%')?.total || 0);
+5448:  `).get(previousYm + '%')?.total || 0);
+5457:  `).get(currentYm + '%')?.total || 0;
+5464:  `).get(previousYm + '%')?.total || 0;
+5475:  const ach = achStmt.get(startDate, endDate).total || 0;
+5485:  const ebeExpenses = ebeExpensesStmt.get(startDate, endDate).total || 0;
+5519:  const dep = depStmt.get(startDate, endDate).total || 0;
+5556:app.get("/api/dashboard/charts", asyncHandler((req, res) => {
+5557:  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+5583:    const ca = caStmt.get(monthStart, monthEnd).total || 0;
+5592:    const charges = chargesStmt.get(monthStart, monthEnd).total || 0;
+5607:app.get("/api/dashboard/liquidity-history", asyncHandler((req, res) => {
+5608:  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+5632:    const cash = cashStmt.get(monthEnd).total || 0;
+5640:    const currentAssets = caStmt.get(monthEnd).total || 0;
+5648:    const currentLiabilities = clStmt.get(monthEnd).total || 0;
+5665:app.get("/api/dashboard/breakdown", asyncHandler((req, res) => {
+5666:  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+5706:app.get("/api/dashboard/ratios", asyncHandler((req, res) => {
+5707:  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+5713:  const assets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '2%' OR account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
+5716:  const liabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '16%' OR account_code LIKE '17%' OR account_code LIKE '4%'").get().total || 0;
+5719:  const currentAssets = db.prepare("SELECT SUM(debit - credit) as total FROM journal_entries WHERE account_code LIKE '3%' OR account_code LIKE '4%' OR account_code LIKE '5%'").get().total || 0;
+5722:  const currentLiabilities = db.prepare("SELECT SUM(credit - debit) as total FROM journal_entries WHERE account_code LIKE '4%'").get().total || 0;
+5731:  const revenue = revenueStmt.get(startDate, endDate).total || 0;
+5739:  const expenses = expensesStmt.get(startDate, endDate).total || 0;
+5755:app.get("/api/dashboard/recent", asyncHandler((req, res) => {
+5756:  const fiscalYear = db.prepare("SELECT * FROM fiscal_years WHERE is_active = 1 LIMIT 1").get();
+5776:app.get("/api/dashboard/deadlines", asyncHandler((req, res) => {
+5801:app.get("/api/accounts/expenses", (req, res) => {
+5811:app.get("/api/budgets/categories", (req, res) => {
+5885:app.get("/api/budgets/status", (req, res) => {
+5965:           `).get(entry.category);
+5974:        const account = db.prepare("SELECT code FROM accounts WHERE code = ? AND class_code = '6'").get(accountCode);
+5977:        const current = db.prepare("SELECT * FROM budgets WHERE je.account_code = ? AND t.deleted_at IS NULL AND period_year = ? AND period_month = ?").get(accountCode, period_year, period_month);
+6037:      const current = db.prepare("SELECT * FROM budgets WHERE je.account_code = ? AND t.deleted_at IS NULL AND period_year = ? AND period_month = ?").get(account_code, period_year, period_month);
+6066:app.get("/api/budgets/engagements", (req, res) => {
+6095:      const budgetRow = db.prepare("SELECT amount FROM budgets WHERE je.account_code = ? AND t.deleted_at IS NULL AND period_year = ? AND period_month = ?").get(account_code, period_year, period_month);
+6103:      `).get(account_code, period_year, period_month);
+6113:      `).get(account_code, monthStr);
+6153:app.get("/api/budgets/insights", (req, res) => {
+6241:app.get("/api/dashboard/budget-vs-actual", (req, res) => {
+6290:app.get('/api/hr/dashboard', (req, res) => {
+6317:      const entry = deptMap.get(dept);
+6333:app.get('/api/dashboard/cashflow-forecast', (req, res) => {
+6343:    `).get() as any;
+6402:            `).get(startOfMonth, endOfMonth) as any;
+6409:            `).get(startOfMonth, endOfMonth) as any;
+6433:app.get('/api/database/export', (req, res) => {
+6452:app.get('/api/users', (req, res) => {
+6529:app.get("/api/financial-statements", (req, res) => {
+6548:      const result = stmt.get(`${prefix}%`, start, end);
+6576:      const result = stmt.get(`${prefix}%`, start, end);
+6617:      const result = stmt.get(`${prefix}%`, start, end);
+6647:      const result = stmt.get(`${prefix}%`, date);
+6686:app.get("/api/search/global", (req, res) => {
+6731:app.get("/api/ai/audit-data", async (req, res) => {
+6739:    const ca = caStmt.get().total || 0;
+6747:    const charges = chargesStmt.get().total || 0;
+6755:    const cash = cashStmt.get().balance || 0;
+6775:app.get("/api/ai/reconcile-data", async (req, res) => {
+6796:app.get("/api/reports/general-ledger", (req, res) => {
+6863:app.get("/api/reports/trial-balance", (req, res) => {
+6937:app.get("/api/transactions/:id/attachments", (req, res) => {
+6947:app.get("/api/attachments/:id", (req, res) => {
+6950:    const attachment = db.prepare("SELECT * FROM transaction_attachments WHERE id = ?").get(id) as any;
+6968:    const attachment = db.prepare("SELECT * FROM transaction_attachments WHERE id = ?").get(id) as any;
+6988:app.get("/api/compliance/audit", (req, res) => {
+7061:app.get("/api/compliance/audit", (req, res) => {
+7124:app.get("/api/reports/balance-sheet", (req, res) => {
+7147:app.get("/api/reports/profit-loss", (req, res) => {
+7173:app.get("/api/reports/hr", (req, res) => {
+7219:app.get("/api/reports/custom", (req, res) => {
+7299:app.get("/api/vat/declaration", (req, res) => {
+7334:    const outputVat = outputVatStmt.get(startDate, endDate).total || 0;
+7344:    const inputVat = inputVatStmt.get(startDate, endDate).total || 0;
+7389:app.get("/api/vat-settings", (req, res) => {
+7417:    const oldSetting = db.prepare("SELECT * FROM vat_settings WHERE id = ?").get(id) as any;
+7437:    const oldSetting = db.prepare("SELECT * FROM vat_settings WHERE id = ?").get(id) as any;
+7448:app.get("/api/tax/summary", (req, res) => {
+7477:    `).get(startDate, endDate).total || 0;
+7484:    `).get(startDate, endDate).total || 0;
+7525:    `).get(startDate, endDate).total || 0;
+7532:    `).get(startDate, endDate).total || 0;
+7535:    const companySettings = db.prepare("SELECT corporate_tax_rate, imf_rate FROM company_settings LIMIT 1").get() as any;
+7576:app.get("/api/tax-rules", (req, res) => {
+7613:app.get("/api/pr/brackets", (req, res) => {
+7638:app.get("/api/pr/reductions", (req, res) => {
+7659:app.get("/api/pr/rules", (req, res) => {
+7773:app.get("/api/employees", (req, res) => {
+7820:app.get("/api/payroll/periods", (req, res) => {
+7846:    if (check.get(month, year)) {
+7864:    const period = db.prepare("SELECT * FROM payroll_periods WHERE id = ?").get(id) as any;
+7962:      const pendingAdvances = db.prepare("SELECT SUM(amount) as total, GROUP_CONCAT(id) as ids FROM salary_advances WHERE employee_id = ? AND status = 'pending'").get(emp.id) as any;
+8035:    const payslip = db.prepare("SELECT * FROM payslips WHERE id = ?").get(id);
+8038:    const emp = db.prepare("SELECT * FROM employees WHERE id = ?").get(payslip.employee_id);
+8128:    const periodTotal = db.prepare("SELECT SUM(net_salary) as total FROM payslips WHERE period_id = ?").get(payslip.period_id).total;
+8142:app.get("/api/payroll/periods/:id/payslips", (req, res) => {
+8163:    const period = db.prepare("SELECT * FROM payroll_periods WHERE id = ?").get(id);
+8287:    const period = db.prepare("SELECT * FROM payroll_periods WHERE id = ?").get(id);
+8294:    const result = payslipsStmt.get(id);
+8322:    const bankAccount = db.prepare("SELECT id FROM bank_accounts WHERE gl_account_code = ?").get(paymentAccount) as any;
+8344:    const check = db.prepare("SELECT COUNT(*) as count FROM payslips WHERE employee_id = ?").get(id);
+8365:    const period = db.prepare("SELECT * FROM payroll_periods WHERE id = ?").get(id);
+8371:      const paymentEntry = db.prepare("SELECT account_code, credit FROM journal_entries WHERE transaction_id = ? AND credit > 0 LIMIT 1").get(period.payment_transaction_id) as any;
+8373:          const bankAccount = db.prepare("SELECT id FROM bank_accounts WHERE gl_account_code = ?").get(paymentEntry.account_code) as any;
+8385:    const payslipTx = db.prepare("SELECT transaction_id FROM payslips WHERE period_id = ? AND transaction_id IS NOT NULL LIMIT 1").get(id);
+8416:app.get("/api/journal-entries", (req, res) => {
+8445:app.get("/api/bank-accounts", (req, res) => {
+8469:app.get("/api/bank-transactions/:accountId", (req, res) => {
+8504:        const exists = db.prepare("SELECT id FROM bank_transactions WHERE bank_account_id = ? AND date = ? AND description = ? AND amount = ?").get(accountId, tx.date, tx.description, tx.amount);
+8532:        const exists = db.prepare("SELECT id FROM bank_transactions WHERE bank_account_id = ? AND date = ? AND description = ? AND amount = ?").get(accountId, tx.date, tx.description, tx.amount);
+8568:app.get("/api/bank-reconciliation/available-gl", (req, res) => {
+8633:    const bankTx = db.prepare("SELECT * FROM bank_transactions WHERE id = ?").get(bankTransactionId);
+8636:    const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+8637:    const bankAccount = db.prepare("SELECT gl_account_code FROM bank_accounts WHERE id = ?").get(bankTx.bank_account_id);
+8680:app.get("/api/invoices", asyncHandler(async (req, res) => {
+8698:app.get("/api/invoices/:id", asyncHandler(async (req, res) => {
+8705:  `).get(id);
+8721:  `).get(id) as any;
+8854:    const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id) as any;
+8903:    const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
+8909:    const thirdParty = db.prepare("SELECT type, account_code FROM third_parties WHERE id = ?").get(invoice.third_party_id) as any;
+8972:          const matchingStock = db.prepare("SELECT id FROM inventory_items WHERE reference = ? OR name = ?").get(item.description, item.description) as any;
+9007:           const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+9045:    const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
+9049:    const thirdParty = db.prepare("SELECT account_code FROM third_parties WHERE id = ?").get(invoice.third_party_id);
+9058:    const companySettings = db.prepare("SELECT * FROM company_settings ORDER BY id DESC LIMIT 1").get() as any;
+9086:  const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
+9099:app.get("/api/invoices/stats", asyncHandler(async (req, res) => {
+9114:app.get("/api/revenue/monthly", asyncHandler(async (req, res) => {
+9157:    app.get('*', (req, res) => {
+9165:    const company = db.prepare("SELECT id FROM company_settings LIMIT 1").get() as any;
+9169:        const hasModule = db.prepare("SELECT id FROM company_modules WHERE module_key = ?").get(moduleKey);
+9201:    const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(invoice_id) as any;
+9256:app.get('/api/tasks', (req, res) => {
+9353:app.get('/api/mobile-money/transactions', async (req, res) => {
+9379:         const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(tx.invoice_id) as any;
+9383:            const bankAccount = db.prepare("SELECT id FROM bank_accounts LIMIT 1").get();
+9399:app.get("/api/inventory/accounting", (req, res) => {
+9401:    const marchAccount = db.prepare("SELECT SUM(debit) - SUM(credit) as balance FROM journal_entries WHERE account_code = '311'").get() as any;
+9402:    const varAccount = db.prepare("SELECT SUM(debit) - SUM(credit) as balance FROM journal_entries WHERE account_code = '6031'").get() as any;
+9409:app.get("/api/inventory/:id/movements", (req, res) => {
+9412:    const item = db.prepare("SELECT reference FROM inventory_items WHERE id = ?").get(id) as any;
+9432:app.get("/api/inventory", (req, res) => {
+9512:      const item = db.prepare("SELECT * FROM inventory_items WHERE id = ?").get(id) as any;

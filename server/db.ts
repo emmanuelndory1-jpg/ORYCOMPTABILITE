@@ -259,6 +259,7 @@ export function runDatabaseMigrations(isDefault: boolean, email?: string) {
     tax_regime TEXT,
     vat_regime TEXT,
     vat_rate REAL DEFAULT 18,
+    tax_deadlines TEXT,
     taxes_enabled BOOLEAN DEFAULT 1,
     currency TEXT DEFAULT 'FCFA',
     address TEXT,

@@ -1,6 +1,6 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Bell, Settings, HelpCircle, User, LogOut, X, Loader2, ChevronRight, BookOpen, Users, Building2, Calculator, Moon, Sun, FileText, Wallet, ShieldCheck, Menu, CheckCircle, AlertTriangle, XCircle, Info } from 'lucide-react';
+import { Search, Bell, Settings, HelpCircle, Command, User, LogOut, X, Loader2, ChevronRight, BookOpen, Users, Building2, Calculator, Moon, Sun, FileText, Wallet, ShieldCheck, Menu, CheckCircle, AlertTriangle, XCircle, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -10,6 +10,8 @@ import { useTheme } from '@/context/ThemeContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { useFiscalYear, FiscalYear } from '@/context/FiscalYearContext';
 import { useSync } from '@/context/SyncContext';
+import { validateDataIntegrity, saveLocalTransactions } from '@/lib/dataSync';
+import { useDialog } from './DialogProvider';
 import { Calendar, User as UserIcon, Cloud, CloudOff, RefreshCw } from 'lucide-react';
 import { Logo } from './Logo';
 import { Dropdown } from './ui/Dropdown';
@@ -46,7 +48,32 @@ export function Header({ logoUrl, onMenuClick }: { logoUrl?: string | null, onMe
   const { user, logout } = useAuth();
   const { t } = useLanguage();
   const { activeYear, refreshActiveYear } = useFiscalYear();
-  const { isSyncing, pendingCount } = useSync();
+  const { isSyncing, pendingCount, lastSyncTime } = useSync();
+  const { alert } = useDialog();
+  const [isForceSyncing, setIsForceSyncing] = useState(false);
+  
+  const handleForceSync = async () => {
+    setIsForceSyncing(true);
+    try {
+      const result = await validateDataIntegrity();
+      if (!result.isValid && result.discrepancies.length > 0) {
+        if (result.serverTxs.length > 0) {
+           await saveLocalTransactions(result.serverTxs);
+        }
+        alert(`${result.discrepancies.length} différences trouvées. Données resynchronisées.`, 'error');
+      } else {
+        if (result.serverTxs.length > 0) {
+           await saveLocalTransactions(result.serverTxs);
+        }
+        alert('Synchronisation réussie. Vos données sont à jour.', 'success');
+      }
+    } catch (e) {
+      alert('Erreur lors de la synchronisation', 'error');
+    } finally {
+      setIsForceSyncing(false);
+    }
+  };
+
   const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>([]);
   const [showYearSelector, setShowYearSelector] = useState(false);
   const [showThemeSelector, setShowThemeSelector] = useState(false);
@@ -322,18 +349,28 @@ export function Header({ logoUrl, onMenuClick }: { logoUrl?: string | null, onMe
               
               {/* Sync Status Indicator */}
               <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5" />
-              <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 group/sync cursor-help" title={isSyncing ? `${pendingCount} transaction(s) en attente de validation serveur` : "Toutes les données sont synchronisées avec le serveur (à jour)"}>
-                {isSyncing ? (
+              <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 group/sync" title={isSyncing ? `${pendingCount} transaction(s) en attente de validation serveur` : `Dernière sauvegarde cloud : ${lastSyncTime ? lastSyncTime.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit', second:'2-digit'}) : "A l'instant"}`}>
+                {isSyncing || isForceSyncing ? (
                   <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-brand-green/10 border border-brand-green/20">
                     <RefreshCw size={10} className="animate-spin text-brand-green" />
                     <span className="text-[9px] font-black uppercase tracking-[0.1em] text-brand-green">
-                      {pendingCount} attente
+                      {isForceSyncing ? 'Sync...' : `${pendingCount} attente`}
                     </span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                     <Cloud size={10} className="text-slate-400" />
-                    <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-slate-500 dark:text-slate-400">À jour</span>
+                    <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-slate-500 dark:text-slate-400">
+                      Sync {lastSyncTime ? lastSyncTime.toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'}) : 'Ok'}
+                    </span>
+                    <button
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleForceSync(); }}
+                      disabled={isForceSyncing}
+                      title="Forcer la synchronisation"
+                      className="ml-1 -mr-1 p-0.5 rounded-full text-slate-400 hover:text-brand-green hover:bg-brand-green/10 transition-colors"
+                    >
+                      <RefreshCw size={10} />
+                    </button>
                   </div>
                 )}
               </div>
@@ -542,6 +579,18 @@ export function Header({ logoUrl, onMenuClick }: { logoUrl?: string | null, onMe
           </div>
 
           <div className="hidden md:flex items-center gap-2">
+            <button 
+              onClick={() => {
+                const event = new KeyboardEvent('keydown', { key: '?', shiftKey: true });
+                window.dispatchEvent(event);
+              }}
+              className="p-2.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-800 dark:hover:text-slate-200 rounded-xl transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-700 relative group">
+              <Command size={20} className="group-hover:scale-110 transition-transform" />
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-1.5 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-[11px] font-bold rounded-lg opacity-0 group-hover:opacity-100 transition-all transform scale-95 group-hover:scale-100 whitespace-nowrap pointer-events-none z-50 shadow-xl border border-slate-800 dark:border-slate-200">
+                Raccourcis Clavier (Shift + ?)
+                <div className="absolute -top-1 left-1/2 -translate-x-1/2 border-4 border-transparent border-b-slate-900 dark:border-b-slate-100" />
+              </div>
+            </button>
             <button className="p-2.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-800 dark:hover:text-slate-200 rounded-xl transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-700 relative group">
               <HelpCircle size={20} className="group-hover:scale-110 transition-transform" />
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-1.5 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-[11px] font-bold rounded-lg opacity-0 group-hover:opacity-100 transition-all transform scale-95 group-hover:scale-100 whitespace-nowrap pointer-events-none z-50 shadow-xl border border-slate-800 dark:border-slate-200">

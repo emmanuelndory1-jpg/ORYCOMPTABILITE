@@ -1,6 +1,6 @@
 import { apiFetch } from '../lib/api';
 import React, { useState, useEffect } from 'react';
-import { Download, Filter, Search, FileText, Printer, FileSpreadsheet } from 'lucide-react';
+import { Download, Filter, Search, FileText, Printer, FileSpreadsheet, Calculator } from 'lucide-react';
 import { apiFetch as fetch } from '@/lib/api';
 import { useFiscalYear } from '@/context/FiscalYearContext';
 import jsPDF from 'jspdf';
@@ -175,7 +175,7 @@ export function TrialBalance() {
     const finalY = (doc as any).lastAutoTable?.finalY || startY;
 
     import('../lib/exportUtils').then(utils => {
-      utils.addPDFSignature(doc, finalY + 15);
+      utils.addOHADAComplianceSignature(doc, finalY + 15, companySettings?.manager_name || "L'Administrateur");
       addPDFFooter(doc);
       doc.save(`Balance_Generale_${new Date().toISOString().split('T')[0]}.pdf`);
     });
@@ -299,7 +299,17 @@ export function TrialBalance() {
               {loading ? (
                 <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">Chargement...</td></tr>
               ) : filteredData.length === 0 ? (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">Aucune donnée trouvée.</td></tr>
+                <tr>
+                  <td colSpan={6} className="px-6 py-20 text-center">
+                    <div className="flex flex-col items-center justify-center">
+                      <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 text-slate-300 dark:text-slate-600">
+                        <Calculator size={24} />
+                      </div>
+                      <p className="text-slate-500 dark:text-slate-400 font-medium text-sm">Aucune donnée trouvée.</p>
+                      <p className="text-slate-400 dark:text-slate-500 text-xs mt-1">Vos comptes et soldes apparaîtront ici.</p>
+                    </div>
+                  </td>
+                </tr>
               ) : (
                 <>
                   {filteredData.map((row) => (

@@ -183,6 +183,7 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
   const [formData, setFormData] = useState<OnboardingData>(() => {
     const defaultCountry = COUNTRIES[0];
     return {
+      isNewCompany: true,
       name: '',
       legalForm: 'SARL',
       rccm: '',
@@ -677,6 +678,38 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Statut de la société</label>
+                    <div className="grid grid-cols-2 gap-4">
+                      <button
+                        type="button"
+                        onClick={() => updateFormData({ isNewCompany: true })}
+                        className={cn(
+                          "p-4 rounded-2xl border text-left transition-all",
+                          formData.isNewCompany
+                            ? "bg-brand-green/10 border-brand-green ring-2 ring-brand-green/20"
+                            : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-brand-green/20"
+                        )}
+                      >
+                        <div className="font-bold text-slate-900 dark:text-slate-100">Société en cours de création</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">Génère automatiquement les écritures de constitution de capital.</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateFormData({ isNewCompany: false })}
+                        className={cn(
+                          "p-4 rounded-2xl border text-left transition-all",
+                          !formData.isNewCompany
+                            ? "bg-brand-green/10 border-brand-green ring-2 ring-brand-green/20"
+                            : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-brand-green/20"
+                        )}
+                      >
+                        <div className="font-bold text-slate-900 dark:text-slate-100">Société existante</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">Saisie manuelle des balances d'ouverture requise après configuration.</div>
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="md:col-span-2 flex flex-col md:flex-row items-center gap-6 p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-800">
                     <div className="w-24 h-24 rounded-2xl bg-white dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
                       {formData.logoUrl ? (
@@ -1120,23 +1153,25 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                           className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 font-mono focus:outline-none focus:ring-2 focus:ring-brand-green transition-all shadow-sm"
                         />
                       </div>
-                      <div className="pt-2 border-t border-white/10">
-                        <label className="text-xs text-slate-400 mb-2 block font-bold uppercase tracking-widest flex items-center justify-between">
-                          <span>Libération à la constitution (Numéraire)</span>
-                          <span className="text-brand-green bg-brand-green/20 px-2 py-0.5 rounded text-[10px]">{formData.cashCalledPercentage}%</span>
-                        </label>
-                        <select 
-                          value={formData.cashCalledPercentage}
-                          onChange={(e) => updateFormData({ cashCalledPercentage: parseInt(e.target.value) || 100 })}
-                          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 font-bold focus:outline-none focus:ring-2 focus:ring-brand-green appearance-none transition-all shadow-sm"
-                        >
-                          <option value={25} className="text-slate-900">25% (1er Quart)</option>
-                          <option value={50} className="text-slate-900">50% (La Moitié)</option>
-                          <option value={75} className="text-slate-900">75% (3 Quarts)</option>
-                          <option value={100} className="text-slate-900">100% (Totale)</option>
-                        </select>
-                        <p className="text-[10px] text-slate-500 mt-2 font-medium">Note: Les apports en nature sont libérés à 100% par défaut.</p>
-                      </div>
+                      {formData.isNewCompany && (
+                        <div className="pt-2 border-t border-white/10">
+                          <label className="text-xs text-slate-400 mb-2 block font-bold uppercase tracking-widest flex items-center justify-between">
+                            <span>Libération à la constitution (Numéraire)</span>
+                            <span className="text-brand-green bg-brand-green/20 px-2 py-0.5 rounded text-[10px]">{formData.cashCalledPercentage}%</span>
+                          </label>
+                          <select 
+                            value={formData.cashCalledPercentage}
+                            onChange={(e) => updateFormData({ cashCalledPercentage: parseInt(e.target.value) || 100 })}
+                            className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 font-bold focus:outline-none focus:ring-2 focus:ring-brand-green appearance-none transition-all shadow-sm"
+                          >
+                            <option value={25} className="text-slate-900">25% (1er Quart)</option>
+                            <option value={50} className="text-slate-900">50% (La Moitié)</option>
+                            <option value={75} className="text-slate-900">75% (3 Quarts)</option>
+                            <option value={100} className="text-slate-900">100% (Totale)</option>
+                          </select>
+                          <p className="text-[10px] text-slate-500 mt-2 font-medium">Note: Les apports en nature sont libérés à 100% par défaut.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1168,7 +1203,9 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
 
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
-                    <h3 className="font-bold text-slate-900 dark:text-slate-100">Liste des Associés</h3>
+                    <h3 className="font-bold text-slate-900 dark:text-slate-100">
+                      {formData.isNewCompany ? 'Apports et Actionnaires' : 'Liste des Actionnaires'}
+                    </h3>
                     <button 
                       onClick={addPartner}
                       className="text-brand-green hover:text-brand-green-light font-bold text-sm flex items-center gap-1"
@@ -1238,21 +1275,23 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                   </div>
                 </div>
 
-                <div className="bg-rose-50 dark:bg-rose-900/10 p-6 rounded-3xl border border-rose-100 dark:border-rose-900/20">
-                  <label className="block text-sm font-bold text-rose-900 dark:text-rose-400 mb-2">Frais de Constitution (Notaire, Greffe...)</label>
-                  <div className="relative">
-                    <div className="absolute left-4 top-1/2 -translate-y-1/2 text-rose-400">
-                      {getCurrencyIcon(18)}
+                {formData.isNewCompany && (
+                  <div className="bg-rose-50 dark:bg-rose-900/10 p-6 rounded-3xl border border-rose-100 dark:border-rose-900/20">
+                    <label className="block text-sm font-bold text-rose-900 dark:text-rose-400 mb-2">Frais de Constitution (Notaire, Greffe...)</label>
+                    <div className="relative">
+                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-rose-400">
+                        {getCurrencyIcon(18)}
+                      </div>
+                      <input 
+                        type="number"
+                        value={isNaN(formData.constitutionCosts) ? '' : formData.constitutionCosts}
+                        onChange={(e) => updateFormData({ constitutionCosts: parseFloat(e.target.value) || 0 })}
+                        className="w-full pl-12 pr-4 py-4 rounded-2xl border border-rose-200 dark:border-rose-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-4 focus:ring-rose-500/10 focus:border-rose-500 font-mono"
+                        placeholder="0"
+                      />
                     </div>
-                    <input 
-                      type="number"
-                      value={isNaN(formData.constitutionCosts) ? '' : formData.constitutionCosts}
-                      onChange={(e) => updateFormData({ constitutionCosts: parseFloat(e.target.value) || 0 })}
-                      className="w-full pl-12 pr-4 py-4 rounded-2xl border border-rose-200 dark:border-rose-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-4 focus:ring-rose-500/10 focus:border-rose-500 font-mono"
-                      placeholder="0"
-                    />
                   </div>
-                </div>
+                )}
               </div>
 
                 <div className="pt-8 border-t border-slate-100 dark:border-slate-800 flex justify-between">
@@ -1491,7 +1530,9 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                         </select>
                       </div>
                       <div className="md:col-span-4">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Solde Initial (Libération)</label>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">
+                          {formData.isNewCompany ? 'Solde Initial (Libération)' : 'Solde Initial / Actuel'}
+                        </label>
                         <input 
                           type="number"
                           value={isNaN(t.initialBalance) ? '' : t.initialBalance}
@@ -1742,7 +1783,10 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                         </div>
                         <div>
                           <div className="font-bold text-slate-900 dark:text-slate-100 text-lg leading-tight">{formData.capitalAmount.toLocaleString()} {formData.currency}</div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">{formData.partners.length} {t('onboarding.summary_partners')} • {formData.constitutionCosts.toLocaleString()} {t('onboarding.summary_costs')}</div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
+                            {formData.partners.length} {t('onboarding.summary_partners')} 
+                            {formData.isNewCompany && ` • ${formData.constitutionCosts.toLocaleString()} ${t('onboarding.summary_costs')}`}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1797,7 +1841,9 @@ export function CompanyCreation({ onComplete }: { onComplete?: () => void }) {
                     <div>
                       <div className="font-bold text-blue-900 dark:text-blue-100 mb-1">{t('onboarding.summary_auto_config')}</div>
                       <p className="text-sm text-blue-700 dark:text-blue-300 leading-relaxed">
-                        {t('onboarding.tip_launch')}
+                        {formData.isNewCompany 
+                          ? t('onboarding.tip_launch') 
+                          : "En cliquant sur 'Lancer l'application', le système va initialiser votre espace. Vous devrez ensuite saisir manuellement vos écritures d'A-Nouveaux."}
                       </p>
                     </div>
                   </div>

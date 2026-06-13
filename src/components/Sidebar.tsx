@@ -26,7 +26,6 @@ import {
   Target,
   LogOut,
   Repeat,
-  Sparkles,
   ChevronDown,
   Settings2,
   Banknote,
@@ -67,6 +66,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
   const [isHovered, setIsHovered] = React.useState(false);
 
   const isEffectivelyCollapsed = isCollapsed && !isHovered;
+
 
   const [searchQuery, setSearchQuery] = React.useState('');
   const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>({
@@ -111,6 +111,7 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
     icon: any;
     module?: string;
     badge?: string | number;
+    advanced?: boolean;
   }
 
   interface MenuGroup {
@@ -125,43 +126,41 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
         { id: '', label: t('nav.dashboard'), icon: LayoutDashboard },
         { id: 'inventory', label: 'Gestion des stocks', icon: Package },
         { id: 'treasury', label: t('nav.treasury'), icon: Wallet, module: 'treasury' },
-        { id: 'mobile-money', label: 'Mobile Money', icon: Smartphone },
+        { id: 'mobile-money', label: 'Mobile Money', icon: Smartphone, advanced: true },
         { id: 'invoicing', label: t('nav.invoicing'), icon: FileText, badge: '3', module: 'invoicing' },
-        { id: 'reconciliation', label: t('nav.reconciliation'), icon: Calculator, module: 'bankRec' },
-        { id: 'budgets', label: t('nav.budgets'), icon: Target, module: 'budget' },
-        { id: 'p2p', label: 'Procure-to-Pay', icon: ShoppingBag, module: 'procure_to_pay' },
+        { id: 'reconciliation', label: t('nav.reconciliation'), icon: Calculator, module: 'bankRec', advanced: true },
+        { id: 'budgets', label: t('nav.budgets'), icon: Target, module: 'budget', advanced: true },
+        { id: 'p2p', label: 'Procure-to-Pay', icon: ShoppingBag, module: 'p2p', advanced: true },
       ]
     },
     {
       label: t('group.accounting') || 'Comptabilité',
       items: [
         { id: 'journal', label: t('nav.journal'), icon: BookOpen, badge: 'Draft' },
-        { id: 'recurring', label: t('nav.recurring'), icon: Repeat },
+        { id: 'recurring', label: t('nav.recurring'), icon: Repeat, advanced: true },
         { id: 'ledger', label: t('nav.ledger'), icon: FileText },
         { id: 'trial-balance', label: t('nav.trial_balance'), icon: Calculator },
-        { id: 'opening-balances', label: 'Bilan d\'Ouverture', icon: Calculator },
+        { id: 'opening-balances', label: 'Bilan d\'Ouverture', icon: Calculator, advanced: true },
       ]
     },
     {
       label: t('group.management') || 'États & Gestion',
       items: [
         { id: 'financials', label: t('nav.financials'), icon: FileText },
-        { id: 'treasury', label: t('nav.treasury') || 'Trésorerie', icon: Wallet },
-        { id: 'reconciliation', label: t('nav.reconciliation') || 'Rapprochement', icon: Landmark },
-        { id: 'custom-reports', label: 'Rapports Personnalisés', icon: Settings2 },
-        { id: 'crm', label: 'CRM & Ventes', icon: Target, module: 'third_parties' },
+        { id: 'custom-reports', label: 'Rapports Personnalisés', icon: Settings2, advanced: true },
+        { id: 'crm', label: 'CRM & Ventes', icon: Target, module: 'third_parties', advanced: true },
         { id: 'third-parties', label: t('nav.third_parties'), icon: Briefcase, module: 'third_parties' },
-        { id: 'assets', label: t('nav.assets'), icon: Building2, module: 'assets' },
+        { id: 'assets', label: t('nav.assets'), icon: Building2, module: 'assets', advanced: true },
         { id: 'vat', label: t('nav.vat'), icon: Percent, module: 'vat' },
-        { id: 'tax-report', label: 'Rapport Fiscal', icon: FileText, module: 'vat' },
-        { id: 'company', label: t('nav.company') || 'Création Entreprise', icon: Building },
+        { id: 'tax-report', label: 'Rapport Fiscal', icon: FileText, module: 'vat', advanced: true },
+        { id: 'company', label: t('nav.company') || 'Création Entreprise', icon: Building, advanced: true },
       ]
     },
     {
       label: t('group.payroll') || 'Paie & RH',
       items: [
         { id: 'payroll?view=employees', label: 'Gestion des Salariés', icon: Users, module: 'payroll' },
-        { id: 'hr-dashboard', label: 'Tableau de bord RH', icon: BarChart3, module: 'payroll' },
+        { id: 'hr-dashboard', label: 'Tableau de bord RH', icon: BarChart3, module: 'payroll', advanced: true },
         { id: 'payroll?view=periods', label: 'Périodes de Paie', icon: Calendar, module: 'payroll' },
         { id: 'payroll?view=declarations', label: 'Bulletins & Déclarations', icon: FileText, module: 'payroll' },
       ]
@@ -169,18 +168,18 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
     {
       label: t('group.revision') || 'Révision',
       items: [
-        { id: 'compliance', label: t('nav.compliance'), icon: ShieldCheck },
-        { id: 'audit', label: 'Journal d\'Audit', icon: History, module: 'audit' },
-        { id: 'accounts', label: t('nav.accounts'), icon: Calculator },
+        { id: 'compliance', label: t('nav.compliance'), icon: ShieldCheck, advanced: true },
+        { id: 'audit', label: 'Journal d\'Audit', icon: History, module: 'audit', advanced: true },
+        { id: 'accounts', label: t('nav.accounts'), icon: Calculator, advanced: true },
       ]
     },
     {
       label: t('group.tools') || 'Outils',
       items: [
-        { id: 'documents', label: 'Gestion Documentaire', icon: Folder },
-        { id: 'messaging', label: 'Messagerie & Factures', icon: MessageSquareText },
-        { id: 'tasks', label: 'Calendrier Général', icon: Calendar },
-        { id: 'team', label: t('nav.team'), icon: Users },
+        { id: 'documents', label: 'Gestion Documentaire', icon: Folder, advanced: true },
+        { id: 'messaging', label: 'Messagerie & Factures', icon: MessageSquareText, advanced: true },
+        { id: 'tasks', label: 'Calendrier Général', icon: Calendar, advanced: true },
+        { id: 'team', label: t('nav.team'), icon: Users, advanced: true },
         { id: 'settings', label: t('nav.settings'), icon: Settings },
       ]
     }
@@ -190,7 +189,8 @@ export function Sidebar({ isMobileOpen, setIsMobileOpen, companyName, logoUrl, u
     ...group,
     items: group.items.filter(item => 
       item.label.toLowerCase().includes(searchQuery.toLowerCase()) &&
-      (!item.module || isActive(item.module)) && (taxesEnabled || (item.id !== "vat" && item.id !== "tax-report"))
+      (!item.module || isActive(item.module)) && 
+      (taxesEnabled || (item.id !== "vat" && item.id !== "tax-report"))
     )
   })).filter(group => group.items.length > 0);
 
